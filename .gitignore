@@ -1,0 +1,12 @@
+.DS_Store
+work/
+legacy-work/
+outputs/
+/.local/
+*.key
+*.p12
+*.pfx
+*.keychain*
+.env*
+signing/local-certificate.pem
+*.app/

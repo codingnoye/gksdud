@@ -1,0 +1,16 @@
+[req]
+distinguished_name = subject
+x509_extensions = code_signing
+prompt = no
+
+[subject]
+CN = CodingNoye gksdud Local Signing
+O = CodingNoye
+emailAddress = codingnoye@gmail.com
+
+[code_signing]
+basicConstraints = critical, CA:false
+keyUsage = critical, digitalSignature
+extendedKeyUsage = critical, codeSigning
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always

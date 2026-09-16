@@ -1,0 +1,6 @@
+* text=auto
+*.swift text eol=lf
+*.sh text eol=lf
+*.rb text eol=lf
+*.md text eol=lf
+*.plist text eol=lf

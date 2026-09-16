@@ -1,0 +1,99 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.repository == 'codingnoye/gksdud' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: macos-15
+    timeout-minutes: 30
+    environment: release
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Validate tag and release prerequisites
+        id: version
+        run: |
+          set -euo pipefail
+          version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Info.plist)
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$GITHUB_REF_NAME" == "v$version" ]]
+          test -s LICENSE
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Import fixed signing identity into temporary keychain
+        env:
+          CERTIFICATE_BASE64: ${{ secrets.GKSDUD_CERTIFICATE_P12_BASE64 }}
+          P12_PASSWORD: ${{ secrets.GKSDUD_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          umask 077
+          : "${CERTIFICATE_BASE64:?Missing signing certificate secret}"
+          : "${P12_PASSWORD:?Missing P12 password secret}"
+          keychain="$RUNNER_TEMP/gksdud-signing.keychain-db"
+          certificate="$RUNNER_TEMP/gksdud-signing.p12"
+          keychain_password=$(openssl rand -hex 32)
+          echo "::add-mask::$keychain_password"
+          printf '%s' "$CERTIFICATE_BASE64" | base64 --decode > "$certificate"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$certificate" -P "$P12_PASSWORD" -k "$keychain" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" >/dev/null
+          security list-keychains -d user -s "$keychain"
+          security find-certificate -c 'CodingNoye gksdud Local Signing' -p "$keychain" > signing/local-certificate.pem
+          actual=$(openssl x509 -in signing/local-certificate.pem -noout -fingerprint -sha1 | cut -d= -f2 | tr -d ':')
+          expected=$(tr -d '\n\r' < signing/release-certificate.sha1)
+          [[ "$actual" == "$expected" ]] || { echo 'Signing identity changed; refusing release.'; exit 1; }
+          # Ephemeral GitHub-hosted runner only; code signing policy, not TLS trust.
+          sudo security add-trusted-cert -d -r trustRoot -p codeSign -k "$keychain" signing/local-certificate.pem
+          rm -f "$certificate"
+
+      - name: Build and self-test Universal app
+        env:
+          GKSDUD_SIGN_MODE: local
+        run: bash build.sh
+
+      - name: Verify archive and prepare checksums and Homebrew cask
+        run: ruby scripts/prepare-release.rb "$GITHUB_REPOSITORY"
+
+      - name: Remove temporary signing credentials
+        if: always()
+        run: |
+          set -euo pipefail
+          if [[ -f signing/local-certificate.pem ]]; then
+            sudo security remove-trusted-cert -d signing/local-certificate.pem || true
+          fi
+          if [[ -f "$RUNNER_TEMP/gksdud-signing.keychain-db" ]]; then
+            security delete-keychain "$RUNNER_TEMP/gksdud-signing.keychain-db"
+          fi
+          rm -f "$RUNNER_TEMP/gksdud-signing.p12" signing/local-certificate.pem
+
+      - name: Create draft release (never overwrite existing assets)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh release create "$GITHUB_REF_NAME" \
+            "outputs/gksdud-$VERSION-macos-universal.zip" \
+            "outputs/release-$VERSION/SHA256SUMS" \
+            --repo "$GITHUB_REPOSITORY" --verify-tag --draft \
+            --title "gksdud $VERSION" --notes-file .github/RELEASE_NOTES.md
