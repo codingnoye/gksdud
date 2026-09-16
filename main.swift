@@ -340,6 +340,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     let showInMenuBar = NSButton(checkboxWithTitle: "메뉴바에 표시", target: nil, action: nil)
     let status = NSTextField(wrappingLabelWithString: "활성화를 켜면 한영 전환이 시작됩니다.")
     var timer: Timer?
+    var menuInputTimer: Timer?
     var observers: [NSObjectProtocol] = []
     var keyTap: CFMachPort?
     var keyTapSource: CFRunLoopSource?
@@ -912,7 +913,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         return list.first { language($0).hasPrefix(prefix) }
     }
     @objc func inputSourceChanged() {
-        DispatchQueue.main.async { [weak self] in
+        RunLoop.main.perform(inModes: [.common]) { [weak self] in
             guard let self else { return }
             self.completeCapsTransition()
             self.scheduleCapsRestore()
@@ -923,6 +924,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     func updateInputIndicator() {
         guard let current = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue() else { return }
         let lang = language(current)
+        updateInputMenuState(language: lang)
         let label = lang.hasPrefix("ko") ? iconLabel(korean: true) : lang.hasPrefix("en") ? iconLabel(korean: false) : (lang.isEmpty ? "?" : String(lang.prefix(3)))
         let korean = lang.hasPrefix("ko")
         // Let the status bar resolve contrast, including its initial appearance and highlighting.
@@ -937,8 +939,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         button.setAccessibilityLabel("gksdud, 현재 입력 \(korean ? "한국어" : lang.hasPrefix("en") ? "영어" : label)")
     }
     func menuWillOpen(_ menu: NSMenu) {
+        updateInputIndicator()
+        // Menu tracking can delay input-source notifications. Keep the open menu
+        // and settings badge current without running hardware repair in this mode.
+        menuInputTimer?.invalidate()
+        let refresh = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
+            self?.updateInputIndicator()
+        }
+        menuInputTimer = refresh
+        RunLoop.main.add(refresh, forMode: .eventTracking)
         login.state = SMAppService.mainApp.status == .enabled ? .on : .off
-        let lang = TISCopyCurrentKeyboardInputSource().map { language($0.takeRetainedValue()) } ?? ""
         for entry in menu.items {
             switch entry.action {
             case #selector(menuEnabled): entry.state = engine.active ? .on : .off
@@ -948,12 +958,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 entry.toolTip = AXIsProcessTrusted() ? "키를 누르는 순간 전환합니다." : "설정을 열어 접근성 권한 허용 버튼을 표시합니다."
             case #selector(menuLogin): entry.state = login.state
             case #selector(menuHidden): entry.state = showInMenuBar.state
-            case #selector(selectKorean): entry.state = lang.hasPrefix("ko") ? .on : .off; entry.isEnabled = availableSource("ko") != nil
-            case #selector(selectEnglish): entry.state = lang.hasPrefix("en") ? .on : .off; entry.isEnabled = availableSource("en") != nil
+            case #selector(selectKorean): entry.isEnabled = availableSource("ko") != nil
+            case #selector(selectEnglish): entry.isEnabled = availableSource("en") != nil
             default: break
             }
         }
         menu.autoenablesItems = false
+    }
+    func menuDidClose(_ menu: NSMenu) {
+        menuInputTimer?.invalidate()
+        menuInputTimer = nil
+    }
+    func updateInputMenuState(language: String) {
+        for entry in item?.menu?.items ?? [] {
+            if entry.action == #selector(selectKorean) { entry.state = language.hasPrefix("ko") ? .on : .off }
+            if entry.action == #selector(selectEnglish) { entry.state = language.hasPrefix("en") ? .on : .off }
+        }
     }
     func selectLanguage(_ prefix: String) { if let source = availableSource(prefix) { rememberCapsBeforeSwitch(); let result = TISSelectInputSource(source); if result != noErr { status.stringValue = "입력 소스를 변경하지 못했습니다 (\(result))." } }; updateInputIndicator() }
     @objc func selectKorean() { selectLanguage("ko") }
