@@ -9,4 +9,3 @@
 - Do not rewrite published release tags or replace published release assets.
 - Keep signing keys, local maintainer notes, and build outputs out of Git. PR checks must not use signing secrets.
 - Use GKSDUD_SIGN_MODE=ad-hoc bash build.sh for development verification. Do not replace the installed app unless requested.
-- Do not use em dashes (U+2014) or middle dots (U+00B7) in newly authored prose.
