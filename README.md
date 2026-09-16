@@ -1,9 +1,10 @@
-# gksdud
+# gksdud - 씹힘 없고 빠릿빠릿한 Mac 한영 전환
 
-`Karabiner`도, 복잡한 설정도 없이 **씹힘 없는 한영 전환**을 설정하는 유틸
+<img width="99" height="109" alt="스크린샷 2026-09-16 오후 11 39 46" src="https://github.com/user-attachments/assets/44f53a4b-4490-475c-80b4-f3fd3b5a8ca8" />
 
+`Karabiner`도, 복잡한 설정도 없이
 
-**사람이 쓴 `README.md`입니다!**
+앱 하나로 **씹힘 없는 한영 전환**을 설정하는 유틸
 
 ## 주요 기능
 
