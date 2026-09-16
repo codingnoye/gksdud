@@ -47,7 +47,7 @@ jobs:
             [[ "$tag" == "v$version" ]]
             git fetch --depth=1 origin "refs/tags/$tag:refs/tags/$tag"
             # Never relabel changed application code as an existing version.
-            git diff --exit-code "$tag" HEAD -- main.swift Bridge.h Info.plist make-icon.swift LICENSE
+            git diff --exit-code "$tag" HEAD -- main.swift DudIcon.swift Bridge.h Info.plist build.sh LICENSE
           fi
           [[ "$tag" == "v$version" ]]
           test -s LICENSE

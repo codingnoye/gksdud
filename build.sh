@@ -23,10 +23,11 @@ esac
 output_dir=${GKSDUD_OUTPUT_DIR:-"$PWD/outputs"}
 stage=$(mktemp -d /private/tmp/gksdud-build.XXXXXX)
 mkdir -p "$stage/gksdud.app/Contents/MacOS" "$stage/gksdud.app/Contents/Resources" "$output_dir"
-swift -module-cache-path "$stage/module-cache" make-icon.swift "$stage/AppIcon.iconset"
+swiftc -parse-as-library -D ICON_GENERATOR -module-cache-path "$stage/module-cache" DudIcon.swift -o "$stage/icon-generator"
+"$stage/icon-generator" "$stage/AppIcon.iconset"
 iconutil -c icns "$stage/AppIcon.iconset" -o "$stage/gksdud.app/Contents/Resources/AppIcon.icns"
 for arch in arm64 x86_64; do
-  swiftc -swift-version 5 -O -target "$arch-apple-macos13.0" -module-cache-path "$stage/module-cache" -import-objc-header Bridge.h main.swift -o "$stage/gksdud-$arch" -framework AppKit -framework IOKit -framework ServiceManagement
+  swiftc -swift-version 5 -O -target "$arch-apple-macos13.0" -module-cache-path "$stage/module-cache" -import-objc-header Bridge.h main.swift DudIcon.swift -o "$stage/gksdud-$arch" -framework AppKit -framework IOKit -framework ServiceManagement
 done
 lipo -create "$stage/gksdud-arm64" "$stage/gksdud-x86_64" -output "$stage/gksdud.app/Contents/MacOS/gksdud"
 cp Info.plist "$stage/gksdud.app/Contents/Info.plist"
