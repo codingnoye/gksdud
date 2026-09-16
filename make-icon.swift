@@ -1,6 +1,7 @@
 import AppKit
 
-// Two cut glass faces joined into one Korean/English badge.
+// Approved vector geometry: design/dud-icons/v5/dud-balanced.svg.
+// Draw at each target resolution so small icons do not depend on raster resizing.
 let destination = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true)
 try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
 for points in [16, 32, 128, 256, 512] {
@@ -12,51 +13,38 @@ for points in [16, 32, 128, 256, 512] {
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
         let context = NSGraphicsContext.current!.cgContext
-        context.scaleBy(x: CGFloat(pixels) / 1024, y: CGFloat(pixels) / 1024)
-        let outline = NSBezierPath(roundedRect: NSRect(x: 92, y: 92, width: 840, height: 840), xRadius: 190, yRadius: 190)
-        NSGraphicsContext.saveGraphicsState()
-        let shadow = NSShadow(); shadow.shadowColor = NSColor.black.withAlphaComponent(0.08)
-        shadow.shadowBlurRadius = 20; shadow.shadowOffset = NSSize(width: 0, height: -8); shadow.set()
-        NSColor.white.setFill(); outline.fill()
-        NSGraphicsContext.restoreGraphicsState()
-        NSGraphicsContext.saveGraphicsState()
-        outline.addClip()
-        NSGradient(colors: [NSColor(white: 0.955, alpha: 1), .white])!.draw(in: outline, angle: 90)
-        // One shared 10-degree cut clips both backgrounds and both full glyphs.
-        func half(_ left: Bool) -> NSBezierPath {
-            let path = NSBezierPath()
-            path.move(to: NSPoint(x: 422, y: 0))
-            path.line(to: NSPoint(x: 602, y: 1024))
-            path.line(to: NSPoint(x: left ? 0 : 1024, y: 1024))
-            path.line(to: NSPoint(x: left ? 0 : 1024, y: 0))
-            path.close()
-            return path
+        context.scaleBy(x: CGFloat(pixels) / 512, y: CGFloat(pixels) / 512)
+        // Use the SVG's top-left coordinate system.
+        context.translateBy(x: 0, y: 512)
+        context.scaleBy(x: 1, y: -1)
+        context.setFillColor(NSColor(srgbRed: 248 / 255, green: 245 / 255,
+            blue: 239 / 255, alpha: 1).cgColor)
+        context.addPath(CGPath(roundedRect: CGRect(x: 32, y: 32, width: 448, height: 448),
+            cornerWidth: 100, cornerHeight: 100, transform: nil))
+        context.fillPath()
+        context.setStrokeColor(NSColor(srgbRed: 45 / 255, green: 45 / 255,
+            blue: 43 / 255, alpha: 1).cgColor)
+        context.setLineCap(.round)
+        context.setLineJoin(.round)
+        context.setLineWidth(18)
+        for centerX: CGFloat in [157.6, 354.4] {
+            let eye = CGMutablePath()
+            eye.move(to: CGPoint(x: centerX + 48, y: 185.8))
+            eye.addLine(to: CGPoint(x: centerX + 48, y: 272.2))
+            eye.addArc(center: CGPoint(x: centerX, y: 272.2), radius: 48,
+                startAngle: 0, endAngle: 2 * .pi, clockwise: false)
+            context.addPath(eye)
+            context.strokePath()
         }
-        // A separate rounded badge, not just the rounded app-icon silhouette.
-        let badge = NSBezierPath(roundedRect: NSRect(x: 208, y: 244, width: 608, height: 536), xRadius: 86, yRadius: 86)
-        NSColor(white: 1, alpha: 0.45).setFill(); badge.fill()
-        NSGraphicsContext.saveGraphicsState()
-        badge.addClip()
-        half(true).addClip()
-        NSColor(white: 0.85, alpha: 0.60).setFill(); badge.fill()
-        NSGraphicsContext.restoreGraphicsState()
-        // Shift each label slightly away from the shared cut for legibility.
-        // Left half of 한 + right half of dud meet flush at the same cut edge.
-        for (label, fontSize, left) in [("한", CGFloat(338), true), ("dud", CGFloat(222), false)] {
-            NSGraphicsContext.saveGraphicsState()
-            half(left).addClip()
-            let text = NSAttributedString(string: label, attributes: [
-                .font: NSFont.systemFont(ofSize: fontSize, weight: .semibold),
-                .foregroundColor: NSColor(white: 0.19, alpha: 0.92)
-            ])
-            let size = text.size()
-            let centerX: CGFloat = left ? 446 : 578
-            text.draw(at: NSPoint(x: centerX - size.width / 2, y: (1024 - size.height) / 2))
-            NSGraphicsContext.restoreGraphicsState()
-        }
-        NSColor(white: 0.24, alpha: 0.60).setStroke(); badge.lineWidth = 9; badge.stroke()
-        NSGraphicsContext.restoreGraphicsState()
-        NSColor.white.withAlphaComponent(0.9).setStroke(); outline.lineWidth = 3; outline.stroke()
+        let mouth = CGMutablePath()
+        mouth.move(to: CGPoint(x: 232, y: 285.4))
+        mouth.addLine(to: CGPoint(x: 232, y: 302.2))
+        mouth.addArc(center: CGPoint(x: 256, y: 302.2), radius: 24,
+            startAngle: .pi, endAngle: 0, clockwise: true)
+        mouth.addLine(to: CGPoint(x: 280, y: 285.4))
+        context.setLineWidth(16)
+        context.addPath(mouth)
+        context.strokePath()
         NSGraphicsContext.restoreGraphicsState()
         let suffix = scale == 2 ? "@2x" : ""
         try bitmap.representation(using: .png, properties: [:])!.write(to:

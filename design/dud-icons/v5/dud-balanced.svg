@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">dud — larger face</title>
+  <desc id="desc">Face geometry enlarged by 20 percent; d stroke 18, u stroke 16. Cream background and charcoal face.</desc>
+  <rect x="32" y="32" width="448" height="448" rx="100" fill="#F8F5EF"/>
+  <g fill="none" stroke="#2D2D2B" stroke-linecap="round" stroke-linejoin="round">
+    <g stroke-width="18">
+      <path d="M205.6 185.8 V272.2 A48 48 0 1 1 157.6 224.2 A48 48 0 0 1 205.6 272.2"/>
+      <path d="M402.4 185.8 V272.2 A48 48 0 1 1 354.4 224.2 A48 48 0 0 1 402.4 272.2"/>
+    </g>
+    <path d="M232 285.4 V302.2 A24 24 0 0 0 280 302.2 V285.4" stroke-width="16"/>
+  </g>
+</svg>
