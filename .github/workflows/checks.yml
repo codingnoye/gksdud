@@ -1,0 +1,41 @@
+name: Checks
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: checks-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build and self-test
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Validate scripts
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n build.sh scripts/cleanup-signing.sh signing/setup-local-signing.sh signing/verify-update-identity.sh
+          ruby -c scripts/prepare-release.rb
+          python3 scripts/run-with-timeout.py 2 /usr/bin/true
+          if python3 scripts/run-with-timeout.py 0.1 /bin/sleep 5; then
+            echo 'Timeout test unexpectedly succeeded' >&2
+            exit 1
+          else
+            test "$?" -eq 124
+          fi
+      - name: Build Universal app and run self-tests
+        env:
+          GKSDUD_SIGN_MODE: ad-hoc
+        run: bash build.sh
