@@ -1,5 +1,62 @@
 import AppKit
 
+func runSettingsReentrancyTests() throws {
+    let suite = "io.gksdud.reentrancy-tests.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+    defaults.set(false, forKey: "active")
+    let original: [String: Any] = ["enabled": true, "value": ["type": "standard", "parameters": [32, 49, 262144]]]
+    var keys: [String: Any] = ["60": original]
+    var engine: Engine!
+    var insideActivation = false, reentered = false, failActivation = false
+    var timerTicks = 0
+    var repairError: Error?
+    let store = ShortcutPreferences(read: { keys }, write: { keys = $0 }, activate: {
+        if insideActivation { reentered = true; return }
+        insideActivation = true
+        defer { insideActivation = false }
+        let timer = Timer.scheduledTimer(withTimeInterval: 0.005, repeats: true) { _ in
+            timerTicks += 1
+            do { try engine.repair() } catch { repairError = error }
+        }
+        defer { timer.invalidate() }
+        // Use the same run-loop-pumping wait as activateSettings, without changing macOS settings.
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sleep")
+        process.arguments = ["0.15"]
+        try process.run(); process.waitUntilExit()
+        if failActivation { throw KeyboardError.verification }
+    })
+    engine = Engine(defaults: defaults, discover: { [] }, shortcutPreferences: store)
+    for _ in 0..<3 {
+        let beforeApply = timerTicks
+        // Engine.apply calls shortcut before committing active=true; exercise that interval.
+        try engine.shortcut(target: targets[6])
+        precondition(timerTicks > beforeApply && repairError == nil, "Actual run-loop timer must exercise periodic repair")
+        precondition(Engine.ownsShortcut(keys["60"], keyCode: 80), "Periodic repair must not undo activation in progress")
+        precondition(defaults.bool(forKey: "shortcutBackedUp") && Engine.sameShortcut(defaults.object(forKey: "originalShortcut"), original))
+        precondition(!engine.isUpdatingSettings && !reentered)
+        defaults.set(true, forKey: "active")
+        try engine.repair()
+        precondition(Engine.ownsShortcut(keys["60"], keyCode: 80))
+
+        let beforeRestore = timerTicks
+        try engine.restore()
+        precondition(timerTicks > beforeRestore && !reentered, "Periodic repair must not recursively enter restoration")
+        precondition(!engine.active && !engine.isUpdatingSettings && !defaults.bool(forKey: "shortcutBackedUp"))
+        precondition(Engine.sameShortcut(keys["60"], original))
+    }
+    failActivation = true
+    // The full apply path must release its outer guard if activation fails, before it reaches menu settings.
+    do { _ = try engine.apply(source: sources[0], target: targets[6]); preconditionFailure("Expected activation failure") } catch {}
+    precondition(!engine.active && !engine.isUpdatingSettings && defaults.bool(forKey: "shortcutBackedUp"))
+    failActivation = false
+    try engine.repair()
+    precondition(Engine.sameShortcut(keys["60"], original) && !defaults.bool(forKey: "shortcutBackedUp"))
+    precondition(repairError == nil && !reentered)
+    print("PASS: real timer during process wait, activation backup preservation, nonrecursive restore, failure recovery")
+}
+
 func runShortcutRestoreTests() throws {
     func entry(_ code: Int = 80, flags: Int = 0, enabled: Bool = true) -> [String: Any] {
         ["enabled": enabled, "value": ["type": "standard", "parameters": [65535, code, flags]]]

@@ -72,6 +72,8 @@ final class Engine {
     let defaults: UserDefaults
     let keyboards: KeyboardManager
     let shortcutPreferences: ShortcutPreferences
+    private var settingsUpdateDepth = 0
+    var isUpdatingSettings: Bool { settingsUpdateDepth > 0 }
     init(defaults: UserDefaults = .standard, discover: @escaping () throws -> [KeyboardDevice] = HIDKeyboardDevice.discover,
          shortcutPreferences: ShortcutPreferences = .system) {
         self.defaults = defaults
@@ -126,6 +128,8 @@ final class Engine {
         return targets.contains { ownsShortcut(lhs, keyCode: $0.keyCode) && ownsShortcut(rhs, keyCode: $0.keyCode) }
     }
     func shortcut(target: TargetKey) throws {
+        settingsUpdateDepth += 1
+        defer { settingsUpdateDepth -= 1 }
         var keys = shortcutPreferences.read()
         for (id, raw) in keys where id != "60" {
             guard let entry = raw as? [String: Any], (entry["enabled"] as? NSNumber)?.boolValue == true,
@@ -147,6 +151,8 @@ final class Engine {
         try shortcutPreferences.activate()
     }
     func apply(source: UInt64, target: TargetKey) throws -> Int {
+        settingsUpdateDepth += 1
+        defer { settingsUpdateDepth -= 1 }
         try shortcut(target: target)
         defaults.set(String(source), forKey: "source")
         defaults.set(target.name, forKey: "target")
@@ -156,6 +162,8 @@ final class Engine {
         return count
     }
     func setSystemInputMenu(_ value: CFPropertyList?) throws {
+        settingsUpdateDepth += 1
+        defer { settingsUpdateDepth -= 1 }
         let domain = "com.apple.TextInputMenu" as CFString
         CFPreferencesSetAppValue("visible" as CFString, value, domain)
         guard CFPreferencesAppSynchronize(domain) else {
@@ -194,6 +202,8 @@ final class Engine {
         keyboards.reconcile(source: source, target: target.usage, active: active).applied
     }
     func restore() throws {
+        settingsUpdateDepth += 1
+        defer { settingsUpdateDepth -= 1 }
         defaults.set(false, forKey: "active")
         let mappingResult = keyboards.reconcile(source: source, target: target.usage, active: false)
         // A failed quit must not restore the shortcut while some keys still emit our target.
@@ -202,6 +212,8 @@ final class Engine {
         try restoreShortcut()
     }
     func restoreShortcut() throws {
+        settingsUpdateDepth += 1
+        defer { settingsUpdateDepth -= 1 }
         guard defaults.bool(forKey: "shortcutBackedUp") else { return }
         var keys = shortcutPreferences.read()
         let original = defaults.object(forKey: "originalShortcut")
@@ -219,6 +231,13 @@ final class Engine {
         defaults.removeObject(forKey: "originalShortcut")
         defaults.removeObject(forKey: "managedShortcutKeyCode")
         defaults.removeObject(forKey: "shortcutRestorePending")
+    }
+    func repair() throws {
+        // Process.waitUntilExit pumps the main run loop. A timer/wake callback must not
+        // restore a shortcut halfway through activation or enter a second restoration.
+        guard !isUpdatingSettings else { return }
+        if active { _ = try reconcile() }
+        else { try restore() }
     }
     func prepareForExit() throws {
         let resumeOnLaunch = active
@@ -1065,10 +1084,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         enabled.state = engine.active ? .on : .off
     }
     @objc func toggleEnabled() {
+        guard !engine.isUpdatingSettings else { resetSelection(); return }
         if enabled.state == .on { applyNow() }
         else { restoreNow() }
     }
     @objc func selectionChanged() {
+        guard !engine.isUpdatingSettings else { resetSelection(); return }
         cancelLongPress()
         if enabled.state == .on { applyNow() }
         else {
@@ -1078,7 +1099,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         }
     }
     func applyNow() {
-        defer { refreshKeyboardState() }
+        guard !engine.isUpdatingSettings else { return }
+        defer { resetSelection(); refreshKeyboardState() }
         let source = sources[picker.indexOfSelectedItem]
         let target = targets[targetPicker.indexOfSelectedItem]
         if engine.targetInUse(source, target: target) {
@@ -1094,16 +1116,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         }
         do { let count = try engine.apply(source: source, target: target); lastError = ""; ensureKeyTap(); status.stringValue = "활성화됨 · 키보드 \(count)개 · \(target.name) 한영 전환" } catch { report(error); resetSelection() }
     }
-    func restoreNow() { cancelLongPress(); do { try engine.restore(); lastError = ""; status.stringValue = "비활성화됨 · 이전 키 매핑과 단축키로 복원했습니다." } catch { report(error) }; resetSelection(); syncCapsPreservation(); updatePressAccess(); refreshKeyboardState() }
+    func restoreNow() {
+        guard !engine.isUpdatingSettings else { return }
+        cancelLongPress()
+        do { try engine.restore(); lastError = ""; status.stringValue = "비활성화됨 · 이전 키 매핑과 단축키로 복원했습니다." } catch { report(error) }
+        resetSelection(); syncCapsPreservation(); updatePressAccess(); refreshKeyboardState()
+    }
     func recover() { cancelCapsRestore(); englishCaps.switching = false; cancelLongPress(); longPress = LongPressState(); pressGate.held.removeAll(); for delay in [0.5, 2.0, 5.0] { DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.repair() } } }
     func repair() {
+        guard !engine.isUpdatingSettings else { return }
         ensureKeyTap()
-        if engine.active {
-            _ = engine.keyboards.reconcile(source: engine.source, target: engine.target.usage, active: true)
-        } else {
-            // Finish any deferred cleanup after a keyboard's transient restore failure.
-            do { try engine.restore() } catch { report(error) }
-        }
+        do { try engine.repair() } catch { report(error) }
         let result = engine.keyboards.result
         if result.pending == 0 { lastError = "" }
         status.stringValue = result.pending > 0 ? "키보드 설정을 다시 적용하고 있습니다."
@@ -1123,6 +1146,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         if window.isVisible { alert.beginSheetModal(for: window) } else { showSettings(); alert.beginSheetModal(for: window) }
     }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard !engine.isUpdatingSettings else { return .terminateCancel }
         do {
             try engine.prepareForExit()
             stopKeyTap()
@@ -1140,6 +1164,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 if let index = CommandLine.arguments.firstIndex(of: "--render-keyboard-ui"), CommandLine.arguments.count > index + 1 {
     do { try renderKeyboardUI(to: CommandLine.arguments[index + 1]) } catch { fputs("UI rendering failed: \(error)\n", stderr); exit(1) }
 } else if CommandLine.arguments.contains("--self-test") {
+    do { try runSettingsReentrancyTests() } catch { fputs("Settings reentrancy tests failed: \(error)\n", stderr); exit(1) }
     do { try runShortcutRestoreTests() } catch { fputs("Shortcut tests failed: \(error)\n", stderr); exit(1) }
     runKeyboardTests()
     for initial in [false, true] {
