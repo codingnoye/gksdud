@@ -4,15 +4,15 @@ class ReleaseMetadata
 
   def initialize(version, tag = "v#{version}")
     raise ArgumentError, 'Expected numeric release version' unless version.match?(/\A\d+\.\d+\.\d+\z/)
-    unless ["v#{version}", "pre-v.#{version}"].include?(tag)
-      raise ArgumentError, 'Tag must be vVERSION or pre-v.VERSION and match Info.plist'
+    unless ["v#{version}", "pre-v#{version}", "pre-v.#{version}"].include?(tag)
+      raise ArgumentError, 'Tag must be vVERSION or pre-vVERSION (legacy: pre-v.VERSION) and match Info.plist'
     end
     @version = version
     @tag = tag
   end
 
   def prerelease?
-    tag.start_with?('pre-v.')
+    tag.start_with?('pre-v')
   end
 
   def asset_version

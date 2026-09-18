@@ -24,7 +24,7 @@ class TapTests(unittest.TestCase):
                 tap.updated_cask(OLD, v, sha)
 
     def test_tag_validation(self):
-        for tag in ["main", "v1.0.0-rc1", "pre-v.1.2.0", "v1.0.0/../../main", "v01.0.0"]:
+        for tag in ["main", "v1.0.0-rc1", "pre-v1.2.0", "pre-v.1.2.0", "v1.0.0/../../main", "v01.0.0"]:
             with self.assertRaises(ValueError):
                 tap.version(tag)
 
