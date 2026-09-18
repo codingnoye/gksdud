@@ -797,7 +797,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         enabled.target = self; enabled.action = #selector(toggleEnabled)
         enabled.state = engine.active ? .on : .off
         stack.addArrangedSubview(enabled)
-        let warningIcon = NSImageView(image: NSImage(systemSymbolName: "info.circle.fill", accessibilityDescription: "경고")!)
+        let warningIcon = NSImageView(image: NSImage(systemSymbolName: "exclamationmark.circle.fill", accessibilityDescription: "경고")!)
         warningIcon.contentTintColor = .systemOrange
         warningIcon.widthAnchor.constraint(equalToConstant: 12).isActive = true
         warningIcon.heightAnchor.constraint(equalToConstant: 12).isActive = true

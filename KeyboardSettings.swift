@@ -6,7 +6,7 @@ final class WarningBadgeView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         NSColor.systemOrange.setFill()
         NSBezierPath(ovalIn: bounds.insetBy(dx: 0.25, dy: 0.25)).fill()
-        let text = NSAttributedString(string: "i", attributes: [
+        let text = NSAttributedString(string: "!", attributes: [
             .font: NSFont.systemFont(ofSize: 7, weight: .bold), .foregroundColor: NSColor.white
         ])
         let size = text.size()
