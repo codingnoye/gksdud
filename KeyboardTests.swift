@@ -357,10 +357,10 @@ func renderKeyboardUI(to directory: String) throws {
     }
     func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
     let ui = descendants(settings.window.contentView!)
-    let toggle = ui.compactMap { $0 as? NSSwitch }.first!
-    toggle.state = .off; _ = toggle.sendAction(toggle.action, to: toggle.target)
+    let toggle = ui.compactMap { $0 as? NSSegmentedControl }.first { $0.segmentCount == 2 }!
+    toggle.selectedSegment = 0; _ = toggle.sendAction(toggle.action, to: toggle.target)
     precondition(!engine.keyboards.defaultEnabled)
-    let segments = ui.compactMap { $0 as? NSSegmentedControl }
+    let segments = ui.compactMap { $0 as? NSSegmentedControl }.filter { $0.segmentCount == 3 }
     let virtualControl = segments[1]
     virtualControl.selectedSegment = 0
     _ = virtualControl.sendAction(virtualControl.action, to: virtualControl.target)
@@ -378,6 +378,6 @@ func renderKeyboardUI(to directory: String) throws {
     delegate.refreshKeyboardState()
     delegate.window.appearance = NSAppearance(named: .aqua)
     try save(delegate.window.contentView!, "settings-recovered.png")
-    print("PASS: native default switch, per-keyboard segment actions, disconnected editing/reconnection, warning UI recovery")
+    print("PASS: native default segments, per-keyboard segment actions, disconnected editing/reconnection, warning UI recovery")
     print("Rendered UI to \(directory)")
 }

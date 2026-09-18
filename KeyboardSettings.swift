@@ -21,7 +21,7 @@ final class KeyboardSettingsController: NSObject, NSTableViewDataSource, NSTable
     let manager: KeyboardManager
     let changed: () -> Void
     let window: NSWindow
-    private let defaultSwitch = NSSwitch()
+    private let defaultControl = NSSegmentedControl(labels: ["Off", "On"], trackingMode: .selectOne, target: nil, action: nil)
     private let table = NSTableView()
     private let emptyLabel = NSTextField(labelWithString: "키보드 없음")
     private let modes: [KeyboardMode] = [.off, .default, .on]
@@ -40,9 +40,11 @@ final class KeyboardSettingsController: NSObject, NSTableViewDataSource, NSTable
         title.font = .systemFont(ofSize: 17, weight: .semibold)
         let defaultTitle = NSTextField(labelWithString: "기본값")
         defaultTitle.font = .systemFont(ofSize: 13, weight: .medium)
-        defaultSwitch.target = self; defaultSwitch.action = #selector(defaultChanged)
-        defaultSwitch.setAccessibilityLabel("기본값")
-        let defaultRow = NSStackView(views: [defaultTitle, NSView(), defaultSwitch])
+        defaultControl.target = self; defaultControl.action = #selector(defaultChanged)
+        defaultControl.segmentStyle = .rounded; defaultControl.controlSize = .small
+        defaultControl.setWidth(66, forSegment: 0); defaultControl.setWidth(66, forSegment: 1)
+        defaultControl.setAccessibilityLabel("기본값")
+        let defaultRow = NSStackView(views: [defaultTitle, NSView(), defaultControl])
         defaultRow.alignment = .centerY
 
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("keyboard"))
@@ -92,8 +94,8 @@ final class KeyboardSettingsController: NSObject, NSTableViewDataSource, NSTable
             title.topAnchor.constraint(equalTo: content.topAnchor, constant: 22),
             title.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 24),
             defaultRow.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 18),
-            defaultRow.leadingAnchor.constraint(equalTo: title.leadingAnchor, constant: 12),
-            defaultRow.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -36),
+            defaultRow.leadingAnchor.constraint(equalTo: title.leadingAnchor, constant: 22),
+            defaultRow.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -48),
             defaultRow.heightAnchor.constraint(equalToConstant: 28),
             list.topAnchor.constraint(equalTo: defaultRow.bottomAnchor, constant: 12),
             list.leadingAnchor.constraint(equalTo: title.leadingAnchor),
@@ -110,7 +112,7 @@ final class KeyboardSettingsController: NSObject, NSTableViewDataSource, NSTable
         if window.sheetParent == nil { parent.beginSheet(window) }
     }
     func refresh() {
-        defaultSwitch.state = manager.defaultEnabled ? .on : .off
+        defaultControl.selectedSegment = manager.defaultEnabled ? 1 : 0
         keyboards = manager.keyboards
         for keyboard in keyboards {
             controls[keyboard.key]?.selectedSegment = modes.firstIndex(of: keyboard.mode)!
@@ -156,7 +158,7 @@ final class KeyboardSettingsController: NSObject, NSTableViewDataSource, NSTable
         return cell
     }
     @objc private func defaultChanged() {
-        manager.defaultEnabled = defaultSwitch.state == .on
+        manager.defaultEnabled = defaultControl.selectedSegment == 1
         changed(); refresh()
     }
     @objc private func modeChanged(_ sender: KeyboardModeControl) {
