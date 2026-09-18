@@ -40,6 +40,7 @@ jobs:
           set -euo pipefail
           bash -n build.sh scripts/cleanup-signing.sh signing/setup-local-signing.sh signing/verify-update-identity.sh
           ruby -c scripts/prepare-release.rb
+          ruby scripts/test_release.rb
           PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p test_update_tap.py
           python3 scripts/run-with-timeout.py 2 /usr/bin/true
           if python3 scripts/run-with-timeout.py 0.1 /bin/sleep 5; then
