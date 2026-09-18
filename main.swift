@@ -652,8 +652,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             observers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in self?.recover() })
         }
         // Low-cost service enumeration also covers Bluetooth/USB reconnects and delayed wake.
-        timer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in self?.repair(); self?.updateInputIndicator() }
-        timer?.tolerance = 1
+        timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.repair() }
+        timer?.tolerance = 0.2
         if engine.active { do { try engine.shortcut(target: engine.target); try engine.hideSystemInputMenu() } catch { report(error) } }
         repair()
         if showInMenuBar.state == .off || CommandLine.arguments.contains("--settings") { showSettings() }
