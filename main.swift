@@ -44,9 +44,11 @@ func merged(_ current: [Mapping], source: UInt64, previous: UInt64?, original: N
 
 final class Engine {
     let defaults: UserDefaults
-    // Keep the event client alive while its service objects and callbacks are used.
-    let client = IOHIDEventSystemClientCreateSimpleClient(kCFAllocatorDefault)
-    init(defaults: UserDefaults = .standard) { self.defaults = defaults }
+    let keyboards: KeyboardManager
+    init(defaults: UserDefaults = .standard, discover: @escaping () throws -> [KeyboardDevice] = HIDKeyboardDevice.discover) {
+        self.defaults = defaults
+        keyboards = KeyboardManager(defaults: defaults, discover: discover)
+    }
     var source: UInt64 { UInt64(defaults.string(forKey: "source") ?? "") ?? sources[0] }
     var active: Bool { defaults.object(forKey: "active") == nil || defaults.bool(forKey: "active") }
     var switchOnKeyDown: Bool { defaults.object(forKey: "switchOnKeyDown") == nil || defaults.bool(forKey: "switchOnKeyDown") }
@@ -58,26 +60,23 @@ final class Engine {
     }
     var target: TargetKey { targets.first { $0.name == defaults.string(forKey: "target") } ?? targets[6] }
     var records: [String: [String: String]] {
-        get { defaults.dictionary(forKey: "records") as? [String: [String: String]] ?? [:] }
-        set { defaults.set(newValue, forKey: "records") }
+        get { keyboards.records }
+        set { keyboards.records = newValue }
     }
-    func services() -> [IOHIDServiceClient] {
-        return (IOHIDEventSystemClientCopyServices(client) as? [IOHIDServiceClient] ?? [])
-            .filter { IOHIDServiceClientConformsTo($0, 1, 6) != 0 }
-    }
-    func mappings(_ service: IOHIDServiceClient) -> [Mapping] {
-        IOHIDServiceClientCopyProperty(service, "UserKeyMapping" as CFString) as? [Mapping] ?? []
-    }
-    func id(_ service: IOHIDServiceClient) -> String { String(describing: IOHIDServiceClientGetRegistryID(service)) }
+    func services() -> [KeyboardDevice] { (try? keyboards.snapshot()) ?? [] }
+    func mappings(_ service: KeyboardDevice) -> [Mapping] { (try? service.readMappings()) ?? [] }
+    func id(_ service: KeyboardDevice) -> String { service.registryID }
     func conflicts(_ source: UInt64, target: TargetKey) -> Bool {
-        services().contains { service in mappings(service).contains {
+        services().filter { keyboards.isSelected($0) }.contains { service in mappings(service).contains {
             let managed = records[id(service)]
             let owned = managed?["source"] == String(source) && managed?["target"] == $0[dstKey].map { String($0.uint64Value) }
             return $0[srcKey]?.uint64Value == source && $0[dstKey]?.uint64Value != target.usage && !owned
         } }
     }
     func targetInUse(_ source: UInt64, target: TargetKey) -> Bool {
-        services().contains { service in targetConflict(mappings(service), source: source, target: target.usage, owned: records[id(service)]) }
+        services().filter { keyboards.isSelected($0) }.contains { service in
+            targetConflict(mappings(service), source: source, target: target.usage, owned: records[id(service)])
+        }
     }
     func shortcut(target: TargetKey) throws {
         let domain = "com.apple.symbolichotkeys" as CFString
@@ -149,37 +148,14 @@ final class Engine {
         defaults.removeObject(forKey: "inputMenuBackedUp")
     }
     func reconcile() throws -> Int {
-        guard active else { return 0 }
-        let list = services()
-        var saved = records
-        for service in list {
-            let key = id(service)
-            let current = mappings(service)
-            let old = saved[key]
-            let previous = old.flatMap { UInt64($0["source"] ?? "") }
-            let original = old.flatMap { $0["original"].flatMap(UInt64.init).map(NSNumber.init(value:)) }
-            let previousTarget = old.flatMap { UInt64($0["target"] ?? "") } ?? target.usage
-            if previous != source {
-                let dst = current.first { $0[srcKey]?.uint64Value == source }?[dstKey]
-                saved[key] = ["source": String(source), "original": dst.map { String($0.uint64Value) } ?? "none", "target": String(target.usage)]
-                records = saved // Persist undo information before writing hardware state.
-            }
-            let desired = merged(current, source: source, previous: previous, original: original, target: target.usage, previousTarget: previousTarget)
-            if (current as NSArray) != (desired as NSArray) {
-                guard IOHIDServiceClientSetProperty(service, "UserKeyMapping" as CFString, desired as CFArray),
-                      (mappings(service) as NSArray) == (desired as NSArray) else {
-                    throw NSError(domain: "asd", code: 3, userInfo: [NSLocalizedDescriptionKey: "키보드 매핑에 실패했습니다. 다른 키 매핑 앱을 확인하세요."])
-                }
-            }
-            saved[key]?["target"] = String(target.usage)
-            records = saved
-        }
-        return list.count
+        keyboards.reconcile(source: source, target: target.usage, active: active).applied
     }
     func restore() throws {
         defaults.set(false, forKey: "active")
+        let mappingResult = keyboards.reconcile(source: source, target: target.usage, active: false)
+        // A failed quit must not restore the shortcut while some keys still emit our target.
+        if mappingResult.pending > 0 { throw KeyboardError.verification }
         try restoreSystemInputMenu()
-        try restoreMappings()
         let domain = "com.apple.symbolichotkeys" as CFString
         CFPreferencesAppSynchronize(domain)
         var keys = CFPreferencesCopyAppValue("AppleSymbolicHotKeys" as CFString, domain) as? [String: Any] ?? [:]
@@ -200,25 +176,16 @@ final class Engine {
     }
     func prepareForExit() throws {
         let resumeOnLaunch = active
+        // Cleanup affects macOS, not the user's saved activation choice, even if quit is cancelled.
+        defer { defaults.set(resumeOnLaunch, forKey: "active"); defaults.synchronize() }
         try restore()
-        // Cleanup affects macOS, not the user's saved activation choice.
-        defaults.set(resumeOnLaunch, forKey: "active")
-        defaults.synchronize()
     }
     func restoreMappings() throws {
-        var saved = records
-        for service in services() {
-            guard let record = records[id(service)], let source = UInt64(record["source"] ?? "") else { continue }
-            var map = mappings(service)
-            guard let target = UInt64(record["target"] ?? ""), map.contains(where: { $0[srcKey]?.uint64Value == source && $0[dstKey]?.uint64Value == target }) else { continue }
-            map.removeAll { $0[srcKey]?.uint64Value == source }
-            if let original = UInt64(record["original"] ?? "") { map.append([srcKey: NSNumber(value: source), dstKey: NSNumber(value: original)]) }
-            guard IOHIDServiceClientSetProperty(service, "UserKeyMapping" as CFString, map as CFArray) else { throw NSError(domain: "asd", code: 4) }
-            saved.removeValue(forKey: id(service))
-        }
-        records = saved
-        // Keep records for disconnected keyboards; restore them when they reconnect.
+        let result = keyboards.reconcile(source: source, target: target.usage, active: false)
+        // Normal repair is non-modal. Explicit quit must preserve undo state if cleanup failed.
+        if result.pending > 0 { throw KeyboardError.verification }
     }
+
 }
 
 // Tracks only the reserved function key; never reads or stores typed text.
@@ -318,9 +285,14 @@ func nativeSwitchPulse(from event: CGEvent, marker: Int64) -> (CGEvent, CGEvent)
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDelegate, NSTextFieldDelegate {
-    let engine = Engine()
+    let engine: Engine
+    init(engine: Engine = Engine()) { self.engine = engine; super.init() }
     var item: NSStatusItem?
     var window: NSWindow!
+    var keyboardSettings: KeyboardSettingsController?
+    let keyboardWarning = NSTextField(wrappingLabelWithString: "")
+    let keyboardWarningRow = NSStackView()
+    let warningBadge = WarningBadgeView()
     let picker = NSPopUpButton()
     let targetPicker = NSPopUpButton()
     let testInput = NSTextField()
@@ -692,7 +664,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         if returningFromPermissionSettings && permissionSettingsWasActive { finishPermissionVisit() }
     }
     func buildWindow() {
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 690), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 440, height: 720), styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.title = "gksdud"
         window.isReleasedWhenClosed = false
         window.delegate = self
@@ -760,6 +732,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         enabled.target = self; enabled.action = #selector(toggleEnabled)
         enabled.state = engine.active ? .on : .off
         stack.addArrangedSubview(enabled)
+        let warningIcon = NSImageView(image: NSImage(systemSymbolName: "info.circle.fill", accessibilityDescription: "경고")!)
+        warningIcon.contentTintColor = .systemOrange
+        warningIcon.widthAnchor.constraint(equalToConstant: 12).isActive = true
+        warningIcon.heightAnchor.constraint(equalToConstant: 12).isActive = true
+        keyboardWarning.font = .systemFont(ofSize: 11)
+        keyboardWarning.textColor = .systemOrange
+        keyboardWarningRow.addArrangedSubview(warningIcon)
+        keyboardWarningRow.addArrangedSubview(keyboardWarning)
+        keyboardWarningRow.alignment = .top; keyboardWarningRow.spacing = 5
+        stack.addArrangedSubview(keyboardWarningRow)
+        keyboardWarningRow.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        keyboardWarningRow.isHidden = true
+        stack.setCustomSpacing(6, after: keyboardWarningRow)
         pressAccess.target = self; pressAccess.action = #selector(requestPressAccess)
         pressAccess.font = .systemFont(ofSize: 13)
         pressAccess.bezelStyle = .rounded
@@ -795,6 +780,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         stack.addArrangedSubview(targetRow)
         stack.setCustomSpacing(6, after: targetRow)
         addHint("시스템의 '이전 입력 소스 선택' 단축키의 값을 변경합니다.\n다른 앱과 겹치지 않는, 기능 없는 키를 골라주세요.")
+        let keyboardButton = NSButton(title: "대상 키보드 설정", target: self, action: #selector(showKeyboardSettings))
+        keyboardButton.bezelStyle = .rounded
+        stack.addArrangedSubview(keyboardButton)
         addSeparator()
         login.target = self; login.action = #selector(toggleLogin)
         login.state = SMAppService.mainApp.status == .enabled ? .on : .off
@@ -832,7 +820,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             credit.bottomAnchor.constraint(equalTo: window.contentView!.bottomAnchor, constant: -14)
         ])
         window.contentView!.addSubview(stack)
-        NSLayoutConstraint.activate([stack.leadingAnchor.constraint(equalTo: window.contentView!.leadingAnchor, constant: 24), stack.trailingAnchor.constraint(equalTo: window.contentView!.trailingAnchor, constant: -24), stack.topAnchor.constraint(equalTo: window.contentView!.topAnchor, constant: 24)])
+        NSLayoutConstraint.activate([stack.leadingAnchor.constraint(equalTo: window.contentView!.leadingAnchor, constant: 24), stack.trailingAnchor.constraint(equalTo: window.contentView!.trailingAnchor, constant: -24), stack.topAnchor.constraint(equalTo: window.contentView!.topAnchor, constant: 24), stack.bottomAnchor.constraint(lessThanOrEqualTo: credit.topAnchor, constant: -16)])
+        refreshKeyboardState()
+        updateInputIndicator()
+    }
+    @objc func showKeyboardSettings() {
+        repair()
+        if keyboardSettings == nil {
+            keyboardSettings = KeyboardSettingsController(manager: engine.keyboards) { [weak self] in self?.repair() }
+        }
+        keyboardSettings?.show(on: window)
+    }
+    func refreshKeyboardState() {
+        let warning = engine.keyboards.warning
+        keyboardWarning.stringValue = warning ?? ""
+        keyboardWarning.toolTip = engine.keyboards.warningDetails
+        keyboardWarningRow.isHidden = warning == nil
+        warningBadge.isHidden = warning == nil
+        enabled.toolTip = warning
+        keyboardSettings?.refresh()
         updateInputIndicator()
     }
     func updateMenu() {
@@ -840,6 +846,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         guard item == nil else { return }
         item = NSStatusBar.system.statusItem(withLength: 28)
         item?.button?.font = .systemFont(ofSize: 13, weight: .medium)
+        if let button = item?.button {
+            warningBadge.removeFromSuperview()
+            warningBadge.translatesAutoresizingMaskIntoConstraints = false
+            button.addSubview(warningBadge)
+            NSLayoutConstraint.activate([
+                warningBadge.leadingAnchor.constraint(equalTo: button.leadingAnchor, constant: 1),
+                warningBadge.bottomAnchor.constraint(equalTo: button.bottomAnchor, constant: -1),
+                warningBadge.widthAnchor.constraint(equalToConstant: 9),
+                warningBadge.heightAnchor.constraint(equalToConstant: 9)
+            ])
+            warningBadge.isHidden = engine.keyboards.warning == nil
+        }
         let menu = NSMenu()
         menu.delegate = self
         menu.autoenablesItems = false
@@ -935,8 +953,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         guard let button = item?.button else { return }
         button.title = ""; button.image = badge
         button.imagePosition = .imageOnly
-        button.toolTip = "gksdud · 현재 입력 소스: \(lang)"
-        button.setAccessibilityLabel("gksdud, 현재 입력 \(korean ? "한국어" : lang.hasPrefix("en") ? "영어" : label)")
+        let warning = engine.keyboards.warning.map { "\n\($0)" } ?? ""
+        button.toolTip = "gksdud · 현재 입력 소스: \(lang)\(warning)"
+        button.setAccessibilityLabel("gksdud, 현재 입력 \(korean ? "한국어" : lang.hasPrefix("en") ? "영어" : label)\(warning)")
     }
     func menuWillOpen(_ menu: NSMenu) {
         updateInputIndicator()
@@ -1013,6 +1032,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         }
     }
     func applyNow() {
+        defer { refreshKeyboardState() }
         let source = sources[picker.indexOfSelectedItem]
         let target = targets[targetPicker.indexOfSelectedItem]
         if engine.targetInUse(source, target: target) {
@@ -1026,17 +1046,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             alert.addButton(withTitle: "변경"); alert.addButton(withTitle: "취소")
             guard alert.runModal() == .alertFirstButtonReturn else { resetSelection(); return }
         }
-        do { let count = try engine.apply(source: source, target: target); ensureKeyTap(); status.stringValue = "활성화됨 · 키보드 \(count)개 · \(target.name) 한영 전환" } catch { report(error); resetSelection() }
+        do { let count = try engine.apply(source: source, target: target); lastError = ""; ensureKeyTap(); status.stringValue = "활성화됨 · 키보드 \(count)개 · \(target.name) 한영 전환" } catch { report(error); resetSelection() }
     }
-    func restoreNow() { cancelLongPress(); do { try engine.restore(); status.stringValue = "비활성화됨 · 이전 키 매핑과 단축키로 복원했습니다." } catch { report(error) }; resetSelection(); syncCapsPreservation(); updatePressAccess() }
+    func restoreNow() { cancelLongPress(); do { try engine.restore(); lastError = ""; status.stringValue = "비활성화됨 · 이전 키 매핑과 단축키로 복원했습니다." } catch { report(error) }; resetSelection(); syncCapsPreservation(); updatePressAccess(); refreshKeyboardState() }
     func recover() { cancelCapsRestore(); englishCaps.switching = false; cancelLongPress(); longPress = LongPressState(); pressGate.held.removeAll(); for delay in [0.5, 2.0, 5.0] { DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.repair() } } }
     func repair() {
         ensureKeyTap()
-        guard engine.active else { do { try engine.restoreMappings() } catch { report(error) }; return }
-        do { let count = try engine.reconcile(); status.stringValue = count == 0 ? "키보드 연결 대기 중" : "적용됨 · 키보드 \(count)개 · \(engine.target.name) · 자동 복구 켜짐" } catch { report(error) }
+        if engine.active {
+            _ = engine.keyboards.reconcile(source: engine.source, target: engine.target.usage, active: true)
+        } else {
+            // Finish any deferred cleanup after a keyboard's transient restore failure.
+            do { try engine.restore() } catch { report(error) }
+        }
+        let result = engine.keyboards.result
+        if result.pending == 0 { lastError = "" }
+        status.stringValue = result.pending > 0 ? "키보드 설정을 다시 적용하고 있습니다."
+            : !engine.active ? "비활성화됨"
+            : result.selected == 0 ? "적용할 키보드 연결 대기 중"
+            : "적용됨 · 키보드 \(result.applied)개 · \(engine.target.name) · 자동 복구 켜짐"
+        refreshKeyboardState()
     }
     var lastError = ""
     func report(_ error: Error) {
+        if error is KeyboardError { refreshKeyboardState(); return }
         status.stringValue = error.localizedDescription
         enabled.toolTip = error.localizedDescription
         guard lastError != error.localizedDescription else { return }
@@ -1059,7 +1091,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     @objc func quit() { NSApp.terminate(nil) }
 }
 
-if CommandLine.arguments.contains("--self-test") {
+if let index = CommandLine.arguments.firstIndex(of: "--render-keyboard-ui"), CommandLine.arguments.count > index + 1 {
+    do { try renderKeyboardUI(to: CommandLine.arguments[index + 1]) } catch { fputs("UI rendering failed: \(error)\n", stderr); exit(1) }
+} else if CommandLine.arguments.contains("--self-test") {
+    runKeyboardTests()
     for initial in [false, true] {
         for holdEnabled in [false, true] {
             var caps = EnglishCapsState()
@@ -1225,7 +1260,7 @@ if CommandLine.arguments.contains("--self-test") {
         for service in engine.services() {
             var map = engine.mappings(service)
             map.removeAll { $0[srcKey]?.uint64Value == sources[0] }
-            guard IOHIDServiceClientSetProperty(service, "UserKeyMapping" as CFString, map as CFArray) else { throw NSError(domain: "asd", code: 8) }
+            try service.writeMappings(map)
         }
         _ = try engine.reconcile()
         for service in engine.services() {
