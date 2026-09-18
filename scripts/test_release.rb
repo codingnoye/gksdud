@@ -9,7 +9,7 @@ class ReleaseTests < Minitest::Test
   ROOT = File.expand_path('..', __dir__)
 
   def test_tag_must_match_numeric_app_version
-    %w[main v1.2.1 pre-v.1.2.1 pre-v1.2.0 pre-v.1.2.0-beta.1 ../1.2.0].each do |tag|
+    %w[main v1.2.1 pre-v.1.2.1 pre-v1.2.1 pre-v1.2.0-beta.1 pre-v.1.2.0-beta.1 ../1.2.0].each do |tag|
       assert_raises(ArgumentError) { ReleaseMetadata.new('1.2.0', tag) }
     end
     ["1.2.0\n", '1.2', '1.2.0-beta.1'].each do |version|
@@ -19,12 +19,24 @@ class ReleaseTests < Minitest::Test
 
   def test_stable_and_prerelease_assets_are_separate
     stable = ReleaseMetadata.new('1.2.0', 'v1.2.0')
-    pre = ReleaseMetadata.new('1.2.0', 'pre-v.1.2.0')
+    pre = ReleaseMetadata.new('1.2.0', 'pre-v1.2.0')
     refute stable.prerelease?
     assert pre.prerelease?
     assert_equal 'gksdud-1.2.0-macos-universal.zip', stable.filename
     assert_equal 'gksdud-1.2.0-pre-macos-universal.zip', pre.filename
     refute_equal stable.asset_version, pre.asset_version
+    legacy = ReleaseMetadata.new('1.2.0', 'pre-v.1.2.0')
+    assert legacy.prerelease?
+    assert_equal pre.filename, legacy.filename
+  end
+
+  def test_workflow_triggers_for_both_prerelease_tag_formats
+    workflow = YAML.load_file("#{ROOT}/.github/workflows/release.yml")
+    triggers = workflow.fetch('on') { workflow.fetch(true) }
+    patterns = triggers.fetch('push').fetch('tags')
+    %w[v1.2.0 pre-v1.2.0 pre-v.1.2.0].each do |tag|
+      assert patterns.any? { |pattern| File.fnmatch?(pattern, tag) }, "No push trigger for #{tag}"
+    end
   end
 
   def test_workflow_validates_pushed_tags_before_building
@@ -34,11 +46,11 @@ class ReleaseTests < Minitest::Test
     assert status.success?, version
     version = version.strip
     Dir.mktmpdir('gksdud-tag-test-') do |dir|
-      ["v#{version}", "pre-v.#{version}", 'pre-v.999.0.0'].each do |tag|
+      ["v#{version}", "pre-v#{version}", "pre-v.#{version}", 'pre-v999.0.0', 'pre-v.999.0.0'].each do |tag|
         output_path = "#{dir}/#{tag}"
         env = { 'GITHUB_EVENT_NAME' => 'push', 'GITHUB_REF_NAME' => tag, 'GITHUB_OUTPUT' => output_path }
         output, result = Open3.capture2e(env, '/bin/bash', '-c', step.fetch('run'), chdir: ROOT)
-        if tag == 'pre-v.999.0.0'
+        if tag.include?('999.0.0')
           refute result.success?, 'Mismatched tag unexpectedly accepted'
           assert_empty File.read(output_path)
         else
@@ -46,7 +58,7 @@ class ReleaseTests < Minitest::Test
           actual = File.readlines(output_path).map { |line| line.strip.split('=', 2) }.to_h
           assert_equal version, actual.fetch('version')
           assert_equal tag, actual.fetch('tag')
-          assert_equal tag.start_with?('pre-v.').to_s, actual.fetch('prerelease')
+          assert_equal tag.start_with?('pre-v').to_s, actual.fetch('prerelease')
         end
       end
     end
@@ -84,15 +96,17 @@ class ReleaseTests < Minitest::Test
   end
 
   def test_prerelease_is_published_without_changing_latest
-    args = release_arguments('pre-v.1.2.0')
-    assert_equal ['release', 'create', 'pre-v.1.2.0'], args.first(3)
-    assert_includes args, '--prerelease'
-    assert_includes args, '--latest=false'
-    refute_includes args, '--draft'
-    assert_includes args, 'outputs/gksdud-1.2.0-pre-macos-universal.zip'
-    assert_includes args, 'outputs/release-1.2.0-pre/SHA256SUMS'
-    assert_includes args, '.github/PRERELEASE_NOTES.md'
-    assert_includes args, '--generate-notes'
-    assert_includes args, '--verify-tag'
+    %w[pre-v1.2.0 pre-v.1.2.0].each do |tag|
+      args = release_arguments(tag)
+      assert_equal ['release', 'create', tag], args.first(3)
+      assert_includes args, '--prerelease'
+      assert_includes args, '--latest=false'
+      refute_includes args, '--draft'
+      assert_includes args, 'outputs/gksdud-1.2.0-pre-macos-universal.zip'
+      assert_includes args, 'outputs/release-1.2.0-pre/SHA256SUMS'
+      assert_includes args, '.github/PRERELEASE_NOTES.md'
+      assert_includes args, '--generate-notes'
+      assert_includes args, '--verify-tag'
+    end
   end
 end

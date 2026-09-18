@@ -2,11 +2,11 @@ name: Release
 
 on:
   push:
-    tags: ['v*', 'pre-v.*']
+    tags: ['v*', 'pre-v*']
   workflow_dispatch:
     inputs:
       release_tag:
-        description: Existing vVERSION or pre-v.VERSION tag to build or verify using the latest workflow
+        description: Existing vVERSION or pre-vVERSION tag to build or verify using the latest workflow
         required: true
         type: string
 
@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   release:
-    if: github.repository == 'codingnoye/gksdud' && ((github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/pre-v.'))) || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))
+    if: github.repository == 'codingnoye/gksdud' && ((github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/pre-v'))) || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))
     runs-on: macos-15
     timeout-minutes: 30
     environment: release

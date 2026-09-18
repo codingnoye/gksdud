@@ -60,7 +60,9 @@ struct ShortcutPreferences {
     }, activate: {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/System/Library/PrivateFrameworks/SystemAdministration.framework/Resources/activateSettings")
-        process.arguments = ["-u"]
+        // Apply session shortcuts without reapplying physical-device preferences,
+        // which can overwrite another app's per-device mouse acceleration settings.
+        process.arguments = ["-u", "-virtualSession"]
         try process.run(); process.waitUntilExit()
         guard process.terminationStatus == 0 else {
             throw NSError(domain: "gksdud", code: 2, userInfo: [NSLocalizedDescriptionKey: "단축키 활성화에 실패했습니다. 다시 시도해주세요."])
