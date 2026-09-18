@@ -1,5 +1,88 @@
 import AppKit
 
+func runShortcutRestoreTests() throws {
+    func entry(_ code: Int = 80, flags: Int = 0, enabled: Bool = true) -> [String: Any] {
+        ["enabled": enabled, "value": ["type": "standard", "parameters": [65535, code, flags]]]
+    }
+    let suite = "io.gksdud.shortcut-tests.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let otherEntry = entry(49, flags: 262144)
+    var keys: [String: Any] = ["61": otherEntry]
+    var failWrite = false, failActivation = false
+    var activations = 0
+    let store = ShortcutPreferences(read: { keys }, write: { value in
+        if failWrite { throw KeyboardError.write }
+        keys = value
+    }, activate: {
+        activations += 1
+        if failActivation { throw KeyboardError.verification }
+    })
+    let engine = Engine(defaults: defaults, discover: { [] }, shortcutPreferences: store)
+    let fn = Int(CGEventFlags.maskSecondaryFn.rawValue)
+
+    // Exercise the actual disable path with both macOS representations and different baselines.
+    for flags in [0, fn] {
+        for original: [String: Any]? in [nil, entry(enabled: false), entry(49, flags: 262144)] {
+            keys["60"] = original
+            try engine.shortcut(target: targets[6])
+            keys["60"] = entry(flags: flags)
+            try engine.restore()
+            precondition(Engine.sameShortcut(keys["60"], original), "Disable must restore even after macOS normalizes F19")
+            precondition(Engine.sameShortcut(keys["61"], otherEntry), "Leave unrelated shortcuts unchanged")
+            precondition(!defaults.bool(forKey: "shortcutBackedUp"))
+        }
+    }
+
+    // A user edit after activation must survive disable, including disabled or modified F19.
+    for edited in [entry(flags: fn | 1048576), entry(flags: 262144), entry(enabled: false), entry(79)] {
+        keys["60"] = nil
+        try engine.shortcut(target: targets[6])
+        keys["60"] = edited
+        let before = activations
+        try engine.restore()
+        precondition(Engine.sameShortcut(keys["60"], edited) && activations == before)
+    }
+
+    // Removing the setting and applying again must not reuse an older F19 baseline.
+    keys["60"] = entry(flags: fn)
+    try engine.shortcut(target: targets[6])
+    keys["60"] = nil
+    try engine.shortcut(target: targets[6])
+    keys["60"] = entry(flags: fn)
+    try engine.restore()
+    precondition(keys["60"] == nil, "External removal replaces the stale baseline")
+
+    keys["60"] = otherEntry
+    try engine.shortcut(target: targets[6])
+    keys["60"] = entry(flags: fn)
+    try engine.shortcut(target: targets[5])
+    keys["60"] = entry(79, flags: fn)
+    try engine.restore()
+    precondition(Engine.sameShortcut(keys["60"], otherEntry), "Changing the target retains the first baseline")
+
+    // Old installations have no managedShortcutKeyCode; their normalized shortcut still restores.
+    defaults.set(true, forKey: "shortcutBackedUp")
+    defaults.set(otherEntry, forKey: "originalShortcut")
+    keys["60"] = entry(flags: fn)
+    try engine.restore()
+    precondition(Engine.sameShortcut(keys["60"], otherEntry))
+
+    keys["60"] = nil
+    try engine.shortcut(target: targets[6])
+    failWrite = true
+    do { try engine.restore(); preconditionFailure("Write failure must be reported") } catch {}
+    precondition(defaults.bool(forKey: "shortcutBackedUp"))
+    failWrite = false; failActivation = true
+    do { try engine.restore(); preconditionFailure("Activation failure must be reported") } catch {}
+    precondition(keys["60"] == nil && defaults.bool(forKey: "shortcutBackedUp"))
+    failActivation = false
+    let before = activations
+    try engine.restore()
+    precondition(activations == before + 1 && !defaults.bool(forKey: "shortcutBackedUp"), "Retry failed activation before clearing the backup")
+    print("PASS: normalized F-key shortcut restoration, disabled/missing baselines, user edits, target changes, legacy backups, restore retry")
+}
+
 final class TestKeyboard: KeyboardDevice {
     let registryID: String
     let name: String

@@ -42,11 +42,40 @@ func merged(_ current: [Mapping], source: UInt64, previous: UInt64?, original: N
     return result
 }
 
+struct ShortcutPreferences {
+    var read: () -> [String: Any]
+    var write: ([String: Any]) throws -> Void
+    var activate: () throws -> Void
+
+    static let system = ShortcutPreferences(read: {
+        let domain = "com.apple.symbolichotkeys" as CFString
+        CFPreferencesAppSynchronize(domain)
+        return CFPreferencesCopyAppValue("AppleSymbolicHotKeys" as CFString, domain) as? [String: Any] ?? [:]
+    }, write: { keys in
+        let domain = "com.apple.symbolichotkeys" as CFString
+        CFPreferencesSetAppValue("AppleSymbolicHotKeys" as CFString, keys as CFDictionary, domain)
+        guard CFPreferencesAppSynchronize(domain) else {
+            throw NSError(domain: "gksdud", code: 1, userInfo: [NSLocalizedDescriptionKey: "입력 소스 단축키를 저장하지 못했습니다."])
+        }
+    }, activate: {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/System/Library/PrivateFrameworks/SystemAdministration.framework/Resources/activateSettings")
+        process.arguments = ["-u"]
+        try process.run(); process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            throw NSError(domain: "gksdud", code: 2, userInfo: [NSLocalizedDescriptionKey: "단축키 활성화에 실패했습니다. 다시 시도해주세요."])
+        }
+    })
+}
+
 final class Engine {
     let defaults: UserDefaults
     let keyboards: KeyboardManager
-    init(defaults: UserDefaults = .standard, discover: @escaping () throws -> [KeyboardDevice] = HIDKeyboardDevice.discover) {
+    let shortcutPreferences: ShortcutPreferences
+    init(defaults: UserDefaults = .standard, discover: @escaping () throws -> [KeyboardDevice] = HIDKeyboardDevice.discover,
+         shortcutPreferences: ShortcutPreferences = .system) {
         self.defaults = defaults
+        self.shortcutPreferences = shortcutPreferences
         keyboards = KeyboardManager(defaults: defaults, discover: discover)
     }
     var source: UInt64 { UInt64(defaults.string(forKey: "source") ?? "") ?? sources[0] }
@@ -78,10 +107,26 @@ final class Engine {
             targetConflict(mappings(service), source: source, target: target.usage, owned: records[id(service)])
         }
     }
+    static func ownsShortcut(_ raw: Any?, keyCode: Int) -> Bool {
+        guard let entry = raw as? [String: Any], (entry["enabled"] as? NSNumber)?.boolValue == true,
+              let value = entry["value"] as? [String: Any], value["type"] as? String == "standard",
+              let parameters = value["parameters"] as? [NSNumber], parameters.count == 3 else { return false }
+        // macOS can add the function-key identity flag when saving an unmodified F key.
+        // Do not ignore actual modifiers such as Command, Control, Option, or Shift.
+        return parameters[0].intValue == 65535 && parameters[1].intValue == keyCode
+            && [0, Int(CGEventFlags.maskSecondaryFn.rawValue)].contains(parameters[2].intValue)
+    }
+    var managedShortcutKeyCode: Int {
+        (defaults.object(forKey: "managedShortcutKeyCode") as? NSNumber)?.intValue ?? target.keyCode
+    }
+    static func sameShortcut(_ lhs: Any?, _ rhs: Any?) -> Bool {
+        if lhs == nil && rhs == nil { return true }
+        guard let lhs = lhs as? [String: Any], let rhs = rhs as? [String: Any] else { return false }
+        if NSDictionary(dictionary: lhs).isEqual(to: rhs) { return true }
+        return targets.contains { ownsShortcut(lhs, keyCode: $0.keyCode) && ownsShortcut(rhs, keyCode: $0.keyCode) }
+    }
     func shortcut(target: TargetKey) throws {
-        let domain = "com.apple.symbolichotkeys" as CFString
-        CFPreferencesAppSynchronize(domain)
-        var keys = CFPreferencesCopyAppValue("AppleSymbolicHotKeys" as CFString, domain) as? [String: Any] ?? [:]
+        var keys = shortcutPreferences.read()
         for (id, raw) in keys where id != "60" {
             guard let entry = raw as? [String: Any], (entry["enabled"] as? NSNumber)?.boolValue == true,
                   let value = entry["value"] as? [String: Any], let params = value["parameters"] as? [NSNumber], params.count == 3 else { continue }
@@ -89,19 +134,17 @@ final class Engine {
                 throw NSError(domain: "asd", code: 5, userInfo: [NSLocalizedDescriptionKey: "\(target.name)은 다른 시스템 단축키에서 사용 중입니다. 다른 대상 키를 선택하세요."])
             }
         }
-        if !defaults.bool(forKey: "shortcutBackedUp") {
-            if let original = keys["60"] { defaults.set(original, forKey: "originalShortcut") }
+        if !defaults.bool(forKey: "shortcutBackedUp") || !Self.ownsShortcut(keys["60"], keyCode: managedShortcutKeyCode) {
+            // A user edit/removal becomes the new baseline before we apply again.
+            // set(nil) also clears a stale backup when the entry was removed entirely.
+            defaults.set(keys["60"], forKey: "originalShortcut")
             defaults.set(true, forKey: "shortcutBackedUp")
         }
+        defaults.removeObject(forKey: "shortcutRestorePending")
         keys["60"] = ["enabled": true, "value": ["type": "standard", "parameters": [65535, target.keyCode, 0]]] as [String: Any]
-        CFPreferencesSetAppValue("AppleSymbolicHotKeys" as CFString, keys as CFDictionary, domain)
-        guard CFPreferencesAppSynchronize(domain) else { throw NSError(domain: "asd", code: 1, userInfo: [NSLocalizedDescriptionKey: "입력 소스 단축키를 저장하지 못했습니다."]) }
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/System/Library/PrivateFrameworks/SystemAdministration.framework/Resources/activateSettings")
-        process.arguments = ["-u"]
-        try process.run()
-        process.waitUntilExit()
-        guard process.terminationStatus == 0 else { throw NSError(domain: "asd", code: 2, userInfo: [NSLocalizedDescriptionKey: "단축키 활성화에 실패했습니다. 로그아웃 후 다시 시도하세요."]) }
+        defaults.set(target.keyCode, forKey: "managedShortcutKeyCode")
+        try shortcutPreferences.write(keys)
+        try shortcutPreferences.activate()
     }
     func apply(source: UInt64, target: TargetKey) throws -> Int {
         try shortcut(target: target)
@@ -156,23 +199,26 @@ final class Engine {
         // A failed quit must not restore the shortcut while some keys still emit our target.
         if mappingResult.pending > 0 { throw KeyboardError.verification }
         try restoreSystemInputMenu()
-        let domain = "com.apple.symbolichotkeys" as CFString
-        CFPreferencesAppSynchronize(domain)
-        var keys = CFPreferencesCopyAppValue("AppleSymbolicHotKeys" as CFString, domain) as? [String: Any] ?? [:]
-        let entry = keys["60"] as? [String: Any]
-        let value = entry?["value"] as? [String: Any]
-        let parameters = value?["parameters"] as? [NSNumber]
-        if defaults.bool(forKey: "shortcutBackedUp"), parameters?.map(\.intValue) == [65535, target.keyCode, 0] {
-            keys["60"] = defaults.object(forKey: "originalShortcut")
-            CFPreferencesSetAppValue("AppleSymbolicHotKeys" as CFString, keys as CFDictionary, domain)
-            guard CFPreferencesAppSynchronize(domain) else { throw NSError(domain: "asd", code: 6) }
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/System/Library/PrivateFrameworks/SystemAdministration.framework/Resources/activateSettings")
-            process.arguments = ["-u"]; try process.run(); process.waitUntilExit()
-            guard process.terminationStatus == 0 else { throw NSError(domain: "gksdud", code: 9, userInfo: [NSLocalizedDescriptionKey: "기존 단축키 활성화에 실패했습니다. 다시 시도해주세요."]) }
+        try restoreShortcut()
+    }
+    func restoreShortcut() throws {
+        guard defaults.bool(forKey: "shortcutBackedUp") else { return }
+        var keys = shortcutPreferences.read()
+        let original = defaults.object(forKey: "originalShortcut")
+        let resumeActivation = defaults.bool(forKey: "shortcutRestorePending") && Self.sameShortcut(keys["60"], original)
+        if Self.ownsShortcut(keys["60"], keyCode: managedShortcutKeyCode) {
+            keys["60"] = original
+            defaults.set(true, forKey: "shortcutRestorePending")
+            try shortcutPreferences.write(keys)
+            try shortcutPreferences.activate()
+        } else if resumeActivation {
+            // A previous write succeeded but activation failed. Retry before retiring the backup.
+            try shortcutPreferences.activate()
         }
         defaults.removeObject(forKey: "shortcutBackedUp")
         defaults.removeObject(forKey: "originalShortcut")
+        defaults.removeObject(forKey: "managedShortcutKeyCode")
+        defaults.removeObject(forKey: "shortcutRestorePending")
     }
     func prepareForExit() throws {
         let resumeOnLaunch = active
@@ -1094,6 +1140,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 if let index = CommandLine.arguments.firstIndex(of: "--render-keyboard-ui"), CommandLine.arguments.count > index + 1 {
     do { try renderKeyboardUI(to: CommandLine.arguments[index + 1]) } catch { fputs("UI rendering failed: \(error)\n", stderr); exit(1) }
 } else if CommandLine.arguments.contains("--self-test") {
+    do { try runShortcutRestoreTests() } catch { fputs("Shortcut tests failed: \(error)\n", stderr); exit(1) }
     runKeyboardTests()
     for initial in [false, true] {
         for holdEnabled in [false, true] {
