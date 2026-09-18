@@ -22,6 +22,7 @@ final class KeyboardSettingsController: NSObject, NSTableViewDataSource, NSTable
     let changed: () -> Void
     let window: NSWindow
     private let defaultControl = NSSegmentedControl(labels: ["Off", "On"], trackingMode: .selectOne, target: nil, action: nil)
+    private let defaultHint = NSTextField(labelWithString: "")
     private let table = NSTableView()
     private let emptyLabel = NSTextField(labelWithString: "키보드 없음")
     private let modes: [KeyboardMode] = [.off, .default, .on]
@@ -31,7 +32,7 @@ final class KeyboardSettingsController: NSObject, NSTableViewDataSource, NSTable
 
     init(manager: KeyboardManager, changed: @escaping () -> Void) {
         self.manager = manager; self.changed = changed
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 310), styleMask: [.titled], backing: .buffered, defer: false)
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 332), styleMask: [.titled], backing: .buffered, defer: false)
         super.init()
         window.title = "대상 키보드 설정"
         window.isReleasedWhenClosed = false
@@ -40,6 +41,8 @@ final class KeyboardSettingsController: NSObject, NSTableViewDataSource, NSTable
         title.font = .systemFont(ofSize: 17, weight: .semibold)
         let defaultTitle = NSTextField(labelWithString: "기본값")
         defaultTitle.font = .systemFont(ofSize: 13, weight: .medium)
+        defaultHint.font = .systemFont(ofSize: 11)
+        defaultHint.textColor = .secondaryLabelColor
         defaultControl.target = self; defaultControl.action = #selector(defaultChanged)
         defaultControl.segmentStyle = .rounded; defaultControl.controlSize = .small
         defaultControl.setWidth(66, forSegment: 0); defaultControl.setWidth(66, forSegment: 1)
@@ -87,7 +90,7 @@ final class KeyboardSettingsController: NSObject, NSTableViewDataSource, NSTable
         ])
         let done = NSButton(title: "완료", target: self, action: #selector(close))
         done.bezelStyle = .rounded; done.keyEquivalent = "\r"
-        for view in [title, defaultRow, list, done] {
+        for view in [title, defaultRow, defaultHint, list, done] {
             view.translatesAutoresizingMaskIntoConstraints = false; content.addSubview(view)
         }
         NSLayoutConstraint.activate([
@@ -97,7 +100,10 @@ final class KeyboardSettingsController: NSObject, NSTableViewDataSource, NSTable
             defaultRow.leadingAnchor.constraint(equalTo: title.leadingAnchor, constant: 22),
             defaultRow.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -48),
             defaultRow.heightAnchor.constraint(equalToConstant: 28),
-            list.topAnchor.constraint(equalTo: defaultRow.bottomAnchor, constant: 12),
+            defaultHint.topAnchor.constraint(equalTo: defaultRow.bottomAnchor, constant: 4),
+            defaultHint.leadingAnchor.constraint(equalTo: defaultRow.leadingAnchor),
+            defaultHint.trailingAnchor.constraint(lessThanOrEqualTo: defaultRow.trailingAnchor),
+            list.topAnchor.constraint(equalTo: defaultHint.bottomAnchor, constant: 12),
             list.leadingAnchor.constraint(equalTo: title.leadingAnchor),
             list.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -24),
             list.bottomAnchor.constraint(equalTo: done.topAnchor, constant: -18),
@@ -113,6 +119,9 @@ final class KeyboardSettingsController: NSObject, NSTableViewDataSource, NSTable
     }
     func refresh() {
         defaultControl.selectedSegment = manager.defaultEnabled ? 1 : 0
+        defaultHint.stringValue = manager.defaultEnabled
+            ? "기본적으로 모든 키보드에 적용됩니다."
+            : "On으로 설정한 키보드에만 적용됩니다."
         keyboards = manager.keyboards
         for keyboard in keyboards {
             controls[keyboard.key]?.selectedSegment = modes.firstIndex(of: keyboard.mode)!
