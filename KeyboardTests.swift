@@ -362,13 +362,13 @@ func renderKeyboardUI(to directory: String) throws {
     precondition(!engine.keyboards.defaultEnabled)
     let segments = ui.compactMap { $0 as? NSSegmentedControl }
     let virtualControl = segments[1]
-    virtualControl.selectedSegment = 2
+    virtualControl.selectedSegment = 0
     _ = virtualControl.sendAction(virtualControl.action, to: virtualControl.target)
     precondition(engine.keyboards.known[virtual.identity.key]?.mode == .off)
     precondition(engine.keyboards.warning == nil && delegate.keyboardWarningRow.isHidden && delegate.warningBadge.isHidden)
     precondition(virtualControl.superview != nil, "Mode changes must preserve the focused native control")
     let detachedControl = segments[2]
-    detachedControl.selectedSegment = 0
+    detachedControl.selectedSegment = 2
     _ = detachedControl.sendAction(detachedControl.action, to: detachedControl.target)
     precondition(engine.keyboards.known[disconnected.identity.key]?.mode == .on, "Disconnected rows remain editable")
     devices.append(disconnected)

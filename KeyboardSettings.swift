@@ -17,21 +17,21 @@ final class WarningBadgeView: NSView {
 private final class KeyboardModeControl: NSSegmentedControl {
     var keyboardKey = ""
 }
-private final class KeyboardListDocument: NSView {
-    override var isFlipped: Bool { true }
-}
-
-final class KeyboardSettingsController: NSObject {
+final class KeyboardSettingsController: NSObject, NSTableViewDataSource, NSTableViewDelegate {
     let manager: KeyboardManager
     let changed: () -> Void
     let window: NSWindow
     private let defaultSwitch = NSSwitch()
-    private let rows = NSStackView()
+    private let table = NSTableView()
+    private let emptyLabel = NSTextField(labelWithString: "키보드 없음")
+    private let modes: [KeyboardMode] = [.off, .default, .on]
+    private var keyboards: [SavedKeyboard] = []
     private var lastRows = ""
     private var controls: [String: KeyboardModeControl] = [:]
+
     init(manager: KeyboardManager, changed: @escaping () -> Void) {
         self.manager = manager; self.changed = changed
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 580, height: 430), styleMask: [.titled], backing: .buffered, defer: false)
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 310), styleMask: [.titled], backing: .buffered, defer: false)
         super.init()
         window.title = "대상 키보드 설정"
         window.isReleasedWhenClosed = false
@@ -40,52 +40,66 @@ final class KeyboardSettingsController: NSObject {
         title.font = .systemFont(ofSize: 17, weight: .semibold)
         let defaultTitle = NSTextField(labelWithString: "기본값")
         defaultTitle.font = .systemFont(ofSize: 13, weight: .medium)
-        let subtitle = NSTextField(labelWithString: "새로운 키보드와 Default로 설정한 키보드에 적용합니다.")
-        subtitle.font = .systemFont(ofSize: 11); subtitle.textColor = .secondaryLabelColor
-        let labels = NSStackView(views: [defaultTitle, subtitle])
-        labels.orientation = .vertical; labels.alignment = .leading; labels.spacing = 5
         defaultSwitch.target = self; defaultSwitch.action = #selector(defaultChanged)
-        defaultSwitch.setAccessibilityLabel("새로운 키보드에 적용하는 기본값")
-        let defaultRow = NSStackView(views: [labels, NSView(), defaultSwitch])
-        defaultRow.alignment = .centerY; defaultRow.spacing = 16
-        let separator = NSBox(); separator.boxType = .separator
+        defaultSwitch.setAccessibilityLabel("기본값")
+        let defaultRow = NSStackView(views: [defaultTitle, NSView(), defaultSwitch])
+        defaultRow.alignment = .centerY
+
+        let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("keyboard"))
+        column.resizingMask = .autoresizingMask
+        table.addTableColumn(column)
+        table.headerView = nil
+        table.style = .fullWidth
+        table.rowHeight = 42
+        table.intercellSpacing = .zero
+        table.usesAlternatingRowBackgroundColors = true
+        table.selectionHighlightStyle = .none
+        table.columnAutoresizingStyle = .lastColumnOnlyAutoresizingStyle
+        table.allowsColumnReordering = false
+        table.allowsColumnResizing = false
+        table.dataSource = self; table.delegate = self
+        table.setAccessibilityLabel("대상 키보드")
         let scroll = NSScrollView()
         scroll.hasVerticalScroller = true; scroll.autohidesScrollers = true
-        scroll.drawsBackground = false; scroll.borderType = .noBorder
-        rows.orientation = .vertical; rows.alignment = .leading; rows.spacing = 0
-        rows.translatesAutoresizingMaskIntoConstraints = false
-        let document = KeyboardListDocument(); document.translatesAutoresizingMaskIntoConstraints = false
-        document.addSubview(rows); scroll.documentView = document
+        scroll.borderType = .noBorder
+        scroll.documentView = table
+        let list = NSBox()
+        list.boxType = .custom; list.titlePosition = .noTitle
+        list.cornerRadius = 7; list.borderWidth = 1
+        list.borderColor = .separatorColor; list.fillColor = .controlBackgroundColor
+        list.contentViewMargins = .zero
+        let listContent = list.contentView!
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        listContent.addSubview(scroll)
+        emptyLabel.font = .systemFont(ofSize: 12)
+        emptyLabel.textColor = .secondaryLabelColor
+        emptyLabel.translatesAutoresizingMaskIntoConstraints = false
+        listContent.addSubview(emptyLabel)
         NSLayoutConstraint.activate([
-            document.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor),
-            rows.leadingAnchor.constraint(equalTo: document.leadingAnchor),
-            rows.trailingAnchor.constraint(equalTo: document.trailingAnchor),
-            rows.topAnchor.constraint(equalTo: document.topAnchor),
-            rows.bottomAnchor.constraint(equalTo: document.bottomAnchor)
+            scroll.leadingAnchor.constraint(equalTo: listContent.leadingAnchor, constant: 1),
+            scroll.trailingAnchor.constraint(equalTo: listContent.trailingAnchor, constant: -1),
+            scroll.topAnchor.constraint(equalTo: listContent.topAnchor, constant: 1),
+            scroll.bottomAnchor.constraint(equalTo: listContent.bottomAnchor, constant: -1),
+            emptyLabel.centerXAnchor.constraint(equalTo: listContent.centerXAnchor),
+            emptyLabel.centerYAnchor.constraint(equalTo: listContent.centerYAnchor)
         ])
-        let footnote = NSTextField(labelWithString: "On · Off는 기본값보다 우선합니다. 연결이 끊겨도 설정은 유지됩니다.")
-        footnote.font = .systemFont(ofSize: 11); footnote.textColor = .secondaryLabelColor
         let done = NSButton(title: "완료", target: self, action: #selector(close))
         done.bezelStyle = .rounded; done.keyEquivalent = "\r"
-        for view in [title, defaultRow, separator, scroll, footnote, done] {
+        for view in [title, defaultRow, list, done] {
             view.translatesAutoresizingMaskIntoConstraints = false; content.addSubview(view)
         }
         NSLayoutConstraint.activate([
-            title.topAnchor.constraint(equalTo: content.topAnchor, constant: 24),
+            title.topAnchor.constraint(equalTo: content.topAnchor, constant: 22),
             title.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 24),
-            defaultRow.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 22),
-            defaultRow.leadingAnchor.constraint(equalTo: title.leadingAnchor),
-            defaultRow.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -24),
-            separator.topAnchor.constraint(equalTo: defaultRow.bottomAnchor, constant: 18),
-            separator.leadingAnchor.constraint(equalTo: title.leadingAnchor),
-            separator.trailingAnchor.constraint(equalTo: defaultRow.trailingAnchor),
-            scroll.topAnchor.constraint(equalTo: separator.bottomAnchor, constant: 6),
-            scroll.leadingAnchor.constraint(equalTo: title.leadingAnchor),
-            scroll.trailingAnchor.constraint(equalTo: defaultRow.trailingAnchor),
-            scroll.bottomAnchor.constraint(equalTo: footnote.topAnchor, constant: -14),
-            footnote.leadingAnchor.constraint(equalTo: title.leadingAnchor),
-            footnote.bottomAnchor.constraint(equalTo: done.topAnchor, constant: -16),
-            done.trailingAnchor.constraint(equalTo: defaultRow.trailingAnchor),
+            defaultRow.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 18),
+            defaultRow.leadingAnchor.constraint(equalTo: title.leadingAnchor, constant: 12),
+            defaultRow.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -36),
+            defaultRow.heightAnchor.constraint(equalToConstant: 28),
+            list.topAnchor.constraint(equalTo: defaultRow.bottomAnchor, constant: 12),
+            list.leadingAnchor.constraint(equalTo: title.leadingAnchor),
+            list.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -24),
+            list.bottomAnchor.constraint(equalTo: done.topAnchor, constant: -18),
+            done.trailingAnchor.constraint(equalTo: list.trailingAnchor),
             done.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -18),
             done.widthAnchor.constraint(greaterThanOrEqualToConstant: 72)
         ])
@@ -97,64 +111,57 @@ final class KeyboardSettingsController: NSObject {
     }
     func refresh() {
         defaultSwitch.state = manager.defaultEnabled ? .on : .off
-        for keyboard in manager.keyboards {
-            controls[keyboard.key]?.selectedSegment = KeyboardMode.allCases.firstIndex(of: keyboard.mode)!
+        keyboards = manager.keyboards
+        for keyboard in keyboards {
+            controls[keyboard.key]?.selectedSegment = modes.firstIndex(of: keyboard.mode)!
         }
-        let signature = manager.keyboards.map { "\($0.key)|\($0.name)|\($0.detail)|\(manager.connected.contains($0.key))" }.joined(separator: "\n")
-        guard signature != lastRows || rows.arrangedSubviews.isEmpty else { return }
+        let signature = keyboards.map { "\($0.key)|\($0.name)|\(manager.connected.contains($0.key))" }.joined(separator: "\n")
+        emptyLabel.isHidden = !keyboards.isEmpty
+        guard signature != lastRows || table.numberOfRows != keyboards.count else { return }
         lastRows = signature
         controls = [:]
-        for view in rows.arrangedSubviews { rows.removeArrangedSubview(view); view.removeFromSuperview() }
-        if manager.keyboards.isEmpty {
-            let empty = NSTextField(labelWithString: "키보드가 연결되면 여기에 표시됩니다.")
-            empty.textColor = .secondaryLabelColor
-            rows.addArrangedSubview(empty); empty.heightAnchor.constraint(equalToConstant: 70).isActive = true
-        }
-        for keyboard in manager.keyboards {
-            let connected = manager.connected.contains(keyboard.key)
-            let title = NSTextField(labelWithString: keyboard.name)
-            title.font = .systemFont(ofSize: 13, weight: .medium)
-            title.textColor = connected ? .labelColor : .disabledControlTextColor
-            title.lineBreakMode = .byTruncatingTail
-            title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-            title.toolTip = keyboard.name
-            let detail = NSTextField(labelWithString: "\(connected ? "연결됨" : "연결 안 됨") · \(keyboard.detail)")
-            detail.font = .systemFont(ofSize: 10); detail.textColor = .secondaryLabelColor
-            detail.lineBreakMode = .byTruncatingTail
-            detail.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-            let labels = NSStackView(views: [title, detail])
-            labels.orientation = .vertical; labels.alignment = .leading; labels.spacing = 5
-            let control = KeyboardModeControl(labels: ["On", "Default", "Off"], trackingMode: .selectOne, target: self, action: #selector(modeChanged(_:)))
-            control.keyboardKey = keyboard.key
-            controls[keyboard.key] = control
-            control.segmentStyle = .rounded; control.controlSize = .small
-            control.selectedSegment = KeyboardMode.allCases.firstIndex(of: keyboard.mode)!
-            control.setWidth(38, forSegment: 0); control.setWidth(62, forSegment: 1); control.setWidth(38, forSegment: 2)
-            control.setAccessibilityLabel("\(keyboard.name) 적용 설정")
-            control.setToolTip("항상 적용", forSegment: 0)
-            control.setToolTip("기본값 따르기", forSegment: 1)
-            control.setToolTip("적용하지 않음", forSegment: 2)
-            let row = NSStackView(views: [labels, NSView(), control])
-            row.alignment = .centerY; row.spacing = 12
-            rows.addArrangedSubview(row)
-            NSLayoutConstraint.activate([
-                row.widthAnchor.constraint(equalTo: rows.widthAnchor),
-                row.heightAnchor.constraint(equalToConstant: 66),
-                labels.widthAnchor.constraint(equalTo: row.widthAnchor, constant: -174),
-                title.widthAnchor.constraint(equalTo: labels.widthAnchor),
-                detail.widthAnchor.constraint(equalTo: labels.widthAnchor)
-            ])
-            let line = NSBox(); line.boxType = .separator; rows.addArrangedSubview(line)
-            line.widthAnchor.constraint(equalTo: rows.widthAnchor).isActive = true
-        }
+        table.reloadData()
+    }
+    func numberOfRows(in tableView: NSTableView) -> Int { keyboards.count }
+    func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool { false }
+    func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+        let keyboard = keyboards[row]
+        let connected = manager.connected.contains(keyboard.key)
+        let cell = NSTableCellView(frame: NSRect(x: 0, y: 0, width: tableColumn?.width ?? tableView.bounds.width, height: tableView.rowHeight))
+        cell.autoresizingMask = [.width]
+        let name = NSTextField(labelWithString: keyboard.name)
+        name.font = .systemFont(ofSize: 12)
+        name.textColor = connected ? .labelColor : .disabledControlTextColor
+        name.lineBreakMode = .byTruncatingTail
+        name.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        name.toolTip = keyboard.name
+        cell.textField = name
+        let control = KeyboardModeControl(labels: ["Off", "Default", "On"], trackingMode: .selectOne, target: self, action: #selector(modeChanged(_:)))
+        control.keyboardKey = keyboard.key
+        controls[keyboard.key] = control
+        control.segmentStyle = .rounded; control.controlSize = .small
+        control.selectedSegment = modes.firstIndex(of: keyboard.mode)!
+        control.setWidth(36, forSegment: 0); control.setWidth(60, forSegment: 1); control.setWidth(36, forSegment: 2)
+        control.setAccessibilityLabel("\(keyboard.name) 적용 설정")
+        // NSTableView owns the cell frame. Autoresize its contents with that frame so
+        // each row uses the full column width, independent of the name's intrinsic size.
+        control.sizeToFit()
+        control.setFrameOrigin(NSPoint(x: cell.bounds.width - control.frame.width - 12, y: (cell.bounds.height - control.frame.height) / 2))
+        control.autoresizingMask = [.minXMargin, .minYMargin, .maxYMargin]
+        name.sizeToFit()
+        name.frame = NSRect(x: 12, y: (cell.bounds.height - name.frame.height) / 2,
+                            width: max(0, control.frame.minX - 28), height: name.frame.height)
+        name.autoresizingMask = [.width, .minYMargin, .maxYMargin]
+        cell.addSubview(name); cell.addSubview(control)
+        return cell
     }
     @objc private func defaultChanged() {
         manager.defaultEnabled = defaultSwitch.state == .on
         changed(); refresh()
     }
     @objc private func modeChanged(_ sender: KeyboardModeControl) {
-        guard KeyboardMode.allCases.indices.contains(sender.selectedSegment) else { return }
-        manager.setMode(KeyboardMode.allCases[sender.selectedSegment], for: sender.keyboardKey)
+        guard modes.indices.contains(sender.selectedSegment) else { return }
+        manager.setMode(modes[sender.selectedSegment], for: sender.keyboardKey)
         changed(); refresh()
     }
     @objc private func close() { window.sheetParent?.endSheet(window); window.orderOut(nil) }
