@@ -2,11 +2,11 @@ name: Release
 
 on:
   push:
-    tags: ['v*']
+    tags: ['v*', 'pre-v.*']
   workflow_dispatch:
     inputs:
       release_tag:
-        description: Existing release tag to build or verify using the latest workflow
+        description: Existing vVERSION or pre-v.VERSION tag to build or verify using the latest workflow
         required: true
         type: string
 
@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   release:
-    if: github.repository == 'codingnoye/gksdud' && ((github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))
+    if: github.repository == 'codingnoye/gksdud' && ((github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/pre-v.'))) || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))
     runs-on: macos-15
     timeout-minutes: 30
     environment: release
@@ -40,19 +40,17 @@ jobs:
         run: |
           set -euo pipefail
           version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Info.plist)
-          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
           tag="$GITHUB_REF_NAME"
           if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
             tag="$REQUESTED_TAG"
-            [[ "$tag" == "v$version" ]]
+          fi
+          ruby scripts/release-metadata.rb "$version" "$tag" >> "$GITHUB_OUTPUT"
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
             git fetch --depth=1 origin "refs/tags/$tag:refs/tags/$tag"
             # Never relabel changed application code as an existing version.
             git diff --exit-code "$tag" HEAD -- '*.swift' Bridge.h Info.plist build.sh LICENSE
           fi
-          [[ "$tag" == "v$version" ]]
           test -s LICENSE
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
       - name: Import fixed signing identity into temporary keychain
         env:
@@ -87,7 +85,16 @@ jobs:
           GKSDUD_SIGN_MODE: local
         run: bash build.sh
 
-      - name: Verify archive and prepare checksums and Homebrew cask
+      - name: Name prerelease archive
+        if: steps.version.outputs.prerelease == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          FILENAME: ${{ steps.version.outputs.filename }}
+        run: mv "outputs/gksdud-$VERSION-macos-universal.zip" "outputs/$FILENAME"
+
+      - name: Verify archive and prepare release metadata
+        env:
+          GKSDUD_RELEASE_TAG: ${{ steps.version.outputs.tag }}
         run: ruby scripts/prepare-release.rb "$GITHUB_REPOSITORY"
 
       - name: Verify existing release without overwriting it
@@ -95,16 +102,17 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.version.outputs.tag }}
-          VERSION: ${{ steps.version.outputs.version }}
+          FILENAME: ${{ steps.version.outputs.filename }}
+          GKSDUD_RELEASE_TAG: ${{ steps.version.outputs.tag }}
         run: |
           set -euo pipefail
           releases=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases" --jq '.[].tag_name')
           if printf '%s\n' "$releases" | grep -Fxq "$TAG"; then
             existing_dir=$(mktemp -d "$RUNNER_TEMP/gksdud-existing.XXXXXX")
             gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir "$existing_dir" \
-              --pattern "gksdud-$VERSION-macos-universal.zip" --pattern SHA256SUMS
-            ruby -rdigest -e 'dir, version = ARGV; name = "gksdud-#{version}-macos-universal.zip"; expected = "#{Digest::SHA256.file(File.join(dir, name)).hexdigest}  #{name}\n"; abort "Published checksum mismatch" unless File.read(File.join(dir, "SHA256SUMS")) == expected' "$existing_dir" "$VERSION"
-            ruby scripts/prepare-release.rb "$GITHUB_REPOSITORY" "$existing_dir/gksdud-$VERSION-macos-universal.zip"
+              --pattern "$FILENAME" --pattern SHA256SUMS
+            ruby -rdigest -e 'dir, name = ARGV; expected = "#{Digest::SHA256.file(File.join(dir, name)).hexdigest}  #{name}\n"; abort "Published checksum mismatch" unless File.read(File.join(dir, "SHA256SUMS")) == expected' "$existing_dir" "$FILENAME"
+            ruby scripts/prepare-release.rb "$GITHUB_REPOSITORY" "$existing_dir/$FILENAME"
             echo 'exists=true' >> "$GITHUB_OUTPUT"
             echo 'Existing release verified. No assets will be replaced.'
           else
@@ -116,16 +124,23 @@ jobs:
         timeout-minutes: 2
         run: bash scripts/cleanup-signing.sh
 
-      - name: Create draft release (never overwrite existing assets)
+      - name: Create stable draft or publish prerelease (never overwrite existing assets)
         if: steps.existing.outputs.exists == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.version.outputs.version }}
           TAG: ${{ steps.version.outputs.tag }}
+          PRERELEASE: ${{ steps.version.outputs.prerelease }}
+          ASSET_VERSION: ${{ steps.version.outputs.asset_version }}
+          FILENAME: ${{ steps.version.outputs.filename }}
         run: |
           set -euo pipefail
+          options=(--draft --title "gksdud $VERSION" --notes-file .github/RELEASE_NOTES.md)
+          if [[ "$PRERELEASE" == true ]]; then
+            options=(--prerelease --latest=false --title "gksdud $VERSION Pre-release" --notes-file .github/PRERELEASE_NOTES.md --generate-notes)
+          fi
           gh release create "$TAG" \
-            "outputs/gksdud-$VERSION-macos-universal.zip" \
-            "outputs/release-$VERSION/SHA256SUMS" \
-            --repo "$GITHUB_REPOSITORY" --verify-tag --draft \
-            --title "gksdud $VERSION" --notes-file .github/RELEASE_NOTES.md
+            "outputs/$FILENAME" \
+            "outputs/release-$ASSET_VERSION/SHA256SUMS" \
+            --repo "$GITHUB_REPOSITORY" --verify-tag \
+            "${options[@]}"

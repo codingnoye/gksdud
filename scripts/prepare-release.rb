@@ -5,6 +5,7 @@ require 'fileutils'
 require 'open3'
 require 'tmpdir'
 require 'openssl'
+require_relative 'release-metadata'
 
 def capture!(*args)
   output, status = Open3.capture2e(*args)
@@ -17,8 +18,8 @@ abort 'Usage: ruby scripts/prepare-release.rb OWNER/REPO [archive.zip]' unless
   ARGV.length.between?(1, 2) && repo.match?(/\A[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*\z/)
 root = File.expand_path('..', __dir__)
 version = capture!('/usr/libexec/PlistBuddy', '-c', 'Print :CFBundleShortVersionString', "#{root}/Info.plist")
-abort 'Expected numeric release version' unless version.match?(/\A\d+\.\d+\.\d+\z/)
-filename = "gksdud-#{version}-macos-universal.zip"
+metadata = ReleaseMetadata.new(version, ENV.fetch('GKSDUD_RELEASE_TAG', "v#{version}"))
+filename = metadata.filename
 archive = File.expand_path(ARGV[1] || "#{root}/outputs/#{filename}")
 abort "Missing archive: #{archive}" unless File.file?(archive)
 abort "Release asset must be named #{filename}" unless File.basename(archive) == filename
@@ -47,10 +48,12 @@ Dir.mktmpdir('gksdud-release-') do |stage|
 end
 
 sha256 = Digest::SHA256.file(archive).hexdigest
-output = "#{root}/outputs/release-#{version}"
+output = "#{root}/outputs/release-#{metadata.asset_version}"
 FileUtils.mkdir_p(output)
 File.write("#{output}/SHA256SUMS", "#{sha256}  #{filename}\n")
-File.write("#{output}/gksdud.rb", <<~CASK)
+# Prereleases are direct downloads only; never prepare a stable Homebrew cask.
+unless metadata.prerelease?
+  File.write("#{output}/gksdud.rb", <<~CASK)
   cask "gksdud" do
     version "#{version}"
     sha256 "#{sha256}"
@@ -72,5 +75,6 @@ File.write("#{output}/gksdud.rb", <<~CASK)
     EOS
   end
 CASK
+end
 puts "Verified archive. Metadata: #{output}"
 puts 'Not published. Test Gatekeeper, fresh installation, and upgrades on a separate Mac before release.'
