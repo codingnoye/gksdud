@@ -57,7 +57,9 @@ jobs:
         if: failure()
         shell: bash
         run: |
-          binary=$(find /private/tmp -maxdepth 2 -name "gksdud-$(uname -m)" -type f -print -quit)
-          if [[ -n "$binary" ]]; then
-            lldb --batch -o run -o 'thread backtrace all' -- "$binary" --self-test
-          fi
+          for binary in /private/tmp/gksdud-build.*/gksdud-"$(uname -m)"; do
+            if [[ -f "$binary" ]]; then
+              lldb --batch -o run -o 'thread backtrace all' -- "$binary" --self-test
+              break
+            fi
+          done
