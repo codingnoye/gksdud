@@ -354,6 +354,22 @@ func nativeSwitchPulse(from event: CGEvent, marker: Int64) -> (CGEvent, CGEvent)
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDelegate, NSTextFieldDelegate {
     let engine: Engine
     init(engine: Engine = Engine()) { self.engine = engine; super.init() }
+    let installer = UpdateInstaller()
+    var preparedToRelaunch = false
+    lazy var optionInput = makeOptionInput()
+    lazy var updates = UpdateChecker(defaults: engine.defaults)
+    var updateTimer: Timer?
+    var tabButtons: [NSButton] = []
+    var tabPanels: [NSStackView] = []
+    var selectedTab = 0
+    let updateTabBadge = NSImageView()
+    let updateHeading = NSTextField(wrappingLabelWithString: "")
+    let updateSummary = NSTextView()
+    let updateStatus = NSTextField(wrappingLabelWithString: "")
+    let updateButton = NSButton(title: "업데이트 하기", target: nil, action: nil)
+    let checkUpdateButton = NSButton(title: "업데이트 확인", target: nil, action: nil)
+    var specialButtons: [NSButton] = []
+    let specialStatus = NSTextField(wrappingLabelWithString: "")
     var item: NSStatusItem?
     var window: NSWindow!
     var keyboardSettings: KeyboardSettingsController?
@@ -416,6 +432,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         permissionSettingsWasActive = false
     }
     func highlightPressAccess() {
+        selectTab(0)
         showSettings()
         updatePressAccess()
         guard !AXIsProcessTrusted() else { return }
@@ -447,6 +464,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         togglePressSwitch()
     }
     func stopKeyTap() {
+        optionInput.cancel()
         cancelCapsRestore()
         englishCaps.reset()
         cancelLongPress()
@@ -460,18 +478,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         if let tap = keyTap, !CFMachPortIsValid(tap) { stopKeyTap() }
         syncCapsPreservation()
         if !engine.active || !engine.longPressCapsLock { cancelLongPress() }
-        guard engine.active, engine.switchOnKeyDown || engine.longPressCapsLock || engine.preserveCapsLock, keyTap == nil else { updatePressAccess(); return }
-        let mask = (CGEventMask(1) << CGEventType.keyDown.rawValue) | (CGEventMask(1) << CGEventType.keyUp.rawValue) | (CGEventMask(1) << CGEventType.flagsChanged.rawValue)
+        guard engine.active, engine.switchOnKeyDown || engine.longPressCapsLock || engine.preserveCapsLock || specialMode != .none, keyTap == nil else { updatePressAccess(); return }
+        let mask = (CGEventMask(1) << CGEventType.keyDown.rawValue) | (CGEventMask(1) << CGEventType.keyUp.rawValue) | (CGEventMask(1) << CGEventType.flagsChanged.rawValue) | (CGEventMask(1) << CGEventType.leftMouseDown.rawValue) | (CGEventMask(1) << CGEventType.rightMouseDown.rawValue) | (CGEventMask(1) << CGEventType.otherMouseDown.rawValue)
         guard let tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .defaultTap,
             eventsOfInterest: mask, callback: { _, type, event, info in
                 guard let info else { return Unmanaged.passUnretained(event) }
                 let owner = Unmanaged<AppDelegate>.fromOpaque(info).takeUnretainedValue()
                 if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
                     owner.cancelLongPress()
+                    owner.optionInput.cancel()
                     // Retain owned physical key-ups to avoid an extra native release.
                     if let tap = owner.keyTap { CGEvent.tapEnable(tap: tap, enable: true) }
                     return Unmanaged.passUnretained(event)
                 }
+                if owner.optionInput.handle(event, mode: owner.specialMode, active: owner.engine.active) { return nil }
                 if type == .flagsChanged {
                     if owner.capsPreservationActive && event.getIntegerValueField(.keyboardEventKeycode) == 57 {
                         owner.englishCaps.capsKeyChanged(english: owner.currentLanguage.hasPrefix("en"),
@@ -512,7 +532,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 if decision.switchNow, let (down, up) = pulse {
                     // Re-enter before system hotkey handling, not downstream of the session tap.
                     // The marker bypass above lets both pulses through without another switch.
-                    // Only the reserved F-key is posted; ordinary typing is never buffered.
+                    // This switch path only posts the reserved F-key.
                     down.post(tap: .cghidEventTap)
                     up.post(tap: .cghidEventTap)
                 }
@@ -580,7 +600,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         scheduleCapsRestore()
     }
     func restoreEnglishCaps() {
-        guard capsPreservationActive, pendingCapsState == nil,
+        guard !optionInput.busy, capsPreservationActive, pendingCapsState == nil,
               let desired = englishCaps.target(english: currentLanguage.hasPrefix("en")),
               actualCaps != desired else { return }
         do { try setCapsLock(desired) }
@@ -698,6 +718,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         NSApp.mainMenu = mainMenu
         buildWindow()
         updateMenu()
+        updates.onChange = { [weak self] in self?.refreshUpdates() }
+        installer.onChange = { [weak self] in self?.refreshUpdates() }
+        installer.onReady = { [weak self] prepared in self?.installPreparedUpdate(prepared) }
+        updates.check()
+        updateTimer = Timer.scheduledTimer(withTimeInterval: 900, repeats: true) { [weak self] _ in self?.updates.check() }
+        updateTimer?.tolerance = 60
         DistributedNotificationCenter.default().addObserver(self, selector: #selector(inputSourceChanged), name: Notification.Name(kTISNotifySelectedKeyboardInputSourceChanged as String), object: nil)
         let center = NSWorkspace.shared.notificationCenter
         observers.append(center.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] notice in
@@ -715,6 +741,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in self?.finishPermissionVisit() }
             }
         })
+        observers.append(center.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.optionInput.cancel(focusChanged: true)
+        })
+        observers.append(center.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in self?.optionInput.cancel() })
         for name in [NSWorkspace.didWakeNotification, NSWorkspace.screensDidWakeNotification, NSWorkspace.sessionDidBecomeActiveNotification] {
             observers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in self?.recover() })
         }
@@ -729,167 +759,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         guard window != nil else { return }
         ensureKeyTap()
         if returningFromPermissionSettings && permissionSettingsWasActive { finishPermissionVisit() }
-    }
-    func buildWindow() {
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 440, height: 720), styleMask: [.titled, .closable], backing: .buffered, defer: false)
-        window.title = "gksdud"
-        window.isReleasedWhenClosed = false
-        window.delegate = self
-        window.hidesOnDeactivate = false
-        window.center()
-        let stack = NSStackView()
-        stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 16
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        func addSeparator() {
-            let line = NSBox(); line.boxType = .separator
-            stack.addArrangedSubview(line)
-            line.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-        }
-        func addHint(_ text: String) {
-            let hint = NSStackView()
-            hint.orientation = .vertical; hint.alignment = .leading; hint.spacing = 3
-            for line in text.components(separatedBy: "\n") {
-                let label = NSTextField(wrappingLabelWithString: line)
-                label.font = .systemFont(ofSize: 11, weight: .regular)
-                label.textColor = .secondaryLabelColor
-                hint.addArrangedSubview(label)
-                label.widthAnchor.constraint(equalTo: hint.widthAnchor).isActive = true
-            }
-            hint.translatesAutoresizingMaskIntoConstraints = false
-            let container = NSView()
-            container.addSubview(hint)
-            stack.addArrangedSubview(container)
-            NSLayoutConstraint.activate([
-                container.widthAnchor.constraint(equalTo: stack.widthAnchor),
-                hint.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 20),
-                hint.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-                hint.topAnchor.constraint(equalTo: container.topAnchor),
-                hint.bottomAnchor.constraint(equalTo: container.bottomAnchor)
-            ])
-        }
-        inputBadge.imageScaling = .scaleProportionallyUpOrDown
-        inputBadge.contentTintColor = .labelColor
-        inputBadge.widthAnchor.constraint(equalToConstant: 44).isActive = true
-        inputBadge.heightAnchor.constraint(equalToConstant: 40).isActive = true
-        let titleBox = NSBox()
-        titleBox.boxType = .custom
-        titleBox.cornerRadius = 10; titleBox.borderWidth = 1
-        titleBox.borderColor = .separatorColor; titleBox.fillColor = .textBackgroundColor
-        titleBox.contentViewMargins = NSSize(width: 16, height: 12)
-        let title = testInput
-        title.stringValue = engine.testInputText
-        title.delegate = self
-        title.isEditable = true; title.isSelectable = true
-        title.isBezeled = false; title.drawsBackground = false
-        title.font = .monospacedSystemFont(ofSize: 23, weight: .medium)
-        title.textColor = .labelColor
-        title.focusRingType = .none
-        title.placeholderString = "한영 전환을 테스트해보세요"
-        title.setAccessibilityLabel("한영 전환 테스트 입력창")
-        title.cell?.isScrollable = true
-        title.lineBreakMode = .byClipping
-        title.translatesAutoresizingMaskIntoConstraints = false
-        titleBox.contentView!.addSubview(title)
-        NSLayoutConstraint.activate([title.leadingAnchor.constraint(equalTo: titleBox.contentView!.leadingAnchor), title.trailingAnchor.constraint(equalTo: titleBox.contentView!.trailingAnchor), title.centerYAnchor.constraint(equalTo: titleBox.contentView!.centerYAnchor), titleBox.heightAnchor.constraint(equalToConstant: 60)])
-        let inputRow = NSStackView(views: [inputBadge, titleBox])
-        inputRow.spacing = 12; inputRow.alignment = .centerY
-        stack.addArrangedSubview(inputRow)
-        inputRow.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-        titleBox.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -56).isActive = true
-        enabled.target = self; enabled.action = #selector(toggleEnabled)
-        enabled.state = engine.active ? .on : .off
-        stack.addArrangedSubview(enabled)
-        let warningIcon = NSImageView(image: NSImage(systemSymbolName: "exclamationmark.circle.fill", accessibilityDescription: "경고")!)
-        warningIcon.contentTintColor = .systemOrange
-        warningIcon.widthAnchor.constraint(equalToConstant: 12).isActive = true
-        warningIcon.heightAnchor.constraint(equalToConstant: 12).isActive = true
-        keyboardWarning.font = .systemFont(ofSize: 11)
-        keyboardWarning.textColor = .systemOrange
-        keyboardWarningRow.addArrangedSubview(warningIcon)
-        keyboardWarningRow.addArrangedSubview(keyboardWarning)
-        keyboardWarningRow.alignment = .top; keyboardWarningRow.spacing = 5
-        stack.addArrangedSubview(keyboardWarningRow)
-        keyboardWarningRow.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-        keyboardWarningRow.isHidden = true
-        stack.setCustomSpacing(6, after: keyboardWarningRow)
-        pressAccess.target = self; pressAccess.action = #selector(requestPressAccess)
-        pressAccess.font = .systemFont(ofSize: 13)
-        pressAccess.bezelStyle = .rounded
-        pressSwitch.target = self; pressSwitch.action = #selector(togglePressSwitch)
-        updatePressAccess()
-        stack.setCustomSpacing(4, after: enabled)
-        let pressRow = NSStackView(views: [pressSwitch, pressAccess])
-        pressRow.spacing = 16; pressRow.alignment = .centerY
-        stack.addArrangedSubview(pressRow)
-        stack.setCustomSpacing(6, after: pressRow)
-        addHint("버튼을 뗄 때가 아닌 누를 때 전환하도록 해 더 빠르게 전환합니다.\n글자 씹힘도 더 개선됩니다.")
-        longPressSwitch.target = self; longPressSwitch.action = #selector(toggleLongPress)
-        stack.addArrangedSubview(longPressSwitch)
-        preserveCapsSwitch.target = self; preserveCapsSwitch.action = #selector(togglePreserveCaps)
-        stack.addArrangedSubview(preserveCapsSwitch)
-        addSeparator()
-        let row = NSStackView(); row.spacing = 16
-        let sourceLabel = NSTextField(labelWithString: "한영 키")
-        sourceLabel.widthAnchor.constraint(equalToConstant: 95).isActive = true
-        row.addArrangedSubview(sourceLabel)
-        picker.addItems(withTitles: ["우측 Command ⌘", "우측 Option ⌥", "Caps Lock ⇪"])
-        picker.selectItem(at: sources.firstIndex(of: engine.source) ?? 0)
-        picker.target = self; picker.action = #selector(selectionChanged)
-        row.addArrangedSubview(picker); stack.addArrangedSubview(row)
-        let targetRow = NSStackView(); targetRow.spacing = 16
-        let targetLabel = NSTextField(labelWithString: "내부 전환 키")
-        targetLabel.widthAnchor.constraint(equalToConstant: 95).isActive = true
-        targetRow.addArrangedSubview(targetLabel)
-        targetPicker.addItems(withTitles: targets.map(\.name))
-        targetPicker.selectItem(withTitle: engine.target.name)
-        targetPicker.target = self; targetPicker.action = #selector(selectionChanged)
-        targetRow.addArrangedSubview(targetPicker)
-        stack.addArrangedSubview(targetRow)
-        stack.setCustomSpacing(6, after: targetRow)
-        addHint("시스템의 '이전 입력 소스 선택' 단축키의 값을 변경합니다.\n다른 앱과 겹치지 않는, 기능 없는 키를 골라주세요.")
-        let keyboardButton = NSButton(title: "대상 키보드 설정", target: self, action: #selector(showKeyboardSettings))
-        keyboardButton.bezelStyle = .rounded
-        stack.addArrangedSubview(keyboardButton)
-        addSeparator()
-        login.target = self; login.action = #selector(toggleLogin)
-        login.state = SMAppService.mainApp.status == .enabled ? .on : .off
-        showInMenuBar.target = self; showInMenuBar.action = #selector(toggleHidden)
-        showInMenuBar.state = UserDefaults.standard.bool(forKey: "hidden") ? .off : .on
-        stack.addArrangedSubview(login); stack.addArrangedSubview(showInMenuBar)
-        stack.setCustomSpacing(6, after: showInMenuBar)
-        addHint("기존 메뉴바 입력기를 대체합니다.\n⌘+드래그로 위치를 옮길 수 있어요.")
-        addSeparator()
-        let iconRow = NSStackView(); iconRow.spacing = 16; iconRow.alignment = .centerY
-        let iconLabel = NSTextField(labelWithString: "메뉴바 아이콘")
-        iconLabel.widthAnchor.constraint(equalToConstant: 95).isActive = true
-        iconPicker.addItems(withTitles: ["한 / dud", "한 / A", "KO / EN", "ㅎuㅎ / dud"])
-        iconPicker.selectItem(at: iconStyle)
-        iconPicker.target = self; iconPicker.action = #selector(changeIconStyle)
-        iconPicker.setAccessibilityLabel("메뉴바 아이콘 조합")
-        for preview in [koreanPreview, englishPreview] {
-            preview.widthAnchor.constraint(equalToConstant: 22).isActive = true
-            preview.heightAnchor.constraint(equalToConstant: 20).isActive = true
-            preview.contentTintColor = .labelColor
-        }
-        koreanPreview.setAccessibilityLabel("한국어 아이콘 미리보기")
-        englishPreview.setAccessibilityLabel("영어 아이콘 미리보기")
-        for view in [iconLabel, iconPicker, koreanPreview, englishPreview] as [NSView] { iconRow.addArrangedSubview(view) }
-        stack.addArrangedSubview(iconRow)
-        refreshIconPreviews()
-        let credit = NSTextField(labelWithString: "© 2026 CodingNoye · codingnoye@gmail.com")
-        credit.font = .systemFont(ofSize: 10); credit.textColor = .secondaryLabelColor
-        credit.alignment = .center
-        credit.translatesAutoresizingMaskIntoConstraints = false
-        window.contentView!.addSubview(credit)
-        NSLayoutConstraint.activate([
-            credit.leadingAnchor.constraint(equalTo: window.contentView!.leadingAnchor, constant: 24),
-            credit.trailingAnchor.constraint(equalTo: window.contentView!.trailingAnchor, constant: -24),
-            credit.bottomAnchor.constraint(equalTo: window.contentView!.bottomAnchor, constant: -14)
-        ])
-        window.contentView!.addSubview(stack)
-        NSLayoutConstraint.activate([stack.leadingAnchor.constraint(equalTo: window.contentView!.leadingAnchor, constant: 24), stack.trailingAnchor.constraint(equalTo: window.contentView!.trailingAnchor, constant: -24), stack.topAnchor.constraint(equalTo: window.contentView!.topAnchor, constant: 24), stack.bottomAnchor.constraint(lessThanOrEqualTo: credit.topAnchor, constant: -16)])
-        refreshKeyboardState()
-        updateInputIndicator()
     }
     @objc func showKeyboardSettings() {
         repair()
@@ -934,6 +803,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         brandEntry.target = self
         brandEntry.isEnabled = true
         menu.addItem(brandEntry)
+        let updateEntry = NSMenuItem(title: "업데이트 가능", action: #selector(showAbout), keyEquivalent: "")
+        updateEntry.target = self
+        updateEntry.image = NSImage(systemSymbolName: "arrow.up.circle.fill", accessibilityDescription: nil)
+        updateEntry.isHidden = updates.available == nil
+        menu.addItem(updateEntry)
         menu.addItem(NSMenuItem.separator())
         let koreanEntry = menu.addItem(withTitle: "한국어", action: #selector(selectKorean), keyEquivalent: "")
         koreanEntry.target = self; koreanEntry.image = sourceMenuIcon(korean: true)
@@ -952,7 +826,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         item?.menu = menu
         updateInputIndicator()
     }
-    @objc func menuBrand() {}
+    @objc func menuBrand() { showAbout() }
     func sourceMenuIcon(korean: Bool) -> NSImage {
         iconStyle == 3 ? DudIcon.badge(korean: korean) : badgeImage(label: iconLabel(korean: korean), filled: korean)
     }
@@ -1000,6 +874,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     @objc func inputSourceChanged() {
         RunLoop.main.perform(inModes: [.common]) { [weak self] in
             guard let self else { return }
+            guard !self.optionInput.busy else { return }
             self.completeCapsTransition()
             self.scheduleCapsRestore()
             self.restoreEnglishCaps()
@@ -1016,6 +891,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let badge = (lang.hasPrefix("ko") || lang.hasPrefix("en"))
             ? sourceMenuIcon(korean: korean) : badgeImage(label: label, filled: false)
         inputBadge.image = badge
+        tabButtons.first?.image = badge
         inputBadge.setAccessibilityLabel("현재 입력: \(korean ? "한국어" : lang.hasPrefix("en") ? "영어" : label)")
         guard let button = item?.button else { return }
         button.title = ""; button.image = badge
@@ -1070,7 +946,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     @objc func showSettings() { window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { if showInMenuBar.state == .off { showSettings() }; return true }
     @objc func toggleHidden() {
-        UserDefaults.standard.set(showInMenuBar.state == .off, forKey: "hidden")
+        engine.defaults.set(showInMenuBar.state == .off, forKey: "hidden")
         updateMenu()
         if engine.active { do { try engine.hideSystemInputMenu() } catch { report(error) } }
     }
@@ -1119,12 +995,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         do { let count = try engine.apply(source: source, target: target); lastError = ""; ensureKeyTap(); status.stringValue = "활성화됨 · 키보드 \(count)개 · \(target.name) 한영 전환" } catch { report(error); resetSelection() }
     }
     func restoreNow() {
+        optionInput.cancel()
         guard !engine.isUpdatingSettings else { return }
         cancelLongPress()
         do { try engine.restore(); lastError = ""; status.stringValue = "비활성화됨 · 이전 키 매핑과 단축키로 복원했습니다." } catch { report(error) }
         resetSelection(); syncCapsPreservation(); updatePressAccess(); refreshKeyboardState()
     }
-    func recover() { cancelCapsRestore(); englishCaps.switching = false; cancelLongPress(); longPress = LongPressState(); pressGate.held.removeAll(); for delay in [0.5, 2.0, 5.0] { DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.repair() } } }
+    func recover() { optionInput.cancel(); cancelCapsRestore(); englishCaps.switching = false; cancelLongPress(); longPress = LongPressState(); pressGate.held.removeAll(); for delay in [0.5, 2.0, 5.0] { DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.repair() } } }
     func repair() {
         guard !engine.isUpdatingSettings else { return }
         ensureKeyTap()
@@ -1148,6 +1025,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         if window.isVisible { alert.beginSheetModal(for: window) } else { showSettings(); alert.beginSheetModal(for: window) }
     }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if preparedToRelaunch { return .terminateNow }
         guard !engine.isUpdatingSettings else { return .terminateCancel }
         do {
             try engine.prepareForExit()
@@ -1163,11 +1041,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     @objc func quit() { NSApp.terminate(nil) }
 }
 
-if let index = CommandLine.arguments.firstIndex(of: "--render-keyboard-ui"), CommandLine.arguments.count > index + 1 {
+if CommandLine.arguments.dropFirst().first == "--install-update" {
+    do { try UpdateInstaller.runHelper(CommandLine.arguments) } catch { fputs("Update helper failed: \(error.localizedDescription)\n", stderr); exit(1) }
+} else if let index = CommandLine.arguments.firstIndex(of: "--render-keyboard-ui"), CommandLine.arguments.count > index + 1 {
     do { try renderKeyboardUI(to: CommandLine.arguments[index + 1]) } catch { fputs("UI rendering failed: \(error)\n", stderr); exit(1) }
+} else if CommandLine.arguments.contains("--probe-option-input") {
+    do { try probeOptionInput() } catch { fputs("Input probe failed: \(error)\n", stderr); exit(1) }
 } else if CommandLine.arguments.contains("--self-test") {
     do { try runSettingsReentrancyTests() } catch { fputs("Settings reentrancy tests failed: \(error)\n", stderr); exit(1) }
     do { try runShortcutRestoreTests() } catch { fputs("Shortcut tests failed: \(error)\n", stderr); exit(1) }
+    runFeatureTests()
     runKeyboardTests()
     for initial in [false, true] {
         for holdEnabled in [false, true] {

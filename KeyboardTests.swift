@@ -315,6 +315,8 @@ func renderKeyboardUI(to directory: String) throws {
     devices = [builtIn, virtual]
     virtual.mappings = []; virtual.failWrite = true
     for _ in 0..<3 { _ = engine.keyboards.reconcile(source: sources[0], target: f19, active: true) }
+    let previewRelease = AppRelease(tag_name: "v9.0.0", html_url: "https://github.com/codingnoye/gksdud/releases/tag/v9.0.0", body: "## 요약\n- 설정을 일반·대소문자·특수문자·gksdud 탭으로 나눴습니다.\n- 한글에서도 Option 특수문자를 입력할 수 있습니다.\n- 새 버전이 나오면 메뉴에서 알려드립니다.\n\n## 설치\n요약에 나타나면 안 됩니다.", draft: false, prerelease: false)
+    defaults.set(try JSONEncoder().encode(previewRelease), forKey: "updates.release")
     let delegate = AppDelegate(engine: engine)
     delegate.buildWindow()
     delegate.window.makeFirstResponder(nil)
@@ -352,9 +354,34 @@ func renderKeyboardUI(to directory: String) throws {
     for (name, appearance) in [("light", NSAppearance.Name.aqua), ("dark", NSAppearance.Name.darkAqua)] {
         delegate.window.appearance = NSAppearance(named: appearance)
         settings.window.appearance = NSAppearance(named: appearance)
+        for tab in 0..<4 {
+            delegate.tabButtons[tab].performClick(nil)
+            precondition(delegate.selectedTab == tab && !delegate.tabPanels[tab].isHidden)
+            precondition(delegate.tabPanels.filter { !$0.isHidden }.count == 1)
+            try save(delegate.window.contentView!, "tab-\(tab)-\(name).png")
+        }
+        delegate.selectTab(0)
         try save(delegate.window.contentView!, "settings-\(name).png")
         try save(settings.window.contentView!, "keyboards-\(name).png")
     }
+    precondition(!delegate.updateTabBadge.isHidden)
+    let updateEntry = delegate.item!.menu!.items[1]
+    precondition(updateEntry.action == #selector(AppDelegate.showAbout) && !updateEntry.isHidden)
+    delegate.showAbout()
+    precondition(delegate.selectedTab == 3 && !delegate.updateButton.isHidden)
+    precondition(!delegate.updateSummary.string.contains("요약에 나타나면"))
+    delegate.updates = UpdateChecker(defaults: defaults, installedVersion: "9.0.0")
+    delegate.refreshUpdates()
+    precondition(delegate.updateTabBadge.isHidden && delegate.updateButton.isHidden && updateEntry.isHidden)
+    defaults.set(false, forKey: "active")
+    for mode in 0..<3 {
+        // Exercise real radio actions with activation off so no live tap is installed.
+        delegate.specialButtons[mode].performClick(nil)
+        precondition(delegate.specialMode.rawValue == mode)
+        precondition(delegate.specialButtons.filter { $0.state == .on }.count == 1)
+        precondition(delegate.specialButtons[mode].state == .on)
+    }
+    delegate.selectTab(0)
     func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
     let ui = descendants(settings.window.contentView!)
     let toggle = ui.compactMap { $0 as? NSSegmentedControl }.first { $0.segmentCount == 2 }!
