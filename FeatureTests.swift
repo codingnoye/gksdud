@@ -139,12 +139,15 @@ func runOptionInputTests() {
     front = 99; controller.cancel(focusChanged: true); drain()
     featureCheck(events.isEmpty && !controller.busy, "Never replay queued text into a different app")
     featureCheck(!warnings.isEmpty)
+    featureCheck(AppDelegate.sourceForID("io.gksdud.nonexistent-input-source") == nil, "Unavailable input sources must not crash")
     if let abc = AppDelegate.sourceForID("com.apple.keylayout.ABC"), let identity = AppDelegate.sourceIdentity(abc) {
         let owner = AppDelegate(engine: Engine(defaults: UserDefaults(suiteName: "io.gksdud.layout-read-test")!, discover: { [] }))
         let translate = owner.makeOptionInput().environment.deadState
         let pending = translate(identity, event(14, option), 0)!
         featureCheck(pending != 0)
         featureCheck(translate(identity, event(0), pending) == 0, "A composed accent must release the following Hangul stroke")
+    } else {
+        print("SKIP: native ABC accent check (ABC input source is unavailable); simulated dead-key checks passed")
     }
     print("PASS: Option/Option-Shift printable keys, shortcut exclusions, block mode, ordered round trip, dead keys, source failures, focus cancellation, synthetic bypass")
 }

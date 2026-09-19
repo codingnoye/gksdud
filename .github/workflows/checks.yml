@@ -59,7 +59,7 @@ jobs:
         run: |
           for binary in /private/tmp/gksdud-build.*/gksdud-"$(uname -m)"; do
             if [[ -f "$binary" ]]; then
-              lldb --batch -o run -o 'thread backtrace all' -- "$binary" --self-test
+              lldb --batch -o run --one-line-on-crash 'thread backtrace all' -- "$binary" --self-test
               break
             fi
           done

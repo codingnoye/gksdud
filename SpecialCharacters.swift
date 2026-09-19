@@ -206,7 +206,8 @@ extension AppDelegate {
             language: (Unmanaged<CFArray>.fromOpaque(languages).takeUnretainedValue() as? [String])?.first ?? "")
     }
     static func sourceForID(_ id: String) -> TISInputSource? {
-        let list = TISCreateInputSourceList([kTISPropertyInputSourceID as String: id] as CFDictionary, false).takeRetainedValue() as? [TISInputSource]
+        // macOS may return nil (not an empty array) when this source is unavailable.
+        let list = TISCreateInputSourceList([kTISPropertyInputSourceID as String: id] as CFDictionary, false)?.takeRetainedValue() as? [TISInputSource]
         return list?.first
     }
     func makeOptionInput() -> OptionInputController {

@@ -868,7 +868,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
     func availableSource(_ prefix: String) -> TISInputSource? {
         let filter = [kTISPropertyInputSourceIsEnabled as String: true, kTISPropertyInputSourceIsSelectCapable as String: true, kTISPropertyInputSourceCategory as String: kTISCategoryKeyboardInputSource as String] as CFDictionary
-        let list = TISCreateInputSourceList(filter, false).takeRetainedValue() as? [TISInputSource] ?? []
+        let list = TISCreateInputSourceList(filter, false)?.takeRetainedValue() as? [TISInputSource] ?? []
         return list.first { language($0).hasPrefix(prefix) }
     }
     @objc func inputSourceChanged() {
