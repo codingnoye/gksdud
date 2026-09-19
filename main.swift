@@ -1048,6 +1048,7 @@ if CommandLine.arguments.dropFirst().first == "--install-update" {
 } else if CommandLine.arguments.contains("--probe-option-input") {
     do { try probeOptionInput() } catch { fputs("Input probe failed: \(error)\n", stderr); exit(1) }
 } else if CommandLine.arguments.contains("--self-test") {
+    setbuf(stdout, nil)
     do { try runSettingsReentrancyTests() } catch { fputs("Settings reentrancy tests failed: \(error)\n", stderr); exit(1) }
     do { try runShortcutRestoreTests() } catch { fputs("Shortcut tests failed: \(error)\n", stderr); exit(1) }
     runFeatureTests()
