@@ -12,7 +12,7 @@ struct InputSourceIdentity: Equatable {
 
 struct OptionKeyPolicy {
     static let printable: Set<Int64> = Set(0...50).subtracting([36, 48])
-        .union([65, 67, 69, 75, 78, 81, 82, 83, 84, 85, 86, 87, 88, 89, 91, 92, 93, 94, 95, 102])
+        .union([65, 67, 69, 75, 78, 81, 82, 83, 84, 85, 86, 87, 88, 89, 91, 92, 93, 94, 95])
     static func matches(code: Int64, flags: CGEventFlags) -> Bool {
         printable.contains(code) && flags.contains(.maskAlternate)
             && flags.intersection([.maskCommand, .maskControl, .maskSecondaryFn]).isEmpty

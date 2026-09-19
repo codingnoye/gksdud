@@ -83,7 +83,7 @@ func runOptionInputTests() {
             precondition(OptionKeyPolicy.matches(code: key, flags: flags))
         }
     }
-    for key: Int64 in [36, 48, 51, 53, 57, 80, 123, 124, 125, 126] { precondition(!OptionKeyPolicy.matches(code: key, flags: both)) }
+    for key: Int64 in [36, 48, 51, 53, 57, 80, 102, 104, 123, 124, 125, 126] { precondition(!OptionKeyPolicy.matches(code: key, flags: both)) }
     for extra: CGEventFlags in [.maskCommand, .maskControl, .maskSecondaryFn] { precondition(!OptionKeyPolicy.matches(code: 25, flags: both.union(extra))) }
     precondition(!controller.handle(event(25, both), mode: .none, active: true))
     precondition(!controller.handle(event(25, both), mode: .english, active: false))
