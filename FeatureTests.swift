@@ -33,7 +33,7 @@ func runFeatureTests() {
     defer { defaults.removePersistentDomain(forName: suite) }
     var now = Date(timeIntervalSince1970: 100_000), requests = 0
     var completion: ((Data?, URLResponse?, Error?) -> Void)?
-    let checker = UpdateChecker(defaults: defaults, installedVersion: "1.2.0", channel: .stable, now: { now }, fetch: { request, done in
+    let checker = UpdateChecker(defaults: defaults, installedVersion: "1.2.0", now: { now }, fetch: { request, done in
         requests += 1; completion = done
         featureCheck(request.url?.host == "api.github.com" && request.timeoutInterval == 20)
     })
@@ -46,9 +46,9 @@ func runFeatureTests() {
     checker.check(); featureCheck(requests == 1)
     now += 86401; checker.check(); featureCheck(requests == 2)
     respond(503, nil); featureCheck(checker.available != nil && checker.error != nil, "Offline checks preserve cached notification")
-    let relaunched = UpdateChecker(defaults: defaults, installedVersion: "1.2.0", channel: .stable)
+    let relaunched = UpdateChecker(defaults: defaults, installedVersion: "1.2.0")
     featureCheck(relaunched.available != nil)
-    let upgraded = UpdateChecker(defaults: defaults, installedVersion: "1.3.0", channel: .stable)
+    let upgraded = UpdateChecker(defaults: defaults, installedVersion: "1.3.0")
     featureCheck(upgraded.available == nil)
     checker.check(force: true); respond(200, Data("{}".utf8)); featureCheck(checker.error != nil && checker.available != nil)
     checker.check(force: true); respond(200, try! JSONEncoder().encode(release(nil, tag: "v1.2.0")))
@@ -340,37 +340,19 @@ func runPrereleaseTests() {
     let suite = "io.gksdud.channel-tests.\(UUID().uuidString)"
     let defaults = UserDefaults(suiteName: suite)!
     defer { defaults.removePersistentDomain(forName: suite) }
-    func release(_ version: String, pre: Bool = true, draft: Bool = false) -> AppRelease {
-        let tag = "\(pre ? "pre-v" : "v")\(version)"
-        return AppRelease(tag_name: tag, html_url: "https://github.com/codingnoye/gksdud/releases/tag/\(tag)", body: nil, draft: draft, prerelease: pre)
-    }
-    let preview = release("1.3.0")
-    featureCheck(preview.versionString == "1.3.0" && preview.archiveName == "gksdud-1.3.0-pre-macos-universal.zip")
-    featureCheck(!preview.isNewer(than: "1.2.0") && preview.isNewer(than: "1.2.0", channel: .prerelease))
-    featureCheck(!preview.isNewer(than: "1.3.0", channel: .prerelease))
-    featureCheck(!release("9.0.0", draft: true).isNewer(than: "1.2.0", channel: .prerelease))
+    let tag = "pre-v1.3.0"
+    let preview = AppRelease(tag_name: tag, html_url: "https://github.com/codingnoye/gksdud/releases/tag/\(tag)", body: nil, draft: false, prerelease: true)
+    featureCheck(!preview.isNewer(than: "1.2.0"))
     var completion: ((Data?, URLResponse?, Error?) -> Void)?
-    let checker = UpdateChecker(defaults: defaults, installedVersion: "1.2.0", channel: .prerelease, fetch: { request, done in
-        featureCheck(request.url?.path == "/repos/codingnoye/gksdud/releases" && request.url?.query == "per_page=100")
+    let checker = UpdateChecker(defaults: defaults, installedVersion: "1.2.0", fetch: { request, done in
+        featureCheck(request.url?.path == "/repos/codingnoye/gksdud/releases/latest" && request.url?.query == nil)
         completion = done
     })
-    func respond(_ releases: [AppRelease]) {
-        completion?(try! JSONEncoder().encode(releases), HTTPURLResponse(url: URL(string: "https://api.github.com")!, statusCode: 200, httpVersion: nil, headerFields: nil), nil)
-        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.01))
-    }
     checker.check()
-    respond([release("1.2.0", pre: false), preview, release("9.0.0", draft: true)])
-    featureCheck(checker.available?.tag_name == "pre-v1.3.0")
-    featureCheck(UpdateChecker(defaults: defaults, installedVersion: "1.2.0", channel: .stable).available == nil)
-    featureCheck(UpdateChecker(defaults: defaults, installedVersion: "1.2.0", channel: .prerelease).available != nil)
-    checker.check(force: true); respond([preview, release("1.3.0", pre: false)])
-    featureCheck(checker.available?.tag_name == "v1.3.0", "Prefer stable for equal versions")
-    let stable = UpdateChecker(defaults: defaults, installedVersion: "1.2.0", channel: .stable, fetch: { _, done in completion = done })
-    stable.check()
     completion?(try! JSONEncoder().encode(preview), HTTPURLResponse(url: URL(string: "https://api.github.com")!, statusCode: 200, httpVersion: nil, headerFields: nil), nil)
     RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.01))
-    featureCheck(stable.available == nil && stable.error != nil, "Stable channel rejects prerelease even in an object response")
-    print("PASS: prerelease selection, numeric ordering, stable isolation, separate cache, same-version rejection and archive naming")
+    featureCheck(checker.available == nil && checker.error != nil, "Prerelease responses are rejected")
+    print("PASS: stable-only endpoint and prerelease rejection")
 }
 
 func runOptionRepeatTests() {

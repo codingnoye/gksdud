@@ -37,9 +37,6 @@ if [[ -n "${GKSDUD_APP_VERSION:-}" ]]; then
   [[ "$GKSDUD_APP_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
   /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $GKSDUD_APP_VERSION" "$stage/gksdud.app/Contents/Info.plist"
 fi
-channel=${GKSDUD_UPDATE_CHANNEL:-stable}
-[[ "$channel" == stable || "$channel" == prerelease ]] || exit 1
-/usr/libexec/PlistBuddy -c "Add :GKSDUDUpdateChannel string $channel" "$stage/gksdud.app/Contents/Info.plist"
 if [[ -n "${GKSDUD_BUILD_NUMBER:-}" ]]; then
   [[ "$GKSDUD_BUILD_NUMBER" =~ ^[0-9]+$ ]] || exit 1
   /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $GKSDUD_BUILD_NUMBER" "$stage/gksdud.app/Contents/Info.plist"

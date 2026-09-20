@@ -956,7 +956,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     @objc func toggleLogin() {
         do {
             if login.state == .on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
-            refreshStatus()
+            stickyError = ""; refreshStatus()
         } catch { login.state = SMAppService.mainApp.status == .enabled ? .on : .off; report(error) }
     }
     func resetSelection() {
@@ -994,20 +994,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             alert.addButton(withTitle: "변경"); alert.addButton(withTitle: "취소")
             guard alert.runModal() == .alertFirstButtonReturn else { resetSelection(); return }
         }
-        do { _ = try engine.apply(source: source, target: target); lastError = ""; stickyError = ""; ensureKeyTap(); refreshStatus() } catch { report(error); resetSelection() }
+        do { _ = try engine.apply(source: source, target: target); lastError = ""; stickyError = ""; repairFailed = false; ensureKeyTap(); refreshStatus() } catch { report(error); resetSelection() }
     }
     func restoreNow() {
         optionInput.cancel()
         guard !engine.isUpdatingSettings else { return }
         cancelLongPress()
-        do { try engine.restore(); lastError = ""; stickyError = ""; refreshStatus() } catch { report(error) }
+        do { try engine.restore(); lastError = ""; stickyError = ""; repairFailed = false; refreshStatus() } catch { report(error) }
         resetSelection(); syncCapsPreservation(); updatePressAccess(); refreshKeyboardState()
     }
     func recover() { optionInput.cancel(); cancelCapsRestore(); englishCaps.switching = false; cancelLongPress(); longPress = LongPressState(); pressGate.held.removeAll(); for delay in [0.5, 2.0, 5.0] { DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.repair() } } }
     func repair() {
         guard !engine.isUpdatingSettings else { return }
         ensureKeyTap()
-        do { try engine.repair(); stickyError = "" } catch { report(error) }
+        do { try engine.repair(); if repairFailed { repairFailed = false; stickyError = "" } } catch { report(error); repairFailed = !(error is KeyboardError) }
         if engine.keyboards.result.pending == 0 { lastError = "" }
         refreshStatus(); refreshKeyboardState()
     }
@@ -1021,6 +1021,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
     var lastError = ""
     var stickyError = ""
+    var repairFailed = false
     func report(_ error: Error) {
         if error is KeyboardError { refreshKeyboardState(); return }
         stickyError = error.localizedDescription; refreshStatus()

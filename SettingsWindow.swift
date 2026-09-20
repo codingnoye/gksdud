@@ -164,7 +164,6 @@ extension AppDelegate {
         updateSummary.autoresizingMask = [.width]; updateSummary.textContainer?.widthTracksTextView = true
         updateScroll.documentView = updateSummary; full(updateScroll, in: about)
         updateButton.target = self; updateButton.action = #selector(performUpdate); updateButton.bezelStyle = .rounded
-        updateButton.keyEquivalent = "\r"
         checkUpdateButton.target = self; checkUpdateButton.action = #selector(checkForUpdates); checkUpdateButton.bezelStyle = .rounded
         let actions = NSStackView(views: [updateButton, checkUpdateButton]); actions.spacing = 10; about.addArrangedSubview(actions)
         updateStatus.font = .systemFont(ofSize: 11); updateStatus.textColor = .secondaryLabelColor; updateStatus.alignment = .center
@@ -227,10 +226,7 @@ extension AppDelegate {
         let release = updates.available
         updateTabBadge.isHidden = release == nil
         tabButtons.last?.setAccessibilityLabel(release == nil ? "gksdud 탭" : "gksdud 탭, 업데이트 가능")
-        for entry in item?.menu?.items ?? [] where entry.action == #selector(showAbout) {
-            entry.isHidden = release == nil
-            entry.title = release.map { "업데이트 가능 · \($0.tag_name)" } ?? "업데이트 가능"
-        }
+        for entry in item?.menu?.items ?? [] where entry.action == #selector(showAbout) { entry.isHidden = release == nil }
         let latest = release.map { " → v\($0.versionString)" } ?? ""
         updateHeading.stringValue = "v\(updates.installedVersion)\(latest)"
         updateSummary.string = release?.summary ?? ""
