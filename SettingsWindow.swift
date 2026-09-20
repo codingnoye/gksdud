@@ -47,9 +47,6 @@ extension AppDelegate {
             button.setAccessibilityLabel(title + " 탭")
             tabs.addArrangedSubview(button); tabButtons.append(button)
         }
-        updateTabBadge.image = NSImage(systemSymbolName: "arrow.up.circle.fill", accessibilityDescription: "업데이트 가능")
-        updateTabBadge.contentTintColor = .controlAccentColor; updateTabBadge.translatesAutoresizingMaskIntoConstraints = false
-        tabButtons[3].addSubview(updateTabBadge)
         let tabLine = NSBox(); tabLine.boxType = .separator
         tabLine.translatesAutoresizingMaskIntoConstraints = false; content.addSubview(tabLine)
         status.font = .systemFont(ofSize: 11); status.textColor = .secondaryLabelColor
@@ -68,10 +65,7 @@ extension AppDelegate {
             tabs.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 24),
             tabs.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -24),
             tabs.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -5),
-            tabs.heightAnchor.constraint(equalToConstant: 42),
-            updateTabBadge.trailingAnchor.constraint(equalTo: tabButtons[3].trailingAnchor, constant: -13),
-            updateTabBadge.topAnchor.constraint(equalTo: tabButtons[3].topAnchor, constant: 1),
-            updateTabBadge.widthAnchor.constraint(equalToConstant: 13), updateTabBadge.heightAnchor.constraint(equalToConstant: 13)
+            tabs.heightAnchor.constraint(equalToConstant: 42)
         ])
         func hint(_ text: String, in panel: NSStackView, indent: CGFloat = 20) {
             let label = NSTextField(wrappingLabelWithString: text)
@@ -189,13 +183,29 @@ extension AppDelegate {
         }
         image.isTemplate = true; return image
     }
+    // Up arrow in a circle, centered in the canvas so it lines up with the other menu icons.
+    func updateGlyph(_ canvas: NSSize, color: NSColor? = nil) -> NSImage {
+        let image = NSImage(size: canvas, flipped: false) { rect in
+            let side = min(rect.width, rect.height, 15), line = max(side / 13, 0.9)
+            let box = NSRect(x: rect.midX - side / 2, y: rect.midY - side / 2, width: side, height: side)
+            (color ?? .black).set()
+            let circle = NSBezierPath(ovalIn: box.insetBy(dx: line / 2 + 0.25, dy: line / 2 + 0.25)); circle.lineWidth = line; circle.stroke()
+            let arrow = NSBezierPath(); arrow.lineWidth = line * 1.25; arrow.lineCapStyle = .round; arrow.lineJoinStyle = .round
+            let tip = box.minY + side * 0.74, wing = side * 0.2
+            arrow.move(to: NSPoint(x: box.midX, y: box.minY + side * 0.27)); arrow.line(to: NSPoint(x: box.midX, y: tip))
+            arrow.move(to: NSPoint(x: box.midX - wing, y: tip - wing)); arrow.line(to: NSPoint(x: box.midX, y: tip))
+            arrow.line(to: NSPoint(x: box.midX + wing, y: tip - wing)); arrow.stroke()
+            return true
+        }
+        image.isTemplate = color == nil; return image
+    }
     @objc func changeTab(_ sender: NSButton) { selectTab(sender.tag) }
     func selectTab(_ index: Int) {
         guard tabPanels.indices.contains(index) else { return }
         selectedTab = index
         for (i, panel) in tabPanels.enumerated() {
             panel.isHidden = i != index; tabButtons[i].state = i == index ? .on : .off
-            tabButtons[i].contentTintColor = i == index ? .controlAccentColor : .secondaryLabelColor
+            tabButtons[i].contentTintColor = i == index || (i == 3 && updates.available != nil) ? .controlAccentColor : .secondaryLabelColor
         }
     }
     @objc func showAbout() { showSettings(); selectTab(3) }
@@ -224,7 +234,8 @@ extension AppDelegate {
     @objc func openProject() { NSWorkspace.shared.open(URL(string: "https://github.com/codingnoye/gksdud")!) }
     func refreshUpdates() {
         let release = updates.available
-        updateTabBadge.isHidden = release == nil
+        tabButtons.last?.image = release == nil ? tabGlyph("?") : updateGlyph(NSSize(width: 24, height: 20), color: .controlAccentColor)
+        selectTab(selectedTab)
         tabButtons.last?.setAccessibilityLabel(release == nil ? "gksdud 탭" : "gksdud 탭, 업데이트 가능")
         for entry in item?.menu?.items ?? [] where entry.action == #selector(showAbout) { entry.isHidden = release == nil }
         let latest = release.map { " → v\($0.versionString)" } ?? ""

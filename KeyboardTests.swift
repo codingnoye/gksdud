@@ -365,7 +365,8 @@ func renderKeyboardUI(to directory: String) throws {
         try save(delegate.window.contentView!, "settings-\(name).png")
         try save(settings.window.contentView!, "keyboards-\(name).png")
     }
-    precondition(!delegate.updateTabBadge.isHidden)
+    precondition(delegate.tabButtons[3].contentTintColor == .controlAccentColor && delegate.tabButtons[0].contentTintColor == .controlAccentColor)
+    precondition(delegate.tabButtons[1].contentTintColor == .secondaryLabelColor)
     let updateEntry = delegate.item!.menu!.items[1]
     precondition(updateEntry.action == #selector(AppDelegate.showAbout) && !updateEntry.isHidden)
     delegate.showAbout()
@@ -373,7 +374,7 @@ func renderKeyboardUI(to directory: String) throws {
     precondition(!delegate.updateSummary.string.contains("요약에 나타나면"))
     delegate.updates = UpdateChecker(defaults: defaults, installedVersion: "9.0.0")
     delegate.refreshUpdates()
-    precondition(delegate.updateTabBadge.isHidden && delegate.updateButton.isHidden && updateEntry.isHidden)
+    precondition(delegate.tabButtons[3].accessibilityLabel() == "gksdud 탭" && delegate.updateButton.isHidden && updateEntry.isHidden)
     defaults.set(false, forKey: "active")
     for mode in [1, 2, 1] {
         // Exercise real checkbox actions with activation off so no live tap is installed.

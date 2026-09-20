@@ -362,7 +362,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     var tabButtons: [NSButton] = []
     var tabPanels: [NSStackView] = []
     var selectedTab = 0
-    let updateTabBadge = NSImageView()
     let updateHeading = NSTextField(wrappingLabelWithString: "")
     let updateSummary = NSTextView()
     let updateScroll = NSScrollView()
@@ -806,7 +805,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         menu.addItem(brandEntry)
         let updateEntry = NSMenuItem(title: "업데이트 가능", action: #selector(showAbout), keyEquivalent: "")
         updateEntry.target = self
-        updateEntry.image = NSImage(systemSymbolName: "arrow.up.circle.fill", accessibilityDescription: nil)
+        updateEntry.image = updateGlyph(NSSize(width: 22, height: 20))
         updateEntry.isHidden = updates.available == nil
         menu.addItem(updateEntry)
         menu.addItem(NSMenuItem.separator())
