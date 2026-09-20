@@ -10,3 +10,4 @@ outputs/
 .env*
 signing/local-certificate.pem
 *.app/
+AGENTS.md

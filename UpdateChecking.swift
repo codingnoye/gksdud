@@ -1,5 +1,14 @@
 import Foundation
 
+enum UpdateChannel: String {
+    case stable, prerelease
+    static var bundled: Self {
+        Self(rawValue: Bundle.main.object(forInfoDictionaryKey: "GKSDUDUpdateChannel") as? String ?? "") ?? .stable
+    }
+    var cachePrefix: String { self == .stable ? "updates." : "updates.prerelease." }
+    var endpoint: String { self == .stable ? "releases/latest" : "releases?per_page=100" }
+}
+
 struct ReleaseVersion: Comparable {
     let parts: [Int]
     init?(_ text: String) {
@@ -26,9 +35,18 @@ struct AppRelease: Codable {
               url.path.hasPrefix("/codingnoye/gksdud/releases/tag/") else { return nil }
         return url
     }
-    func isNewer(than installed: String) -> Bool {
-        guard !draft, !prerelease, pageURL != nil,
-              let candidate = ReleaseVersion(tag_name), let current = ReleaseVersion(installed) else { return false }
+    var versionString: String {
+        for prefix in ["pre-v.", "pre-v", "v"] where tag_name.hasPrefix(prefix) { return String(tag_name.dropFirst(prefix.count)) }
+        return tag_name
+    }
+    var archiveName: String { "gksdud-\(versionString)\(prerelease ? "-pre" : "")-macos-universal.zip" }
+    func eligible(for channel: UpdateChannel) -> Bool {
+        !draft && pageURL != nil && ReleaseVersion(versionString) != nil
+            && (prerelease ? channel == .prerelease && tag_name.hasPrefix("pre-v") : !tag_name.hasPrefix("pre-v"))
+    }
+    func isNewer(than installed: String, channel: UpdateChannel = .stable) -> Bool {
+        guard eligible(for: channel),
+              let candidate = ReleaseVersion(versionString), let current = ReleaseVersion(installed) else { return false }
         return candidate > current
     }
     var summary: String {
@@ -60,30 +78,32 @@ final class UpdateChecker {
     typealias Fetch = (URLRequest, @escaping (Data?, URLResponse?, Error?) -> Void) -> Void
     let defaults: UserDefaults
     let installedVersion: String
+    let channel: UpdateChannel
     let fetch: Fetch
     var now: () -> Date
     var onChange: (() -> Void)?
     private(set) var release: AppRelease?
     private(set) var checking = false
     private(set) var error: String?
-    var available: AppRelease? { release.flatMap { $0.isNewer(than: installedVersion) ? $0 : nil } }
-    var lastChecked: Date? { defaults.object(forKey: "updates.lastSuccess") as? Date }
+    var available: AppRelease? { release.flatMap { $0.isNewer(than: installedVersion, channel: channel) ? $0 : nil } }
+    var lastChecked: Date? { defaults.object(forKey: channel.cachePrefix + "lastSuccess") as? Date }
 
     init(defaults: UserDefaults, installedVersion: String = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0",
+         channel: UpdateChannel = .bundled,
          now: @escaping () -> Date = Date.init,
          fetch: @escaping Fetch = { request, completion in URLSession.shared.dataTask(with: request, completionHandler: completion).resume() }) {
-        self.defaults = defaults; self.installedVersion = installedVersion; self.now = now; self.fetch = fetch
-        if let data = defaults.data(forKey: "updates.release") { release = try? JSONDecoder().decode(AppRelease.self, from: data) }
+        self.defaults = defaults; self.installedVersion = installedVersion; self.channel = channel; self.now = now; self.fetch = fetch
+        if let data = defaults.data(forKey: channel.cachePrefix + "release") { release = try? JSONDecoder().decode(AppRelease.self, from: data) }
     }
     func check(force: Bool = false) {
         guard !checking else { return }
         let date = now()
-        if !force, let next = defaults.object(forKey: "updates.nextCheck") as? Date,
+        if !force, let next = defaults.object(forKey: channel.cachePrefix + "nextCheck") as? Date,
            next > date, next.timeIntervalSince(date) <= 86400 { return }
         checking = true; error = nil
-        defaults.set(date.addingTimeInterval(3600), forKey: "updates.nextCheck")
+        defaults.set(date.addingTimeInterval(3600), forKey: channel.cachePrefix + "nextCheck")
         onChange?()
-        var request = URLRequest(url: URL(string: "https://api.github.com/repos/codingnoye/gksdud/releases/latest")!)
+        var request = URLRequest(url: URL(string: "https://api.github.com/repos/codingnoye/gksdud/\(channel.endpoint)")!)
         request.timeoutInterval = 20
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
@@ -95,17 +115,31 @@ final class UpdateChecker {
                 self.checking = false
                 if failure == nil, let http = response as? HTTPURLResponse, http.statusCode == 200,
                    let data, data.count <= 1_000_000,
-                   let value = try? JSONDecoder().decode(AppRelease.self, from: data),
-                   !value.draft, !value.prerelease, value.pageURL != nil, ReleaseVersion(value.tag_name) != nil {
+                   let value = self.decodeRelease(data) {
                     self.release = value
-                    self.defaults.set(data, forKey: "updates.release")
-                    self.defaults.set(self.now(), forKey: "updates.lastSuccess")
-                    self.defaults.set(self.now().addingTimeInterval(86400), forKey: "updates.nextCheck")
+                    self.defaults.set(try? JSONEncoder().encode(value), forKey: self.channel.cachePrefix + "release")
+                    self.defaults.set(self.now(), forKey: self.channel.cachePrefix + "lastSuccess")
+                    self.defaults.set(self.now().addingTimeInterval(86400), forKey: self.channel.cachePrefix + "nextCheck")
                 } else {
                     self.error = "업데이트를 확인하지 못했습니다. 잠시 후 다시 시도해주세요."
                 }
                 self.onChange?()
             }
+        }
+    }
+    private func decodeRelease(_ data: Data) -> AppRelease? {
+        let decoder = JSONDecoder()
+        let values: [AppRelease]
+        if channel == .stable {
+            guard let value = try? decoder.decode(AppRelease.self, from: data) else { return nil }
+            values = [value]
+        } else {
+            guard let list = try? decoder.decode([AppRelease].self, from: data) else { return nil }
+            values = list
+        }
+        return values.filter { $0.eligible(for: channel) }.max {
+            let lhs = ReleaseVersion($0.versionString)!, rhs = ReleaseVersion($1.versionString)!
+            return lhs == rhs ? $0.prerelease && !$1.prerelease : lhs < rhs
         }
     }
 }

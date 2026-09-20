@@ -48,7 +48,7 @@ jobs:
           if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
             git fetch --depth=1 origin "refs/tags/$tag:refs/tags/$tag"
             # Never relabel changed application code as an existing version.
-            git diff --exit-code "$tag" HEAD -- '*.swift' Bridge.h Info.plist build.sh LICENSE
+            git diff --exit-code "$tag" HEAD -- '*.swift' Bridge.h Info.plist build.sh LICENSE Resources
           fi
           test -s LICENSE
 

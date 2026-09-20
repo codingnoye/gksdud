@@ -32,6 +32,14 @@ done
 lipo -create "$stage/gksdud-arm64" "$stage/gksdud-x86_64" -output "$stage/gksdud.app/Contents/MacOS/gksdud"
 cp Info.plist "$stage/gksdud.app/Contents/Info.plist"
 cp LICENSE "$stage/gksdud.app/Contents/Resources/LICENSE"
+cp Resources/github.svg Resources/OCTICONS-LICENSE "$stage/gksdud.app/Contents/Resources/"
+if [[ -n "${GKSDUD_APP_VERSION:-}" ]]; then
+  [[ "$GKSDUD_APP_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
+  /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $GKSDUD_APP_VERSION" "$stage/gksdud.app/Contents/Info.plist"
+fi
+channel=${GKSDUD_UPDATE_CHANNEL:-stable}
+[[ "$channel" == stable || "$channel" == prerelease ]] || exit 1
+/usr/libexec/PlistBuddy -c "Add :GKSDUDUpdateChannel string $channel" "$stage/gksdud.app/Contents/Info.plist"
 if [[ -n "${GKSDUD_BUILD_NUMBER:-}" ]]; then
   [[ "$GKSDUD_BUILD_NUMBER" =~ ^[0-9]+$ ]] || exit 1
   /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $GKSDUD_BUILD_NUMBER" "$stage/gksdud.app/Contents/Info.plist"
@@ -39,7 +47,7 @@ fi
 codesign --force "${sign_args[@]}" --options runtime "$stage/gksdud.app"
 codesign --verify --deep --strict "$stage/gksdud.app"
 "$stage/gksdud.app/Contents/MacOS/gksdud" --self-test
-version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Info.plist)
+version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$stage/gksdud.app/Contents/Info.plist")
 ditto -c -k --keepParent --norsrc "$stage/gksdud.app" "$output_dir/gksdud-$version-macos-universal.zip"
 codesign -d -r- "$stage/gksdud.app"
 echo "Built app: $stage/gksdud.app"

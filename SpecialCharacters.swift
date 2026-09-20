@@ -48,6 +48,7 @@ final class OptionInputController {
     private var generation = 0
     private var deadline: TimeInterval = 0
     private var posted = false
+    private var deliverUntil: TimeInterval = 0
     private var pendingDead: [CGEvent] = []
     private var pendingState: UInt32 = 0
     private var pendingSource: InputSourceIdentity?
@@ -68,16 +69,27 @@ final class OptionInputController {
         if busy {
             guard owner == environment.frontmost() else { cancel(focusChanged: true); return false }
             if queued.count >= 256 { cancel(); report("특수문자 입력이 지연되어 중단했습니다."); return false }
+            // Consecutive Option strokes share this English round trip instead of paying for one each.
+            // Waiting text keeps its order; a dead key still gets its own transaction.
+            if active, mode == .english, event.type == .keyDown, phase != .restoring, let destination,
+               OptionKeyPolicy.matches(code: code, flags: event.flags), !queued.contains(where: { $0.type != .flagsChanged }),
+               (environment.deadState(destination, event, 0) ?? 0) == 0, let copy = event.copy() {
+                claimRelease(for: event)
+                if phase == .selecting { strokes.append(copy) } else { postPair(copy); deliverUntil = environment.clock() + 0.06 }
+                return true
+            }
             guard let copy = event.copy() else { cancel(); return false }
             queued.append(copy)
             return true
         }
         guard active, mode != .none else { clearDead(); return false }
-        guard event.type == .keyDown else { return false }
         let option = OptionKeyPolicy.matches(code: code, flags: event.flags)
+        if mode == .block, event.type == .keyUp, option { event.flags.remove(.maskAlternate) }
+        guard event.type == .keyDown else { return false }
         if mode == .block {
+            // Deliver the stroke as the plain character, in every input language.
             clearDead()
-            if option { held.insert(code); return true }
+            if option { event.flags.remove(.maskAlternate) }
             return false
         }
         guard let current = environment.current(), current.language.hasPrefix("ko") else { clearDead(); return false }
@@ -97,12 +109,11 @@ final class OptionInputController {
         if nextState != 0, pendingDead.count < 4 {
             pendingDead.append(copy); pendingState = nextState; pendingSource = english
             pendingOwner = front; pendingOriginal = current; pendingSince = environment.clock()
-            held.insert(code)
-            report("악센트와 조합할 문자를 입력하세요. Esc로 취소할 수 있습니다.")
+            claimRelease(for: event)
             return true
         }
         strokes = pendingDead + [copy]; clearDead()
-        held.insert(code)
+        claimRelease(for: event)
         original = current; destination = english; owner = front
         willBegin()
         posted = false; phase = .selecting; generation += 1
@@ -116,6 +127,13 @@ final class OptionInputController {
         }
         return true
     }
+    private func claimRelease(for event: CGEvent) {
+        // Replayed repeats may arrive after the physical release was consumed.
+        // Only a new physical stroke can acquire ownership of its key-up.
+        if event.getIntegerValueField(.keyboardEventAutorepeat) == 0 {
+            held.insert(event.getIntegerValueField(.keyboardEventKeycode))
+        }
+    }
     private func clearDead() {
         pendingDead.removeAll(); pendingState = 0; pendingSource = nil; pendingOwner = nil; pendingOriginal = nil
     }
@@ -127,10 +145,8 @@ final class OptionInputController {
             for event in strokes { postPair(event) }
             // CGEvent posting has no cross-application text-insertion acknowledgement.
             // This bounded grace period is intentionally experimental, not a guarantee.
-            environment.later(0.06) { [weak self] in
-                guard let self, self.generation == token else { return }
-                self.restore(token)
-            }
+            deliverUntil = environment.clock() + 0.06
+            settle(token)
             return
         }
         if phase == .restoring, environment.current() == original { finish(replayOriginal: false); return }
@@ -139,6 +155,12 @@ final class OptionInputController {
             return
         }
         environment.later(0.005) { [weak self] in self?.advance(token) }
+    }
+    private func settle(_ token: Int) {
+        guard generation == token else { return }
+        let wait = deliverUntil - environment.clock()
+        if wait > 0.001 { environment.later(wait) { [weak self] in self?.settle(token) }; return }
+        restore(token)
     }
     private func restore(_ token: Int) {
         guard owner == environment.frontmost() else { cancel(focusChanged: true); return }
@@ -191,13 +213,12 @@ extension AppDelegate {
     var specialMode: SpecialCharacterMode { SpecialCharacterMode(rawValue: engine.defaults.integer(forKey: "specialCharacterMode")) ?? .none }
     @objc func changeSpecialMode(_ sender: NSButton) {
         optionInput.cancel()
-        engine.defaults.set(sender.tag, forKey: "specialCharacterMode")
+        engine.defaults.set(sender.state == .on ? sender.tag : 0, forKey: "specialCharacterMode")
         refreshSpecialMode(); ensureKeyTap()
     }
     func refreshSpecialMode() {
         for button in specialButtons { button.state = button.tag == specialMode.rawValue ? .on : .off }
-        specialStatus.stringValue = specialMode == .block ? "한글·영어 모두 Option 문자 입력을 차단합니다." :
-            specialMode == .english ? "앱에 따라 동작이 다를 수 있습니다. 위 입력창에서 먼저 테스트해보세요." : "기본 macOS 입력 방식을 사용합니다."
+        specialStatus.stringValue = ""
     }
     static func sourceIdentity(_ source: TISInputSource) -> InputSourceIdentity? {
         guard let id = TISGetInputSourceProperty(source, kTISPropertyInputSourceID),

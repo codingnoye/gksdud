@@ -21,7 +21,6 @@ struct PreparedUpdate {
 }
 
 extension AppRelease {
-    var versionString: String { tag_name.hasPrefix("v") ? String(tag_name.dropFirst()) : tag_name }
     func assetURL(named name: String, limit: Int64) throws -> URL {
         guard let matches = assets?.filter({ $0.name == name }), matches.count == 1,
               let asset = matches.first, asset.size > 0, asset.size <= limit,
@@ -32,6 +31,46 @@ extension AppRelease {
         }
         return url
     }
+}
+
+struct UpdateProcessStillRunning: LocalizedError {
+    let message: String
+    var errorDescription: String? { message }
+}
+
+// Own the child PID from creation: there is no uncancellable LaunchServices
+// request that could start a second app after rollback.
+enum UpdateProcessLauncher {
+    @discardableResult static func launch(executable: URL, arguments: [String] = [], environment: [String: String]? = nil,
+                                         timeout: TimeInterval = 20, settle: TimeInterval = 2,
+                                         ready: (Process) -> Bool) throws -> Process {
+        let process = Process()
+        process.executableURL = executable; process.arguments = arguments; process.environment = environment
+        process.standardOutput = FileHandle.nullDevice; process.standardError = FileHandle.nullDevice
+        try process.run()
+        let deadline = ProcessInfo.processInfo.systemUptime + timeout
+        while process.isRunning, !ready(process), ProcessInfo.processInfo.systemUptime < deadline { pump() }
+        if process.isRunning, ready(process) {
+            let until = ProcessInfo.processInfo.systemUptime + settle
+            while process.isRunning, ProcessInfo.processInfo.systemUptime < until { pump() }
+            if process.isRunning { return process }
+        }
+        try stop(process)
+        throw UpdateFailure("새 앱이 준비되지 않아 업데이트를 취소했습니다.")
+    }
+    static func stop(_ process: Process) throws {
+        if process.isRunning { process.terminate() }
+        var deadline = ProcessInfo.processInfo.systemUptime + 0.5
+        while process.isRunning, ProcessInfo.processInfo.systemUptime < deadline { pump() }
+        if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+        deadline = ProcessInfo.processInfo.systemUptime + 2
+        while process.isRunning, ProcessInfo.processInfo.systemUptime < deadline { pump() }
+        guard !process.isRunning else {
+            throw UpdateProcessStillRunning(message: "새 앱을 종료하지 못했습니다. gksdud를 종료한 뒤 다시 시도해주세요.")
+        }
+        process.waitUntilExit()
+    }
+    private static func pump() { RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.01)) }
 }
 
 // The installer has no signing secrets and never modifies signature requirements.
@@ -145,6 +184,9 @@ enum AppReplacement {
             try move(stage, installed)
             try launch(installed)
         } catch {
+            if error is UpdateProcessStillRunning {
+                throw UpdateProcessStillRunning(message: "새 앱을 종료하지 못해 복원을 중단했습니다. 기존 앱은 \(backup.path)에 보관되어 있습니다.")
+            }
             do {
                 if fm.fileExists(atPath: installed.path) { try fm.moveItem(at: installed, to: failed) }
                 try fm.moveItem(at: backup, to: installed)
@@ -182,7 +224,7 @@ final class UpdateInstaller: @unchecked Sendable {
         Task.detached(priority: .utility) { [weak self] in
             var workspace: URL?
             do {
-                let name = "gksdud-\(release.versionString)-macos-universal.zip"
+                let name = release.archiveName
                 let archiveURL = try release.assetURL(named: name, limit: 100_000_000)
                 let checksumURL = try release.assetURL(named: "SHA256SUMS", limit: 100_000)
                 let directory = FileManager.default.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent("gksdud-update-\(UUID().uuidString)", isDirectory: true)
@@ -250,7 +292,7 @@ final class UpdateInstaller: @unchecked Sendable {
                 try UpdateValidation.candidate(new, installed: old, version: arguments[4])
             }, launch: { try launchAndCheck($0) })
         } catch {
-            if kill(parent, 0) != 0,
+            if !(error is UpdateProcessStillRunning), kill(parent, 0) != 0,
                !NSRunningApplication.runningApplications(withBundleIdentifier: UpdateValidation.identifier).contains(where: { !$0.isTerminated && $0.processIdentifier != getpid() && $0.bundleURL?.resolvingSymlinksInPath() == installed }),
                FileManager.default.fileExists(atPath: installed.path) { try? launchAndCheck(installed) }
             // Show an actionable error after the main app has exited; never silently
@@ -261,15 +303,21 @@ final class UpdateInstaller: @unchecked Sendable {
         }
     }
     private static func launchAndCheck(_ url: URL) throws {
-        let configuration = NSWorkspace.OpenConfiguration(); configuration.activates = false; configuration.createsNewApplicationInstance = true
-        var completed = false, launched: NSRunningApplication?, failure: Error?
-        NSWorkspace.shared.openApplication(at: url, configuration: configuration) { app, error in
-            DispatchQueue.main.async { launched = app; failure = error; completed = true }
+        let fm = FileManager.default
+        let directory = fm.temporaryDirectory.appendingPathComponent("gksdud-launch-\(UUID().uuidString)")
+        try fm.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+        defer { try? fm.removeItem(at: directory) }
+        let receipt = directory.appendingPathComponent("ready")
+        var environment = ProcessInfo.processInfo.environment
+        environment["GKSDUD_UPDATE_READY"] = receipt.path
+        try UpdateProcessLauncher.launch(executable: url.appendingPathComponent("Contents/MacOS/gksdud"), environment: environment) {
+            (try? String(contentsOf: receipt, encoding: .utf8)) == String($0.processIdentifier)
         }
-        let deadline = Date(timeIntervalSinceNow: 20)
-        while !completed, Date() < deadline { RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05)) }
-        guard completed, failure == nil, let launched else { throw UpdateFailure("새 앱을 실행하지 못했습니다.") }
-        RunLoop.current.run(until: Date(timeIntervalSinceNow: 2))
-        guard !launched.isTerminated else { throw UpdateFailure("새 앱이 실행 직후 종료되었습니다.") }
+    }
+    static func acknowledgeLaunch() {
+        guard let path = ProcessInfo.processInfo.environment["GKSDUD_UPDATE_READY"] else { return }
+        let url = URL(fileURLWithPath: path)
+        guard url.lastPathComponent == "ready", url.deletingLastPathComponent().lastPathComponent.hasPrefix("gksdud-launch-") else { return }
+        try? String(getpid()).write(to: url, atomically: true, encoding: .utf8)
     }
 }

@@ -33,7 +33,7 @@ func runFeatureTests() {
     defer { defaults.removePersistentDomain(forName: suite) }
     var now = Date(timeIntervalSince1970: 100_000), requests = 0
     var completion: ((Data?, URLResponse?, Error?) -> Void)?
-    let checker = UpdateChecker(defaults: defaults, installedVersion: "1.2.0", now: { now }, fetch: { request, done in
+    let checker = UpdateChecker(defaults: defaults, installedVersion: "1.2.0", channel: .stable, now: { now }, fetch: { request, done in
         requests += 1; completion = done
         featureCheck(request.url?.host == "api.github.com" && request.timeoutInterval == 20)
     })
@@ -46,16 +46,18 @@ func runFeatureTests() {
     checker.check(); featureCheck(requests == 1)
     now += 86401; checker.check(); featureCheck(requests == 2)
     respond(503, nil); featureCheck(checker.available != nil && checker.error != nil, "Offline checks preserve cached notification")
-    let relaunched = UpdateChecker(defaults: defaults, installedVersion: "1.2.0")
+    let relaunched = UpdateChecker(defaults: defaults, installedVersion: "1.2.0", channel: .stable)
     featureCheck(relaunched.available != nil)
-    let upgraded = UpdateChecker(defaults: defaults, installedVersion: "1.3.0")
+    let upgraded = UpdateChecker(defaults: defaults, installedVersion: "1.3.0", channel: .stable)
     featureCheck(upgraded.available == nil)
     checker.check(force: true); respond(200, Data("{}".utf8)); featureCheck(checker.error != nil && checker.available != nil)
     checker.check(force: true); respond(200, try! JSONEncoder().encode(release(nil, tag: "v1.2.0")))
     featureCheck(checker.available == nil && checker.error == nil)
     print("PASS: numeric versions, release summary boundaries, trusted release URLs, daily schedule, retry/cache/offline/upgrade behavior")
     do { try runUpdateInstallTests() } catch { preconditionFailure("Installer tests: \(error)") }
+    runPrereleaseTests()
     runOptionInputTests()
+    runOptionRepeatTests()
 }
 
 func runOptionInputTests() {
@@ -97,8 +99,12 @@ func runOptionInputTests() {
     featureCheck(!controller.handle(event(25, both), mode: .none, active: true))
     featureCheck(!controller.handle(event(25, both), mode: .english, active: false))
     current = english; featureCheck(!controller.handle(event(25, both), mode: .english, active: true))
-    featureCheck(controller.handle(event(25, both), mode: .block, active: true))
-    featureCheck(controller.handle(event(25, [], false), mode: .none, active: false), "Owned key-up survives mode change")
+    for down in [true, false] {
+        let blocked = event(25, both, down)
+        featureCheck(!controller.handle(blocked, mode: .block, active: true) && blocked.flags.contains(.maskShift) && !blocked.flags.contains(.maskAlternate), "Block mode passes the plain key")
+    }
+    let shortcut = event(25, both.union(.maskCommand))
+    featureCheck(!controller.handle(shortcut, mode: .block, active: true) && shortcut.flags.contains(.maskAlternate), "Block mode keeps shortcuts")
     current = korean
     featureCheck(controller.handle(event(25, both), mode: .english, active: true))
     featureCheck(controller.handle(event(25, [], false), mode: .english, active: true))
@@ -109,6 +115,17 @@ func runOptionInputTests() {
     featureCheck(events[0].flags == both && events[2].getIntegerValueField(.keyboardEventKeycode) == 0)
     featureCheck(events[0].getIntegerValueField(.eventSourceUserData) == marker)
     featureCheck(!controller.handle(events[0], mode: .english, active: true), "No synthetic recursion")
+    events.removeAll(); transitions.removeAll()
+    for key: Int64 in [28, 19, 25] {
+        featureCheck(controller.handle(event(key, option), mode: .english, active: true))
+        featureCheck(controller.handle(event(key, option, false), mode: .english, active: true))
+    }
+    featureCheck(controller.handle(event(0), mode: .english, active: true))
+    featureCheck(controller.handle(event(27, option), mode: .english, active: true))
+    drain()
+    featureCheck(transitions == ["en", "ko"], "Rapid Option strokes share one round trip")
+    // An Option stroke behind waiting text is released with it, in order, for its own transaction.
+    featureCheck(events.map { $0.getIntegerValueField(.keyboardEventKeycode) } == [28, 28, 19, 19, 25, 25, 0, 27])
     events.removeAll(); transitions.removeAll()
     featureCheck(controller.handle(event(14, option), mode: .english, active: true))
     featureCheck(!controller.busy && transitions.isEmpty, "Dead keys wait for a composing stroke")
@@ -292,5 +309,104 @@ func runUpdateInstallTests() throws {
     release.assets = [ReleaseAsset(name: "test.zip", browser_download_url: "https://evil.test/test.zip", size: 100)]
     rejected { _ = try release.assetURL(named: "test.zip", limit: 100) }
     rejected { _ = try UpdateValidation.installedRequirement(candidate) }
+    // Real children: timeout must reap the process before replacement can roll back.
+    for arguments in [["5"], ["-c", "trap '' TERM; exec /bin/sleep 5"]] {
+        var pid: pid_t = 0
+        rejected {
+            try UpdateProcessLauncher.launch(executable: URL(fileURLWithPath: arguments.count == 1 ? "/bin/sleep" : "/bin/sh"), arguments: arguments, timeout: 0.1, settle: 0) {
+                pid = $0.processIdentifier; return false
+            }
+        }
+        featureCheck(pid > 1 && kill(pid, 0) == -1 && errno == ESRCH, "Timeout must leave no live child, including one ignoring SIGTERM")
+    }
+    rejected { try UpdateProcessLauncher.launch(executable: URL(fileURLWithPath: "/usr/bin/false"), timeout: 0.1, settle: 0.05, ready: { _ in true }) }
+    let child = try UpdateProcessLauncher.launch(executable: URL(fileURLWithPath: "/bin/sleep"), arguments: ["5"], timeout: 0.2, settle: 0.05, ready: { _ in true })
+    featureCheck(child.isRunning)
+    try UpdateProcessLauncher.stop(child)
+    var rollbackSawDeadChild = false, failedPID: pid_t = 0
+    rejected {
+        try AppReplacement.replace(installed: installed, candidate: candidate, validate: { _, _ in }, launch: { _ in
+            if failedPID == 0 {
+                try UpdateProcessLauncher.launch(executable: URL(fileURLWithPath: "/bin/sleep"), arguments: ["5"], timeout: 0.05, settle: 0) { failedPID = $0.processIdentifier; return false }
+            } else { rollbackSawDeadChild = kill(failedPID, 0) == -1 && errno == ESRCH }
+        })
+    }
+    featureCheck(rollbackSawDeadChild, "Old app relaunch waits for timed-out child termination")
+    print("PASS: launch readiness, early exit, timeout termination, SIGKILL fallback, child exit before rollback")
     print("PASS: archive checksums/paths/link and size rejection, release asset origin, validation before replacement, move/launch rollback, successful replacement")
+}
+
+func runPrereleaseTests() {
+    let suite = "io.gksdud.channel-tests.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+    func release(_ version: String, pre: Bool = true, draft: Bool = false) -> AppRelease {
+        let tag = "\(pre ? "pre-v" : "v")\(version)"
+        return AppRelease(tag_name: tag, html_url: "https://github.com/codingnoye/gksdud/releases/tag/\(tag)", body: nil, draft: draft, prerelease: pre)
+    }
+    let preview = release("1.3.0")
+    featureCheck(preview.versionString == "1.3.0" && preview.archiveName == "gksdud-1.3.0-pre-macos-universal.zip")
+    featureCheck(!preview.isNewer(than: "1.2.0") && preview.isNewer(than: "1.2.0", channel: .prerelease))
+    featureCheck(!preview.isNewer(than: "1.3.0", channel: .prerelease))
+    featureCheck(!release("9.0.0", draft: true).isNewer(than: "1.2.0", channel: .prerelease))
+    var completion: ((Data?, URLResponse?, Error?) -> Void)?
+    let checker = UpdateChecker(defaults: defaults, installedVersion: "1.2.0", channel: .prerelease, fetch: { request, done in
+        featureCheck(request.url?.path == "/repos/codingnoye/gksdud/releases" && request.url?.query == "per_page=100")
+        completion = done
+    })
+    func respond(_ releases: [AppRelease]) {
+        completion?(try! JSONEncoder().encode(releases), HTTPURLResponse(url: URL(string: "https://api.github.com")!, statusCode: 200, httpVersion: nil, headerFields: nil), nil)
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.01))
+    }
+    checker.check()
+    respond([release("1.2.0", pre: false), preview, release("9.0.0", draft: true)])
+    featureCheck(checker.available?.tag_name == "pre-v1.3.0")
+    featureCheck(UpdateChecker(defaults: defaults, installedVersion: "1.2.0", channel: .stable).available == nil)
+    featureCheck(UpdateChecker(defaults: defaults, installedVersion: "1.2.0", channel: .prerelease).available != nil)
+    checker.check(force: true); respond([preview, release("1.3.0", pre: false)])
+    featureCheck(checker.available?.tag_name == "v1.3.0", "Prefer stable for equal versions")
+    let stable = UpdateChecker(defaults: defaults, installedVersion: "1.2.0", channel: .stable, fetch: { _, done in completion = done })
+    stable.check()
+    completion?(try! JSONEncoder().encode(preview), HTTPURLResponse(url: URL(string: "https://api.github.com")!, statusCode: 200, httpVersion: nil, headerFields: nil), nil)
+    RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.01))
+    featureCheck(stable.available == nil && stable.error != nil, "Stable channel rejects prerelease even in an object response")
+    print("PASS: prerelease selection, numeric ordering, stable isolation, separate cache, same-version rejection and archive naming")
+}
+
+func runOptionRepeatTests() {
+    let ko = InputSourceIdentity(id: "ko", language: "ko"), en = InputSourceIdentity(id: "en", language: "en")
+    var current = ko, clock = 0.0, posts: [CGEvent] = [], jobs: [(Double, () -> Void)] = []
+    let controller = OptionInputController(environment: .init(current: { current }, english: { en }, select: { current = $0; return true },
+        frontmost: { 42 }, post: { posts.append($0) }, later: { jobs.append((clock + $0, $1)) }, clock: { clock }, deadState: { _, _, _ in 0 }), marker: 998877)
+    func event(_ code: CGKeyCode = 25, down: Bool = true, repeatKey: Bool = false, option: Bool = true) -> CGEvent {
+        let value = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: down)!
+        value.flags = option ? [.maskAlternate] : []
+        value.setIntegerValueField(.keyboardEventAutorepeat, value: repeatKey ? 1 : 0)
+        return value
+    }
+    func handle(_ event: CGEvent) -> Bool { controller.handle(event, mode: .english, active: true) }
+    func drain() {
+        var turns = 0
+        while !jobs.isEmpty || !posts.isEmpty {
+            while !posts.isEmpty { _ = handle(posts.removeFirst()) }
+            if !jobs.isEmpty { jobs.sort { $0.0 < $1.0 }; let job = jobs.removeFirst(); clock = job.0; job.1() }
+            turns += 1; featureCheck(turns < 1000)
+        }
+    }
+    _ = handle(event()); drain()
+    _ = handle(event(repeatKey: true))
+    _ = handle(event(0, option: false)) // ordinary text prevents merging subsequent repeats
+    _ = handle(event(0, down: false, option: false))
+    _ = handle(event(repeatKey: true))
+    _ = handle(event(down: false))
+    drain()
+    featureCheck(!handle(event(option: false)))
+    featureCheck(!handle(event(down: false, option: false)), "Replayed repeat must not reclaim the already-consumed physical key-up")
+    // A fresh queued stroke must still consume its own release during replay.
+    _ = handle(event())
+    _ = handle(event(down: false))
+    _ = handle(event(0, option: false))
+    _ = handle(event()); _ = handle(event(down: false)); drain()
+    featureCheck(!handle(event(option: false)) && !handle(event(down: false, option: false)))
+    print("PASS: repeat replay after physical release, subsequent plain key-up, queued fresh stroke balance")
 }
