@@ -53,3 +53,13 @@ jobs:
         env:
           GKSDUD_SIGN_MODE: ad-hoc
         run: bash build.sh
+      - name: Diagnose a self-test crash
+        if: failure()
+        shell: bash
+        run: |
+          for binary in /private/tmp/gksdud-build.*/gksdud-"$(uname -m)"; do
+            if [[ -f "$binary" ]]; then
+              lldb --batch -o run --one-line-on-crash 'thread backtrace all' -- "$binary" --self-test
+              break
+            fi
+          done

@@ -27,11 +27,16 @@ swiftc -parse-as-library -D ICON_GENERATOR -module-cache-path "$stage/module-cac
 "$stage/icon-generator" "$stage/AppIcon.iconset"
 iconutil -c icns "$stage/AppIcon.iconset" -o "$stage/gksdud.app/Contents/Resources/AppIcon.icns"
 for arch in arm64 x86_64; do
-  swiftc -swift-version 5 -O -target "$arch-apple-macos13.0" -module-cache-path "$stage/module-cache" -import-objc-header Bridge.h main.swift DudIcon.swift KeyboardManagement.swift KeyboardSettings.swift KeyboardTests.swift -o "$stage/gksdud-$arch" -framework AppKit -framework IOKit -framework ServiceManagement
+  swiftc -swift-version 5 -O -target "$arch-apple-macos13.0" -module-cache-path "$stage/module-cache" -import-objc-header Bridge.h main.swift DudIcon.swift KeyboardManagement.swift KeyboardSettings.swift KeyboardTests.swift SettingsWindow.swift UpdateChecking.swift UpdateInstaller.swift SpecialCharacters.swift FeatureTests.swift -o "$stage/gksdud-$arch" -framework AppKit -framework IOKit -framework ServiceManagement
 done
 lipo -create "$stage/gksdud-arm64" "$stage/gksdud-x86_64" -output "$stage/gksdud.app/Contents/MacOS/gksdud"
 cp Info.plist "$stage/gksdud.app/Contents/Info.plist"
 cp LICENSE "$stage/gksdud.app/Contents/Resources/LICENSE"
+cp Resources/github.svg Resources/OCTICONS-LICENSE "$stage/gksdud.app/Contents/Resources/"
+if [[ -n "${GKSDUD_APP_VERSION:-}" ]]; then
+  [[ "$GKSDUD_APP_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
+  /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $GKSDUD_APP_VERSION" "$stage/gksdud.app/Contents/Info.plist"
+fi
 if [[ -n "${GKSDUD_BUILD_NUMBER:-}" ]]; then
   [[ "$GKSDUD_BUILD_NUMBER" =~ ^[0-9]+$ ]] || exit 1
   /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $GKSDUD_BUILD_NUMBER" "$stage/gksdud.app/Contents/Info.plist"
@@ -39,7 +44,7 @@ fi
 codesign --force "${sign_args[@]}" --options runtime "$stage/gksdud.app"
 codesign --verify --deep --strict "$stage/gksdud.app"
 "$stage/gksdud.app/Contents/MacOS/gksdud" --self-test
-version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Info.plist)
+version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$stage/gksdud.app/Contents/Info.plist")
 ditto -c -k --keepParent --norsrc "$stage/gksdud.app" "$output_dir/gksdud-$version-macos-universal.zip"
 codesign -d -r- "$stage/gksdud.app"
 echo "Built app: $stage/gksdud.app"
