@@ -11,7 +11,7 @@
 <img width="320" alt="preference demo" src="https://github.com/user-attachments/assets/aec4ba4f-fb0c-4ec8-bee9-d66f570353f3" />
 
 잠깐만 써봐도 체감될 만큼 빠릿빠릿하게 한영 전환됩니다.
-- **한영 키 변경**: `우측 Command ⌘`, `우측 Option ⌥`, `Caps Lock ⇪`, `우측 Control ⌃` 중 선택해 한영 키로 사용
+- **한영 키 변경**: `우측 ⌘` 등의 키를 선택해 한영 키로 사용
 - **딜레이, 키 씹힘 개선**: 기존 방법들의 **딜레이**, **글자 씹힘**, **전환 씹힘** 없는 전환 구현
 
 <img width="502" alt="화면 기록 2026-09-16 오후 10 23 57" src="https://github.com/user-attachments/assets/faf9f36d-bbff-4c5f-8a53-785948fc32cc" />
