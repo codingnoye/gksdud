@@ -58,6 +58,7 @@ func runFeatureTests() {
     runPrereleaseTests()
     runOptionInputTests()
     runOptionRepeatTests()
+    runNativeOptionSymbolTests()
 }
 
 func runOptionInputTests() {
@@ -74,7 +75,8 @@ func runOptionInputTests() {
         return selectWorks
     }, frontmost: { front }, post: { events.append($0) }, later: { delay, action in jobs.append((clock + delay, action)) }, clock: { clock }, deadState: { _, event, state in
         if state != 0 { return 0 }
-        return event.getIntegerValueField(.keyboardEventKeycode) == 14 && event.flags.contains(.maskAlternate) ? 1 : 0
+        return [14, 32, 34, 45, 50].contains(event.getIntegerValueField(.keyboardEventKeycode))
+            && event.flags.contains(.maskAlternate) && !event.flags.contains(.maskShift) ? 1 : 0
     }), marker: marker)
     controller.report = { warnings.append($0) }
     func event(_ key: Int64, _ flags: CGEventFlags = [], _ down: Bool = true) -> CGEvent {
@@ -90,7 +92,7 @@ func runOptionInputTests() {
     }
     let option: CGEventFlags = [.maskAlternate], both: CGEventFlags = [.maskAlternate, .maskShift]
     for flags in [option, both] {
-        for key: Int64 in [0, 19, 25, 28, 42, 49, 82] {
+        for key: Int64 in [0, 19, 25, 28, 42, 49] {
             featureCheck(OptionKeyPolicy.matches(code: key, flags: flags))
         }
     }
@@ -99,13 +101,58 @@ func runOptionInputTests() {
     featureCheck(!controller.handle(event(25, both), mode: .none, active: true))
     featureCheck(!controller.handle(event(25, both), mode: .english, active: false))
     current = english; featureCheck(!controller.handle(event(25, both), mode: .english, active: true))
-    for down in [true, false] {
-        let blocked = event(25, both, down)
-        featureCheck(!controller.handle(blocked, mode: .block, active: true) && blocked.flags.contains(.maskShift) && !blocked.flags.contains(.maskAlternate), "Block mode passes the plain key")
+    let letterKeys: [Int64] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 13, 14, 15, 16, 17, 31, 32, 34, 35, 37, 38, 40, 45, 46]
+    for source in [korean, english] {
+        current = source
+        for flags in [option, both, both.union(.maskAlphaShift)] {
+            for down in [true, false] {
+                for key in OptionKeyPolicy.printable {
+                    let stroke = event(key, flags, down)
+                    let expected = letterKeys.contains(key) ? flags.subtracting(.maskAlternate) : flags
+                    featureCheck(!controller.handle(stroke, mode: .block, active: true) && stroke.flags == expected,
+                        "Block only letter keys, preserving numbers, punctuation, space and keypad: \(key)")
+                }
+            }
+        }
     }
-    let shortcut = event(25, both.union(.maskCommand))
-    featureCheck(!controller.handle(shortcut, mode: .block, active: true) && shortcut.flags.contains(.maskAlternate), "Block mode keeps shortcuts")
+    for extra: CGEventFlags in [.maskCommand, .maskControl, .maskSecondaryFn] {
+        let shortcut = event(0, both.union(extra))
+        featureCheck(!controller.handle(shortcut, mode: .block, active: true) && shortcut.flags == both.union(extra), "Block mode keeps shortcuts")
+    }
     current = korean
+    let keypadKeys: [Int64] = [65, 67, 69, 75, 78, 81, 82, 83, 84, 85, 86, 87, 88, 89, 91, 92, 95]
+    for key in keypadKeys {
+        for flags in [option, both, option.union(.maskNumericPad), both.union([.maskNumericPad, .maskAlphaShift])] {
+            featureCheck(!OptionKeyPolicy.matches(code: key, flags: flags), "Keypad must not start an English round trip")
+            for repeated in [false, true] {
+                let stroke = event(key, flags)
+                stroke.setIntegerValueField(.keyboardEventAutorepeat, value: repeated ? 1 : 0)
+                featureCheck(!controller.handle(stroke, mode: .english, active: true) && stroke.flags == flags,
+                    "Keypad down/repeat must pass unchanged: \(key)")
+            }
+            let release = event(key, flags.subtracting(.maskAlternate), false)
+            featureCheck(!controller.handle(release, mode: .english, active: true)
+                && release.flags == flags.subtracting(.maskAlternate), "Keypad must retain its physical key-up")
+        }
+    }
+    featureCheck(jobs.isEmpty && events.isEmpty && transitions.isEmpty && warnings.isEmpty,
+        "Idle keypad input must not schedule, replay, switch or warn")
+    for flags in [option, both] {
+        for repeatKey in [false, true] {
+            let grave = event(50, flags)
+            grave.setIntegerValueField(.keyboardEventAutorepeat, value: repeatKey ? 1 : 0)
+            featureCheck(!controller.handle(grave, mode: .english, active: true) && grave.flags == flags,
+                "Korean Option-won must reach the native IME immediately, including repeats")
+        }
+        featureCheck(!controller.handle(event(50, [], false), mode: .english, active: true), "Native symbol keeps its physical key-up")
+    }
+    englishAvailable = false
+    featureCheck(!controller.handle(event(50, option), mode: .english, active: true), "Native backtick needs no English source")
+    featureCheck(!controller.handle(event(83, option), mode: .english, active: true), "Native keypad needs no English source")
+    englishAvailable = true
+    featureCheck(!controller.handle(event(0), mode: .english, active: true), "Native backtick must not leave an English dead key pending")
+    featureCheck(!controller.busy && jobs.isEmpty && events.isEmpty && transitions.isEmpty && warnings.isEmpty,
+        "Native symbols must not switch sources, queue input or warn")
     featureCheck(controller.handle(event(25, both), mode: .english, active: true))
     featureCheck(controller.handle(event(25, [], false), mode: .english, active: true))
     featureCheck(controller.handle(event(0), mode: .english, active: true))
@@ -127,13 +174,26 @@ func runOptionInputTests() {
     // An Option stroke behind waiting text is released with it, in order, for its own transaction.
     featureCheck(events.map { $0.getIntegerValueField(.keyboardEventKeycode) } == [28, 28, 19, 19, 25, 25, 0, 27])
     events.removeAll(); transitions.removeAll()
-    featureCheck(controller.handle(event(14, option), mode: .english, active: true))
-    featureCheck(!controller.busy && transitions.isEmpty, "Dead keys wait for a composing stroke")
-    _ = controller.handle(event(14, [], false), mode: .english, active: true)
-    featureCheck(controller.handle(event(0), mode: .english, active: true))
-    drain(); featureCheck(events.count == 4 && current == korean)
-    _ = controller.handle(event(0, [], false), mode: .english, active: true)
-    events.removeAll(); transitions.removeAll()
+    for (accent, base): (Int64, Int64) in [(14, 0), (32, 32), (34, 0), (45, 45), (14, 83)] {
+        let baseFlags: [CGEventFlags] = base == 83 ? [[], .maskShift, option, both] : [[], .maskShift]
+        for flags in baseFlags {
+            featureCheck(controller.handle(event(accent, option), mode: .english, active: true))
+            featureCheck(!controller.busy && transitions.isEmpty, "Dead keys wait for a composing stroke")
+            featureCheck(controller.handle(event(accent, [], false), mode: .english, active: true))
+            featureCheck(controller.handle(event(base, flags), mode: .english, active: true))
+            featureCheck(controller.handle(event(base, flags, false), mode: .english, active: true))
+            featureCheck(controller.handle(event(1), mode: .english, active: true))
+            featureCheck(controller.handle(event(1, [], false), mode: .english, active: true))
+            drain()
+            featureCheck(current == korean && !controller.busy && transitions == ["en", "ko"])
+            featureCheck(events.map { $0.getIntegerValueField(.keyboardEventKeycode) } == [accent, accent, base, base, 1, 1],
+                "Accent composition must precede the next Hangul stroke, including keypad continuation")
+            featureCheck(events[2].flags == flags && events[3].flags == flags, "Composing letter preserves Shift")
+            featureCheck(!controller.handle(event(base), mode: .english, active: true)
+                && !controller.handle(event(base, [], false), mode: .english, active: true), "Accent must release the next plain key")
+            events.removeAll(); transitions.removeAll()
+        }
+    }
     englishAvailable = false
     featureCheck(!controller.handle(event(25, both), mode: .english, active: true)); englishAvailable = true
     selectWorks = false
@@ -160,9 +220,16 @@ func runOptionInputTests() {
     if let abc = AppDelegate.sourceForID("com.apple.keylayout.ABC"), let identity = AppDelegate.sourceIdentity(abc) {
         let owner = AppDelegate(engine: Engine(defaults: UserDefaults(suiteName: "io.gksdud.layout-read-test")!, discover: { [] }))
         let translate = owner.makeOptionInput().environment.deadState
-        let pending = translate(identity, event(14, option), 0)!
-        featureCheck(pending != 0)
-        featureCheck(translate(identity, event(0), pending) == 0, "A composed accent must release the following Hangul stroke")
+        for (accent, base): (Int64, Int64) in [(14, 0), (32, 32), (34, 0), (45, 45), (14, 83)] {
+            let pending = translate(identity, event(accent, option), 0) ?? 0
+            featureCheck(pending != 0, "ABC accent must enter composition: \(accent)")
+            for flags: CGEventFlags in [[], .maskShift] {
+                featureCheck(translate(identity, event(base, flags), pending) == 0,
+                    "A composed accent must release the following Hangul stroke")
+            }
+            featureCheck(translate(identity, event(accent, both), 0) == 0, "Option-Shift accent is a standalone mark")
+        }
+        featureCheck((translate(identity, event(50, option), 0) ?? 0) != 0, "ABC Option-grave is a dead key, unlike Korean Option-won")
     } else {
         print("SKIP: native ABC accent check (ABC input source is unavailable); simulated dead-key checks passed")
     }
@@ -199,11 +266,15 @@ func probeOptionInput() throws {
     }
     var environment = delegate.makeOptionInput().environment
     environment.post = { $0.postToPid(getpid()) }
+    var selections = 0
+    let select = environment.select
+    environment.select = { source in selections += 1; return select(source) }
     let controller = OptionInputController(environment: environment, marker: delegate.nativePulseMarker)
     controller.report = { print("PROBE notice: \($0)") }
+    var mode = SpecialCharacterMode.english
     let monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp, .flagsChanged]) { event in
         guard let cg = event.cgEvent else { return event }
-        return controller.handle(cg, mode: .english, active: true) ? nil : event
+        return controller.handle(cg, mode: mode, active: true) ? nil : NSEvent(cgEvent: cg)
     }
     defer {
         controller.cancel()
@@ -216,11 +287,19 @@ func probeOptionInput() throws {
     func key(_ code: CGKeyCode, _ flags: CGEventFlags = []) {
         for down in [true, false] {
             let event = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: down)!
-            event.flags = flags; event.postToPid(getpid())
+            event.flags = flags
+            if OptionKeyPolicy.keypad.contains(Int64(code)) { event.flags.insert(.maskNumericPad) }
+            event.postToPid(getpid())
         }
     }
     var passed = 0
-    let cases: [(CGKeyCode, CGEventFlags, String)] = [(25, [.maskAlternate, .maskShift], "·"), (28, [.maskAlternate], "•"), (19, [.maskAlternate], "™"), (27, [.maskAlternate], "–"), (27, [.maskAlternate, .maskShift], "—"), (8, [.maskAlternate], "ç")]
+    let keypadCases: [(CGKeyCode, String)] = [(65, "."), (67, "*"), (69, "+"), (75, "/"), (78, "-"), (81, "="),
+        (82, "0"), (83, "1"), (84, "2"), (85, "3"), (86, "4"), (87, "5"), (88, "6"), (89, "7"), (91, "8"), (92, "9")]
+    var cases: [(CGKeyCode, CGEventFlags, String)] = [(25, [.maskAlternate, .maskShift], "·"), (28, [.maskAlternate], "•"), (19, [.maskAlternate], "™"), (27, [.maskAlternate], "–"), (27, [.maskAlternate, .maskShift], "—"), (8, [.maskAlternate], "ç"), (50, [.maskAlternate], "`"), (50, [.maskAlternate, .maskShift], "~")]
+    for (code, symbol) in keypadCases {
+        cases.append((code, [.maskAlternate], symbol))
+        cases.append((code, [.maskAlternate, .maskShift], symbol))
+    }
     for (code, flags, symbol) in cases {
         text.inputContext?.discardMarkedText(); text.string = ""
         panel.makeKeyAndOrderFront(nil); panel.makeFirstResponder(text); app.activate(ignoringOtherApps: true); pump(0.1)
@@ -230,15 +309,21 @@ func probeOptionInput() throws {
             throw NSError(domain: "probe", code: 5, userInfo: [NSLocalizedDescriptionKey: "Could not prepare an active Korean input context."])
         }
         key(15); pump(0.03); key(40); pump(0.03)
+        let before = selections
         key(code, flags)
         // Deliberately queue the next Hangul syllable before the 60 ms return.
         pump(0.01); key(1); key(40); pump(0.5)
         let expected = "가\(symbol)나"
         let ok = text.string == expected && environment.current()?.language.hasPrefix("ko") == true
+            && (!keypadCases.contains(where: { $0.0 == code }) || selections == before)
         if ok { passed += 1 }
         print("PROBE \(ok ? "PASS" : "FAIL"): expected=\(expected), actual=\(text.string), returned=\(environment.current()?.language ?? "nil")")
     }
-    for (accentKey, baseKey, expected) in [(CGKeyCode(14), CGKeyCode(0), "가á나"), (CGKeyCode(32), CGKeyCode(32), "가ü나")] {
+    let accentCases: [(CGKeyCode, CGKeyCode, CGEventFlags, String)] = [
+        (14, 0, [], "가á나"), (32, 32, [], "가ü나"), (34, 0, [], "가â나"), (45, 45, [], "가ñ나"),
+        (14, 0, .maskShift, "가Á나"), (32, 32, .maskShift, "가Ü나"), (34, 0, .maskShift, "가Â나"), (45, 45, .maskShift, "가Ñ나"),
+        (14, 83, [], "가´1나"), (14, 83, .maskAlternate, "가´1나")]
+    for (accentKey, baseKey, flags, expected) in accentCases {
         text.inputContext?.discardMarkedText(); text.string = ""
         panel.makeKeyAndOrderFront(nil); panel.makeFirstResponder(text); app.activate(ignoringOtherApps: true); pump(0.1)
         let selectionResult = TISSelectInputSource(korean); pump(0.2)
@@ -247,14 +332,54 @@ func probeOptionInput() throws {
             throw NSError(domain: "probe", code: 5, userInfo: [NSLocalizedDescriptionKey: "Could not prepare an active Korean input context."])
         }
         key(15); pump(0.03); key(40); pump(0.03)
-        key(accentKey, [.maskAlternate]); pump(0.03); key(baseKey)
+        key(accentKey, [.maskAlternate]); pump(0.03); key(baseKey, flags)
         pump(0.01); key(1); key(40); pump(0.5)
         let ok = text.string == expected && environment.current()?.language.hasPrefix("ko") == true
         if ok { passed += 1 }
         print("PROBE \(ok ? "PASS" : "FAIL"): expected=\(expected), actual=\(text.string), returned=\(environment.current()?.language ?? "nil")")
     }
-    print("PROBE RESULT: \(passed)/\(cases.count + 2) native AppKit cases")
-    guard passed == cases.count + 2 else { throw NSError(domain: "probe", code: 3, userInfo: [NSLocalizedDescriptionKey: "Native input expectations failed."]) }
+    for rapidMode in [SpecialCharacterMode.english, .block] {
+        controller.cancel(); mode = rapidMode
+        text.inputContext?.discardMarkedText(); text.string = ""
+        let selected = TISSelectInputSource(korean); pump(0.2)
+        guard selected == noErr, environment.current()?.language.hasPrefix("ko") == true,
+              panel.isKeyWindow, NSWorkspace.shared.frontmostApplication?.processIdentifier == getpid() else {
+            throw NSError(domain: "probe", code: 5, userInfo: [NSLocalizedDescriptionKey: "Could not prepare the rapid-symbol input context."])
+        }
+        key(15); key(40); pump(0.03)
+        for _ in 0..<10 { key(50, [.maskAlternate]) }
+        key(1); key(40); pump(0.3)
+        let expected = "가" + String(repeating: "`", count: 10) + "나"
+        let ok = text.string == expected && !controller.busy && environment.current()?.language.hasPrefix("ko") == true
+        if ok { passed += 1 }
+        print("PROBE \(ok ? "PASS" : "FAIL"): rapid backticks mode=\(mode), expected=\(expected), actual=\(text.string)")
+    }
+    guard let english = delegate.availableSource("en") else { throw NSError(domain: "probe", code: 2, userInfo: [NSLocalizedDescriptionKey: "English input source is unavailable."]) }
+    let blockCases: [(CGKeyCode, CGEventFlags, Bool)] = [(0, [.maskAlternate], true), (0, [.maskAlternate, .maskShift], true),
+        (14, [.maskAlternate], true), (19, [.maskAlternate], false), (50, [.maskAlternate], false), (42, [.maskAlternate], false)]
+    for source in [korean, english] {
+        for (code, flags, letter) in blockCases {
+            var expected = ""
+            for reference in [true, false] {
+                controller.cancel(); mode = reference ? .none : .block
+                text.inputContext?.discardMarkedText(); text.string = ""
+                let selected = TISSelectInputSource(source); pump(0.2)
+                guard selected == noErr, environment.current() == AppDelegate.sourceIdentity(source),
+                      panel.isKeyWindow, NSWorkspace.shared.frontmostApplication?.processIdentifier == getpid() else {
+                    throw NSError(domain: "probe", code: 5, userInfo: [NSLocalizedDescriptionKey: "Could not prepare the block-mode input context."])
+                }
+                key(code, reference && letter ? flags.subtracting(.maskAlternate) : flags)
+                pump(0.03); key(49); pump(0.1)
+                if reference { expected = text.string; continue }
+                let ok = !expected.isEmpty && text.string == expected && environment.current() == AppDelegate.sourceIdentity(source)
+                if ok { passed += 1 }
+                print("PROBE \(ok ? "PASS" : "FAIL"): block key=\(code), source=\(environment.current()?.language ?? "nil"), expected=\(expected), actual=\(text.string)")
+            }
+        }
+    }
+    let total = cases.count + accentCases.count + 2 + blockCases.count * 2
+    print("PROBE RESULT: \(passed)/\(total) native AppKit cases")
+    guard passed == total else { throw NSError(domain: "probe", code: 3, userInfo: [NSLocalizedDescriptionKey: "Native input expectations failed."]) }
 }
 
 func runUpdateInstallTests() throws {
@@ -391,4 +516,45 @@ func runOptionRepeatTests() {
     _ = handle(event()); _ = handle(event(down: false)); drain()
     featureCheck(!handle(event(option: false)) && !handle(event(down: false, option: false)))
     print("PASS: repeat replay after physical release, subsequent plain key-up, queued fresh stroke balance")
+}
+
+func runNativeOptionSymbolTests() {
+    let ko = InputSourceIdentity(id: "ko", language: "ko"), en = InputSourceIdentity(id: "en", language: "en")
+    let nativeKeys: [CGKeyCode] = [50, 65, 67, 69, 75, 78, 81, 82, 83, 84, 85, 86, 87, 88, 89, 91, 92, 95]
+    for (nativeKey, delivering) in nativeKeys.flatMap({ code in [false, true].map { (code, $0) } }) {
+        var current = ko, clock = 0.0, jobs: [(Double, () -> Void)] = []
+        var posted: [CGEvent] = [], delivered: [(Int64, CGEventType, String)] = [], transitions: [String] = []
+        let controller = OptionInputController(environment: .init(current: { current }, english: { en }, select: {
+            transitions.append($0.id); current = $0; return true
+        }, frontmost: { 42 }, post: { posted.append($0) }, later: { jobs.append((clock + $0, $1)) }, clock: { clock },
+        deadState: { _, event, _ in event.getIntegerValueField(.keyboardEventKeycode) == 50 ? 1 : 0 }), marker: 991199)
+        func send(_ event: CGEvent) {
+            if !controller.handle(event, mode: .english, active: true) {
+                delivered.append((event.getIntegerValueField(.keyboardEventKeycode), event.type, current.id))
+            }
+        }
+        func key(_ code: CGKeyCode, _ down: Bool = true, _ option: Bool = true, repeated: Bool = false) {
+            let event = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: down)!
+            event.flags = option ? [.maskAlternate] : []
+            event.setIntegerValueField(.keyboardEventAutorepeat, value: repeated ? 1 : 0)
+            send(event)
+        }
+        func advance() {
+            jobs.sort { $0.0 < $1.0 }; let job = jobs.removeFirst(); clock = job.0; job.1()
+            while !posted.isEmpty { send(posted.removeFirst()) }
+        }
+        key(25); key(25, false)
+        if delivering { advance() }
+        key(nativeKey); key(nativeKey, repeated: true); key(nativeKey, false, false)
+        key(0, true, false); key(0, false, false)
+        var turns = 0
+        while !jobs.isEmpty { advance(); turns += 1; featureCheck(turns < 1000) }
+        featureCheck(transitions == ["en", "ko"] && !controller.busy)
+        featureCheck(delivered.map { $0.0 } == [25, 25, Int64(nativeKey), Int64(nativeKey), Int64(nativeKey), 0, 0], "Queued native symbols preserve input order")
+        featureCheck(delivered.map { $0.1 } == [.keyDown, .keyUp, .keyDown, .keyDown, .keyUp, .keyDown, .keyUp])
+        featureCheck(delivered.map { $0.2 } == ["en", "en", "ko", "ko", "ko", "ko", "ko"], "Native symbols and keypad are never merged into English strokes")
+        key(nativeKey, true, false); key(nativeKey, false, false)
+        featureCheck(delivered.count == 9, "Queued repeats must not steal a subsequent plain symbol key-up")
+    }
+    print("PASS: native Option-won/keypad during selection/delivery, repeated symbols, ordered Hangul replay and balanced key-up")
 }

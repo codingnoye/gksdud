@@ -13,9 +13,15 @@ struct InputSourceIdentity: Equatable {
 struct OptionKeyPolicy {
     static let printable: Set<Int64> = Set(0...50).subtracting([36, 48])
         .union([65, 67, 69, 75, 78, 81, 82, 83, 84, 85, 86, 87, 88, 89, 91, 92, 93, 94, 95])
+    static let keypad: Set<Int64> = [65, 67, 69, 75, 78, 81, 82, 83, 84, 85, 86, 87, 88, 89, 91, 92, 95]
+    static let letters: Set<Int64> = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 13, 14, 15, 16, 17,
+        31, 32, 34, 35, 37, 38, 40, 45, 46]
     static func matches(code: Int64, flags: CGEventFlags) -> Bool {
-        printable.contains(code) && flags.contains(.maskAlternate)
+        printable.contains(code) && !keypad.contains(code) && flags.contains(.maskAlternate)
             && flags.intersection([.maskCommand, .maskControl, .maskSecondaryFn]).isEmpty
+    }
+    static func preservesKoreanSymbol(code: Int64, flags: CGEventFlags) -> Bool {
+        code == Int64(kVK_ANSI_Grave) && matches(code: code, flags: flags)
     }
 }
 
@@ -72,7 +78,9 @@ final class OptionInputController {
             // Consecutive Option strokes share this English round trip instead of paying for one each.
             // Waiting text keeps its order; a dead key still gets its own transaction.
             if active, mode == .english, event.type == .keyDown, phase != .restoring, let destination,
-               OptionKeyPolicy.matches(code: code, flags: event.flags), !queued.contains(where: { $0.type != .flagsChanged }),
+               OptionKeyPolicy.matches(code: code, flags: event.flags),
+               !OptionKeyPolicy.preservesKoreanSymbol(code: code, flags: event.flags),
+               !queued.contains(where: { $0.type != .flagsChanged }),
                (environment.deadState(destination, event, 0) ?? 0) == 0, let copy = event.copy() {
                 claimRelease(for: event)
                 if phase == .selecting { strokes.append(copy) } else { postPair(copy); deliverUntil = environment.clock() + 0.06 }
@@ -84,15 +92,17 @@ final class OptionInputController {
         }
         guard active, mode != .none else { clearDead(); return false }
         let option = OptionKeyPolicy.matches(code: code, flags: event.flags)
-        if mode == .block, event.type == .keyUp, option { event.flags.remove(.maskAlternate) }
-        guard event.type == .keyDown else { return false }
         if mode == .block {
             // Deliver the stroke as the plain character, in every input language.
             clearDead()
-            if option { event.flags.remove(.maskAlternate) }
+            if (event.type == .keyDown || event.type == .keyUp), option, OptionKeyPolicy.letters.contains(code) {
+                event.flags.remove(.maskAlternate)
+            }
             return false
         }
+        guard event.type == .keyDown else { return false }
         guard let current = environment.current(), current.language.hasPrefix("ko") else { clearDead(); return false }
+        if OptionKeyPolicy.preservesKoreanSymbol(code: code, flags: event.flags) { clearDead(); return false }
         if !pendingDead.isEmpty, pendingOwner != environment.frontmost() || pendingOriginal != current
             || environment.clock() - pendingSince > 30 { clearDead() }
         let continuation = !pendingDead.isEmpty && OptionKeyPolicy.printable.contains(code)
