@@ -9,6 +9,13 @@ on:
         description: Existing vVERSION or pre-vVERSION tag to build or verify using the latest workflow
         required: true
         type: string
+      publish_stable:
+        description: Publish the verified stable draft and open the Homebrew update PR
+        type: boolean
+        default: false
+      release_summary:
+        description: User-facing summary required when publishing a stable release
+        type: string
 
 permissions:
   contents: read
@@ -37,6 +44,8 @@ jobs:
         id: version
         env:
           REQUESTED_TAG: ${{ inputs.release_tag }}
+          PUBLISH_STABLE: ${{ inputs.publish_stable }}
+          RELEASE_SUMMARY: ${{ inputs.release_summary }}
         run: |
           set -euo pipefail
           version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Info.plist)
@@ -45,6 +54,10 @@ jobs:
             tag="$REQUESTED_TAG"
           fi
           ruby scripts/release-metadata.rb "$version" "$tag" >> "$GITHUB_OUTPUT"
+          if [[ "${PUBLISH_STABLE:-false}" == true ]]; then
+            [[ "$GITHUB_EVENT_NAME" == workflow_dispatch && "$tag" == "v$version" ]]
+            ruby -e 'abort "Release summary is required" if ENV.fetch("RELEASE_SUMMARY", "").strip.empty?'
+          fi
           if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
             git fetch --depth=1 origin "refs/tags/$tag:refs/tags/$tag"
             # Never relabel changed application code as an existing version.
@@ -144,3 +157,21 @@ jobs:
             "outputs/release-$ASSET_VERSION/SHA256SUMS" \
             --repo "$GITHUB_REPOSITORY" --verify-tag \
             "${options[@]}"
+
+      - name: Publish verified stable draft
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_stable && steps.version.outputs.prerelease == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SUMMARY: ${{ inputs.release_summary }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        run: ruby scripts/publish-release.rb "$GITHUB_REPOSITORY" "$RELEASE_TAG"
+
+      - name: Verify published assets and open Homebrew update PR
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_stable && steps.version.outputs.prerelease == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          test -n "$TAP_GITHUB_TOKEN" || { echo 'Missing Homebrew tap token.' >&2; exit 1; }
+          python3 scripts/update-tap.py "$RELEASE_TAG"
