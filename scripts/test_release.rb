@@ -109,4 +109,74 @@ class ReleaseTests < Minitest::Test
       assert_includes args, '--verify-tag'
     end
   end
+
+  def test_stable_publication_requires_explicit_dispatch_and_keeps_tap_in_actions
+    workflow = YAML.load_file("#{ROOT}/.github/workflows/release.yml")
+    triggers = workflow.fetch('on') { workflow.fetch(true) }
+    inputs = triggers.fetch('workflow_dispatch').fetch('inputs')
+    assert_equal false, inputs.fetch('publish_stable').fetch('default')
+    steps = workflow.fetch('jobs').fetch('release').fetch('steps')
+    publish = steps.find { |step| step['name'] == 'Publish verified stable draft' }
+    tap = steps.find { |step| step['name'] == 'Verify published assets and open Homebrew update PR' }
+    assert_equal "github.event_name == 'workflow_dispatch' && inputs.publish_stable && steps.version.outputs.prerelease == 'false'", publish.fetch('if')
+    assert_equal publish.fetch('if'), tap.fetch('if')
+    assert_operator steps.index(publish), :>, steps.index(steps.find { |step| step['id'] == 'existing' })
+    assert_operator steps.index(tap), :>, steps.index(publish)
+    assert_includes tap.fetch('run'), 'python3 scripts/update-tap.py "$RELEASE_TAG"'
+  end
+
+  def publication_result(draft: true, prerelease: false, actual_tag: 'v1.2.0', summary: 'Input fixes', view_exit: 0, edit_exit: 0)
+    Dir.mktmpdir('gksdud-publish-test-') do |dir|
+      File.write("#{dir}/gh", <<~RUBY)
+        #!/usr/bin/ruby
+        require 'json'
+        if ARGV.first(2) == ['release', 'view']
+          puts ENV.fetch('RELEASE_JSON')
+          exit ENV.fetch('VIEW_EXIT').to_i
+        end
+        File.write(ENV.fetch('CAPTURE'), JSON.generate(ARGV))
+        File.write(ENV.fetch('NOTES'), File.read(ARGV.fetch(ARGV.index('--notes-file') + 1)))
+        exit ENV.fetch('EDIT_EXIT').to_i
+      RUBY
+      File.chmod(0755, "#{dir}/gh")
+      env = { 'PATH' => "#{dir}:#{ENV.fetch('PATH')}", 'RELEASE_SUMMARY' => summary,
+              'RELEASE_JSON' => JSON.generate(tagName: actual_tag, isDraft: draft, isPrerelease: prerelease),
+              'CAPTURE' => "#{dir}/args.json", 'NOTES' => "#{dir}/notes.md",
+              'VIEW_EXIT' => view_exit.to_s, 'EDIT_EXIT' => edit_exit.to_s }
+      output, status = Open3.capture2e(env, '/usr/bin/ruby', "#{ROOT}/scripts/publish-release.rb", 'codingnoye/gksdud', 'v1.2.0')
+      args = File.exist?("#{dir}/args.json") ? JSON.parse(File.read("#{dir}/args.json")) : nil
+      notes = File.exist?("#{dir}/notes.md") ? File.read("#{dir}/notes.md") : nil
+      [status, args, notes, output]
+    end
+  end
+
+  def test_publish_uses_literal_summary_and_never_uploads_assets
+    summary = "- Option+` fix\n- Literal $(touch nope) \\1 text"
+    status, args, notes, output = publication_result(summary: summary)
+    assert status.success?, output
+    assert_equal ['release', 'edit', 'v1.2.0', '--repo', 'codingnoye/gksdud', '--notes-file'], args.first(6)
+    assert_equal ['--draft=false', '--latest'], args.last(2)
+    assert_equal 9, args.length
+    assert_includes notes, summary
+    refute_includes notes, '<!-- 게시 전'
+    assert_includes notes, 'brew install --cask codingnoye/tap/gksdud'
+  end
+
+  def test_published_release_is_not_edited_on_retry
+    status, args, notes, output = publication_result(draft: false)
+    assert status.success?, output
+    assert_nil args
+    assert_nil notes
+  end
+
+  def test_publication_rejects_invalid_release_missing_summary_and_failed_lookup
+    [{ prerelease: true }, { actual_tag: 'v1.2.1' }, { summary: " \n" }, { view_exit: 1 }].each do |options|
+      status, args, notes, = publication_result(**options)
+      refute status.success?, options.inspect
+      assert_nil args
+      assert_nil notes
+    end
+    status, = publication_result(edit_exit: 1)
+    refute status.success?
+  end
 end
