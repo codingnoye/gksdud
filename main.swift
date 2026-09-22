@@ -15,7 +15,7 @@ struct TargetKey {
 let targets = zip(13...20, [105, 107, 113, 106, 64, 79, 80, 90]).map {
     TargetKey(name: "F\($0.0)", usage: 0x700000068 + UInt64($0.0 - 13), keyCode: $0.1)
 }
-let sources: [UInt64] = [0x7000000e7, 0x7000000e6, 0x700000039]
+let sources: [UInt64] = [0x7000000e7, 0x7000000e6, 0x700000039, 0x7000000e4]
 typealias Mapping = [String: NSNumber]
 
 func targetConflict(_ mappings: [Mapping], source: UInt64, target: UInt64, owned: [String: String]?) -> Bool {
@@ -1059,6 +1059,7 @@ if CommandLine.arguments.dropFirst().first == "--install-update" {
     do { try runShortcutRestoreTests() } catch { fputs("Shortcut tests failed: \(error)\n", stderr); exit(1) }
     runFeatureTests()
     runKeyboardTests()
+    runRightControlTests()
     for initial in [false, true] {
         for holdEnabled in [false, true] {
             var caps = EnglishCapsState()

@@ -99,7 +99,7 @@ extension AppDelegate {
         general.addArrangedSubview(pressRow)
         hint("버튼을 뗄 때가 아닌 누를 때 전환하도록 해 더 빠르게 전환합니다.\n글자 씹힘도 더 개선됩니다.", in: general)
         separator(in: general)
-        picker.addItems(withTitles: ["우측 Command ⌘", "우측 Option ⌥", "Caps Lock ⇪"])
+        picker.addItems(withTitles: ["우측 Command ⌘", "우측 Option ⌥", "Caps Lock ⇪", "우측 Control ⌃"])
         picker.selectItem(at: sources.firstIndex(of: engine.source) ?? 0)
         picker.target = self; picker.action = #selector(selectionChanged)
         row("한영 키", [picker], in: general)

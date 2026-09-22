@@ -297,6 +297,44 @@ func runKeyboardTests() {
     print("PASS: keyboard discovery/replacement, default and overrides, persistent disconnected choices, partial failure isolation, warning recovery, verified undo, identity stability")
 }
 
+func runRightControlTests() {
+    func mapping(_ source: UInt64, _ target: UInt64) -> Mapping { [srcKey: NSNumber(value: source), dstKey: NSNumber(value: target)] }
+    let rightControl: UInt64 = 0x7000000e4, leftControl: UInt64 = 0x7000000e0
+    let suite = "io.gksdud.right-control-tests.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let original = [mapping(leftControl, 0x7000000e2), mapping(rightControl, 0x7000000e3)]
+    let keyboard = TestKeyboard("control", mappings: original)
+    let engine = Engine(defaults: defaults, discover: { [keyboard] })
+    precondition(engine.source == sources[0], "The default remains right Command")
+    precondition(sources.contains(rightControl), "Right Control must be selectable")
+    for target in targets {
+        defaults.set(target.name, forKey: "target")
+        defaults.set(String(sources[0]), forKey: "source")
+        precondition((try! engine.reconcile()) == 1)
+        defaults.set(String(rightControl), forKey: "source")
+        precondition((try! engine.reconcile()) == 1)
+        precondition(keyboard.mappings.count == 2 && keyboard.mappings.contains(mapping(rightControl, target.usage)),
+            "Changing to right Control removes the previous owned mapping")
+        precondition(keyboard.mappings.contains(original[0]), "Left Control mapping must stay unchanged")
+        let restarted = Engine(defaults: defaults, discover: { [keyboard] })
+        precondition(restarted.source == rightControl && restarted.target.name == target.name)
+        let writes = keyboard.writes
+        precondition((try! restarted.reconcile()) == 1 && keyboard.writes == writes, "Restart keeps the selected mapping")
+        defaults.set(String(sources[1]), forKey: "source")
+        precondition((try! restarted.reconcile()) == 1)
+        precondition(original.allSatisfy { keyboard.mappings.contains($0) }, "Changing away restores the original Control mapping")
+        defaults.set(String(rightControl), forKey: "source")
+        _ = try! restarted.reconcile()
+        defaults.set(false, forKey: "active")
+        _ = try! restarted.reconcile()
+        precondition(keyboard.mappings.count == original.count && original.allSatisfy { keyboard.mappings.contains($0) },
+            "Disable restores both original Control mappings")
+        defaults.set(true, forKey: "active")
+    }
+    print("PASS: right Control across F13-F20, left Control preservation, source changes, saved selection, restart, disable restoration")
+}
+
 // Renders native UI against fake devices; never opens a real HID client or applies system settings.
 func renderKeyboardUI(to directory: String) throws {
     let app = NSApplication.shared
@@ -376,6 +414,22 @@ func renderKeyboardUI(to directory: String) throws {
     delegate.refreshUpdates()
     precondition(delegate.tabButtons[3].accessibilityLabel() == "gksdud 탭" && delegate.updateButton.isHidden && updateEntry.isHidden)
     defaults.set(false, forKey: "active")
+    delegate.resetSelection()
+    for (title, usage): (String, UInt64) in [("우측 Command ⌘", 0x7000000e7), ("우측 Option ⌥", 0x7000000e6),
+                                          ("Caps Lock ⇪", 0x700000039), ("우측 Control ⌃", 0x7000000e4)] {
+        delegate.picker.selectItem(withTitle: title)
+        precondition(delegate.picker.sendAction(delegate.picker.action, to: delegate.picker.target))
+        precondition(engine.source == usage, "The selected label must save the matching HID key")
+        delegate.picker.selectItem(at: 0)
+        delegate.resetSelection()
+        precondition(delegate.picker.titleOfSelectedItem == title, "Saved key selection must be restored")
+    }
+    delegate.selectTab(0)
+    for (name, appearance) in [("light", NSAppearance.Name.aqua), ("dark", NSAppearance.Name.darkAqua)] {
+        delegate.window.appearance = NSAppearance(named: appearance)
+        try save(delegate.window.contentView!, "right-control-\(name).png")
+    }
+    print("PASS: source picker actions and saved selection for right Command, right Option, Caps Lock and right Control")
     for mode in [1, 2, 1] {
         // Exercise real checkbox actions with activation off so no live tap is installed.
         delegate.specialButtons[mode - 1].performClick(nil)
