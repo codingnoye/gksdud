@@ -16,8 +16,8 @@ end
 repo = ARGV.fetch(0, '')
 abort 'Usage: ruby scripts/prepare-release.rb OWNER/REPO [archive.zip]' unless
   ARGV.length.between?(1, 2) && repo.match?(/\A[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*\z/)
-root = File.expand_path('..', __dir__)
-version = capture!('/usr/libexec/PlistBuddy', '-c', 'Print :CFBundleShortVersionString', "#{root}/Info.plist")
+root = File.expand_path(ENV.fetch('GKSDUD_SOURCE_ROOT', File.expand_path('..', __dir__)))
+version = ENV.fetch('GKSDUD_APP_VERSION') { capture!('/usr/libexec/PlistBuddy', '-c', 'Print :CFBundleShortVersionString', "#{root}/Info.plist") }
 metadata = ReleaseMetadata.new(version, ENV.fetch('GKSDUD_RELEASE_TAG', "v#{version}"))
 filename = metadata.filename
 archive = File.expand_path(ARGV[1] || "#{root}/outputs/#{filename}")
@@ -40,6 +40,7 @@ Dir.mktmpdir('gksdud-release-') do |stage|
   capture!('/usr/bin/codesign', '--verify', '--deep', '--strict', '--all-architectures', '-R', "=#{requirement}", app)
   %w[CFBundleShortVersionString CFBundleVersion CFBundleIdentifier].each do |key|
     expected = capture!('/usr/libexec/PlistBuddy', '-c', "Print :#{key}", "#{root}/Info.plist")
+    expected = version if key == 'CFBundleShortVersionString'
     actual = capture!('/usr/libexec/PlistBuddy', '-c', "Print :#{key}", "#{app}/Contents/Info.plist")
     abort "Archive #{key} does not match source" unless expected == actual
   end

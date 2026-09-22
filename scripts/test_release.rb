@@ -4,6 +4,7 @@ require 'json'
 require 'tmpdir'
 require 'open3'
 require_relative 'release-metadata'
+require_relative 'resolve-release'
 
 class ReleaseTests < Minitest::Test
   ROOT = File.expand_path('..', __dir__)
@@ -12,7 +13,7 @@ class ReleaseTests < Minitest::Test
     %w[main v1.2.1 pre-v.1.2.1 pre-v1.2.1 pre-v1.2.0-beta.1 pre-v.1.2.0-beta.1 ../1.2.0].each do |tag|
       assert_raises(ArgumentError) { ReleaseMetadata.new('1.2.0', tag) }
     end
-    ["1.2.0\n", '1.2', '1.2.0-beta.1'].each do |version|
+    ["1.2.0\n", '1.2', '1.2.0-beta.1', '01.2.0', '1.02.0', '1.2.00'].each do |version|
       assert_raises(ArgumentError) { ReleaseMetadata.new(version) }
     end
   end
@@ -39,28 +40,99 @@ class ReleaseTests < Minitest::Test
     end
   end
 
-  def test_workflow_validates_pushed_tags_before_building
-    workflow = YAML.load_file("#{ROOT}/.github/workflows/release.yml")
-    step = workflow.fetch('jobs').fetch('release').fetch('steps').find { |item| item['id'] == 'version' }
-    version, status = Open3.capture2e('/usr/libexec/PlistBuddy', '-c', 'Print :CFBundleShortVersionString', "#{ROOT}/Info.plist")
-    assert status.success?, version
-    version = version.strip
-    Dir.mktmpdir('gksdud-tag-test-') do |dir|
-      ["v#{version}", "pre-v#{version}", "pre-v.#{version}", 'pre-v999.0.0', 'pre-v.999.0.0'].each do |tag|
-        output_path = "#{dir}/#{tag}"
-        env = { 'GITHUB_EVENT_NAME' => 'push', 'GITHUB_REF_NAME' => tag, 'GITHUB_OUTPUT' => output_path }
-        output, result = Open3.capture2e(env, '/bin/bash', '-c', step.fetch('run'), chdir: ROOT)
-        if tag.include?('999.0.0')
-          refute result.success?, 'Mismatched tag unexpectedly accepted'
-          assert_empty File.read(output_path)
-        else
-          assert result.success?, output
-          actual = File.readlines(output_path).map { |line| line.strip.split('=', 2) }.to_h
-          assert_equal version, actual.fetch('version')
-          assert_equal tag, actual.fetch('tag')
-          assert_equal tag.start_with?('pre-v').to_s, actual.fetch('prerelease')
-        end
+  def with_release_repository
+    Dir.mktmpdir('gksdud-source-test-') do |dir|
+      command = lambda do |*args|
+        output, status = Open3.capture2e(*args, chdir: dir)
+        assert status.success?, output
+        output.strip
       end
+      command.call('git', 'init', '-b', 'main')
+      command.call('git', 'config', 'user.name', 'Release Test')
+      command.call('git', 'config', 'user.email', 'test@example.invalid')
+      File.write("#{dir}/Info.plist", '<plist version="1.0"><dict><key>CFBundleShortVersionString</key><string>1.2.0</string></dict></plist>')
+      command.call('git', 'add', 'Info.plist')
+      command.call('git', 'commit', '-m', 'Initial source')
+      command.call('git', 'remote', 'add', 'origin', dir)
+      yield ReleaseSelection.new(dir), command, dir
+    end
+  end
+
+  def test_pushed_tags_must_match_source_version
+    with_release_repository do |selection, _, _|
+      %w[v1.2.0 pre-v1.2.0 pre-v.1.2.0].each do |tag|
+        result = selection.resolve(event: 'push', tag: tag, version: '', source: '', summary: '')
+        assert_equal '1.2.0', result.fetch(:version)
+        assert_equal tag.start_with?('pre-v'), result.fetch(:prerelease)
+      end
+      assert_raises(ArgumentError) { selection.resolve(event: 'push', tag: 'v9.0.0', version: '', source: '', summary: '') }
+    end
+  end
+
+  def test_manual_release_pins_branch_or_commit_and_does_not_create_tags
+    with_release_repository do |selection, git, dir|
+      sha = git.call('git', 'rev-parse', 'HEAD')
+      %W[main #{sha}].each do |source|
+        result = selection.resolve(event: 'workflow_dispatch', tag: '', version: '1.3.0', source: source, summary: 'Fix input')
+        assert_equal sha, result.fetch(:source_sha)
+        assert_equal 'v1.3.0', result.fetch(:tag)
+        assert_equal false, result.fetch(:tag_exists)
+      end
+      assert_empty git.call('git', 'tag', '--list')
+      assert_includes File.read("#{dir}/Info.plist"), '<string>1.2.0</string>'
+      File.write("#{dir}/next", 'next source')
+      git.call('git', 'add', 'next')
+      git.call('git', 'commit', '-m', 'Move branch')
+      result = selection.resolve(event: 'workflow_dispatch', tag: '', version: '1.3.0', source: sha, summary: 'Pinned release')
+      assert_equal sha, result.fetch(:source_sha)
+    end
+  end
+
+  def test_existing_lightweight_and_annotated_tags_are_never_retargeted
+    with_release_repository do |selection, git, dir|
+      %w[lightweight annotated].each_with_index do |kind, index|
+        version = "1.3.#{index}"
+        args = ['git', 'tag']
+        args += ['-a', '-m', 'Release'] if kind == 'annotated'
+        git.call(*args, "v#{version}")
+        result = selection.resolve(event: 'workflow_dispatch', tag: '', version: version, source: 'main', summary: 'Fix input')
+        assert_equal true, result.fetch(:tag_exists)
+      end
+      File.write("#{dir}/next", 'different source')
+      git.call('git', 'add', 'next')
+      git.call('git', 'commit', '-m', 'Change source')
+      %w[1.3.0 1.3.1].each do |version|
+        error = assert_raises(RuntimeError) { selection.resolve(event: 'workflow_dispatch', tag: '', version: version, source: 'main', summary: 'Fix input') }
+        assert_includes error.message, 'different commit'
+      end
+    end
+  end
+
+  def test_manual_release_rejects_missing_summary_bad_version_or_source
+    with_release_repository do |selection, _, _|
+      base = { event: 'workflow_dispatch', tag: '', version: '1.3.0', source: 'main', summary: 'Fix input' }
+      [{ summary: '' }, { version: '1.03.0' }, { source: '--upload-pack=nope' }, { source: 'missing' }].each do |change|
+        assert_raises(StandardError) { selection.resolve(**base.merge(change)) }
+      end
+    end
+  end
+
+  def test_requested_version_is_applied_only_to_selected_checkout
+    workflow = YAML.load_file("#{ROOT}/.github/workflows/release.yml")
+    step = workflow.fetch('jobs').fetch('release').fetch('steps').find { |item| item['name'] == 'Prepare selected source version' }
+    Dir.mktmpdir('gksdud-selected-version-') do |dir|
+      Dir.mkdir("#{dir}/release-source")
+      original = File.read("#{ROOT}/Info.plist")
+      File.write("#{dir}/Info.plist", original)
+      File.write("#{dir}/release-source/Info.plist", original)
+      File.write("#{dir}/release-source/LICENSE", 'Test license')
+      File.write("#{dir}/release-source/build.sh", 'true')
+      output, status = Open3.capture2e({ 'RELEASE_VERSION' => '9.8.7' }, '/bin/bash', '-c', step.fetch('run'), chdir: dir)
+      assert status.success?, output
+      version, status = Open3.capture2e('/usr/libexec/PlistBuddy', '-c', 'Print :CFBundleShortVersionString', "#{dir}/release-source/Info.plist")
+      assert status.success?, version
+      assert_equal '9.8.7', version.strip
+      assert_equal original, File.read("#{dir}/Info.plist")
     end
   end
 
@@ -77,6 +149,7 @@ class ReleaseTests < Minitest::Test
       File.chmod(0755, "#{dir}/gh")
       env = metadata.outputs.transform_keys { |key| key.to_s.upcase }.transform_values(&:to_s)
       env.merge!('PATH' => "#{dir}:#{ENV.fetch('PATH')}", 'GITHUB_REPOSITORY' => 'codingnoye/gksdud',
+                 'SOURCE_ROOT' => 'release-source',
                  'CAPTURE' => "#{dir}/args.json")
       output, status = Open3.capture2e(env, '/bin/bash', '-c', step.fetch('run'), chdir: ROOT)
       assert status.success?, output
@@ -89,8 +162,8 @@ class ReleaseTests < Minitest::Test
     assert_equal ['release', 'create', 'v1.2.0'], args.first(3)
     assert_includes args, '--draft'
     refute_includes args, '--prerelease'
-    assert_includes args, 'outputs/gksdud-1.2.0-macos-universal.zip'
-    assert_includes args, 'outputs/release-1.2.0/SHA256SUMS'
+    assert_includes args, 'release-source/outputs/gksdud-1.2.0-macos-universal.zip'
+    assert_includes args, 'release-source/outputs/release-1.2.0/SHA256SUMS'
     assert_includes args, '.github/RELEASE_NOTES.md'
     assert_includes args, '--verify-tag'
   end
@@ -102,8 +175,8 @@ class ReleaseTests < Minitest::Test
       assert_includes args, '--prerelease'
       assert_includes args, '--latest=false'
       refute_includes args, '--draft'
-      assert_includes args, 'outputs/gksdud-1.2.0-pre-macos-universal.zip'
-      assert_includes args, 'outputs/release-1.2.0-pre/SHA256SUMS'
+      assert_includes args, 'release-source/outputs/gksdud-1.2.0-pre-macos-universal.zip'
+      assert_includes args, 'release-source/outputs/release-1.2.0-pre/SHA256SUMS'
       assert_includes args, '.github/PRERELEASE_NOTES.md'
       assert_includes args, '--generate-notes'
       assert_includes args, '--verify-tag'
@@ -114,15 +187,20 @@ class ReleaseTests < Minitest::Test
     workflow = YAML.load_file("#{ROOT}/.github/workflows/release.yml")
     triggers = workflow.fetch('on') { workflow.fetch(true) }
     inputs = triggers.fetch('workflow_dispatch').fetch('inputs')
-    assert_equal false, inputs.fetch('publish_stable').fetch('default')
+    assert_equal %w[release_summary source_ref version], inputs.keys.sort
+    assert_equal 'main', inputs.fetch('source_ref').fetch('default')
     steps = workflow.fetch('jobs').fetch('release').fetch('steps')
     publish = steps.find { |step| step['name'] == 'Publish verified stable draft' }
     tap = steps.find { |step| step['name'] == 'Verify published assets and open Homebrew update PR' }
-    assert_equal "github.event_name == 'workflow_dispatch' && inputs.publish_stable && steps.version.outputs.prerelease == 'false'", publish.fetch('if')
+    assert_equal "github.event_name == 'workflow_dispatch' && steps.version.outputs.prerelease == 'false'", publish.fetch('if')
     assert_equal publish.fetch('if'), tap.fetch('if')
     assert_operator steps.index(publish), :>, steps.index(steps.find { |step| step['id'] == 'existing' })
     assert_operator steps.index(tap), :>, steps.index(publish)
     assert_includes tap.fetch('run'), 'python3 scripts/update-tap.py "$RELEASE_TAG"'
+    create_tag = steps.find { |step| step['name'] == 'Create tag for the verified source' }
+    verify_archive = steps.find { |step| step['name'] == 'Verify archive and prepare release metadata' }
+    assert_operator steps.index(create_tag), :>, steps.index(verify_archive)
+    assert_equal 'false', create_tag.fetch('if')[/== '([^']+)'/, 1]
   end
 
   def publication_result(draft: true, prerelease: false, actual_tag: 'v1.2.0', summary: 'Input fixes', view_exit: 0, edit_exit: 0)
