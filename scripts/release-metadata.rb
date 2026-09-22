@@ -3,9 +3,9 @@ class ReleaseMetadata
   attr_reader :version, :tag
 
   def initialize(version, tag = "v#{version}")
-    raise ArgumentError, 'Expected numeric release version' unless version.match?(/\A\d+\.\d+\.\d+\z/)
+    raise ArgumentError, 'Expected numeric release version' unless version.match?(/\A(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)\z/)
     unless ["v#{version}", "pre-v#{version}", "pre-v.#{version}"].include?(tag)
-      raise ArgumentError, 'Tag must be vVERSION or pre-vVERSION (legacy: pre-v.VERSION) and match Info.plist'
+      raise ArgumentError, 'Tag must be vVERSION or pre-vVERSION (legacy: pre-v.VERSION) and match the release version'
     end
     @version = version
     @tag = tag

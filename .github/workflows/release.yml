@@ -5,16 +5,18 @@ on:
     tags: ['v*', 'pre-v*']
   workflow_dispatch:
     inputs:
-      release_tag:
-        description: Existing vVERSION or pre-vVERSION tag to build or verify using the latest workflow
+      source_ref:
+        description: Branch or commit to release
         required: true
         type: string
-      publish_stable:
-        description: Publish the verified stable draft and open the Homebrew update PR
-        type: boolean
-        default: false
+        default: main
+      version:
+        description: New stable version (for example 1.3.2)
+        required: true
+        type: string
       release_summary:
-        description: User-facing summary required when publishing a stable release
+        description: User-facing release summary
+        required: true
         type: string
 
 permissions:
@@ -40,30 +42,31 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Validate tag and release prerequisites
+      - name: Resolve source and validate release version
         id: version
         env:
-          REQUESTED_TAG: ${{ inputs.release_tag }}
-          PUBLISH_STABLE: ${{ inputs.publish_stable }}
+          SOURCE_REF: ${{ inputs.source_ref }}
+          REQUESTED_VERSION: ${{ inputs.version }}
           RELEASE_SUMMARY: ${{ inputs.release_summary }}
         run: |
           set -euo pipefail
-          version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Info.plist)
-          tag="$GITHUB_REF_NAME"
-          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
-            tag="$REQUESTED_TAG"
-          fi
-          ruby scripts/release-metadata.rb "$version" "$tag" >> "$GITHUB_OUTPUT"
-          if [[ "${PUBLISH_STABLE:-false}" == true ]]; then
-            [[ "$GITHUB_EVENT_NAME" == workflow_dispatch && "$tag" == "v$version" ]]
-            ruby -e 'abort "Release summary is required" if ENV.fetch("RELEASE_SUMMARY", "").strip.empty?'
-          fi
-          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
-            git fetch --depth=1 origin "refs/tags/$tag:refs/tags/$tag"
-            # Never relabel changed application code as an existing version.
-            git diff --exit-code "$tag" HEAD -- '*.swift' Bridge.h Info.plist build.sh LICENSE Resources
-          fi
-          test -s LICENSE
+          # Never relabel changed application code as an existing version.
+          ruby scripts/resolve-release.rb >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ steps.version.outputs.source_sha }}
+          path: release-source
+          persist-credentials: false
+
+      - name: Prepare selected source version
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          test -s release-source/LICENSE
+          test -f release-source/build.sh
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $RELEASE_VERSION" release-source/Info.plist
 
       - name: Import fixed signing identity into temporary keychain
         env:
@@ -89,17 +92,22 @@ jobs:
           actual=$(openssl x509 -in signing/local-certificate.pem -noout -fingerprint -sha1 | cut -d= -f2 | tr -d ':')
           expected=$(tr -d '\n\r' < signing/release-certificate.sha1)
           [[ "$actual" == "$expected" ]] || { echo 'Signing identity changed; refusing release.'; exit 1; }
+          mkdir -p release-source/signing
+          cp signing/local-certificate.pem release-source/signing/local-certificate.pem
           # Ephemeral GitHub-hosted runner only; code signing policy, not TLS trust.
           sudo security add-trusted-cert -d -r trustRoot -p codeSign -k "$keychain" signing/local-certificate.pem
           rm -f "$certificate"
 
       - name: Build and self-test Universal app
+        working-directory: release-source
         env:
           GKSDUD_SIGN_MODE: local
+          GKSDUD_APP_VERSION: ${{ steps.version.outputs.version }}
         run: bash build.sh
 
       - name: Name prerelease archive
         if: steps.version.outputs.prerelease == 'true'
+        working-directory: release-source
         env:
           VERSION: ${{ steps.version.outputs.version }}
           FILENAME: ${{ steps.version.outputs.filename }}
@@ -108,7 +116,17 @@ jobs:
       - name: Verify archive and prepare release metadata
         env:
           GKSDUD_RELEASE_TAG: ${{ steps.version.outputs.tag }}
+          GKSDUD_SOURCE_ROOT: ${{ github.workspace }}/release-source
+          GKSDUD_APP_VERSION: ${{ steps.version.outputs.version }}
         run: ruby scripts/prepare-release.rb "$GITHUB_REPOSITORY"
+
+      - name: Create tag for the verified source
+        if: steps.version.outputs.tag_exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+          SOURCE_SHA: ${{ steps.version.outputs.source_sha }}
+        run: gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" -f "ref=refs/tags/$RELEASE_TAG" -f "sha=$SOURCE_SHA"
 
       - name: Verify existing release without overwriting it
         id: existing
@@ -117,6 +135,8 @@ jobs:
           TAG: ${{ steps.version.outputs.tag }}
           FILENAME: ${{ steps.version.outputs.filename }}
           GKSDUD_RELEASE_TAG: ${{ steps.version.outputs.tag }}
+          GKSDUD_SOURCE_ROOT: ${{ github.workspace }}/release-source
+          GKSDUD_APP_VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
           releases=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases" --jq '.[].tag_name')
@@ -146,6 +166,7 @@ jobs:
           PRERELEASE: ${{ steps.version.outputs.prerelease }}
           ASSET_VERSION: ${{ steps.version.outputs.asset_version }}
           FILENAME: ${{ steps.version.outputs.filename }}
+          SOURCE_ROOT: ${{ github.workspace }}/release-source
         run: |
           set -euo pipefail
           options=(--draft --title "gksdud $VERSION" --notes-file .github/RELEASE_NOTES.md)
@@ -153,13 +174,13 @@ jobs:
             options=(--prerelease --latest=false --title "gksdud $VERSION Pre-release" --notes-file .github/PRERELEASE_NOTES.md --generate-notes)
           fi
           gh release create "$TAG" \
-            "outputs/$FILENAME" \
-            "outputs/release-$ASSET_VERSION/SHA256SUMS" \
+            "$SOURCE_ROOT/outputs/$FILENAME" \
+            "$SOURCE_ROOT/outputs/release-$ASSET_VERSION/SHA256SUMS" \
             --repo "$GITHUB_REPOSITORY" --verify-tag \
             "${options[@]}"
 
       - name: Publish verified stable draft
-        if: github.event_name == 'workflow_dispatch' && inputs.publish_stable && steps.version.outputs.prerelease == 'false'
+        if: github.event_name == 'workflow_dispatch' && steps.version.outputs.prerelease == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_SUMMARY: ${{ inputs.release_summary }}
@@ -167,7 +188,7 @@ jobs:
         run: ruby scripts/publish-release.rb "$GITHUB_REPOSITORY" "$RELEASE_TAG"
 
       - name: Verify published assets and open Homebrew update PR
-        if: github.event_name == 'workflow_dispatch' && inputs.publish_stable && steps.version.outputs.prerelease == 'false'
+        if: github.event_name == 'workflow_dispatch' && steps.version.outputs.prerelease == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
           TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
