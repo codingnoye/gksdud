@@ -51,6 +51,8 @@ struct SavedKeyboard: Codable, Equatable {
     var name: String
     var detail: String
     var mode: KeyboardMode
+    // nil follows the global Korean/English key.
+    var source: UInt64? = nil
 }
 
 protocol KeyboardDevice: AnyObject {
@@ -179,6 +181,16 @@ final class KeyboardManager {
         guard known[key] != nil else { return }
         known[key]?.mode = mode; saveKnown()
     }
+    func setSource(_ source: UInt64?, for key: String) {
+        guard known[key] != nil, known[key]?.source != source else { return }
+        known[key]?.source = source; saveKnown()
+    }
+    // A pending override lets callers check conflicts before saving a choice.
+    func source(for device: KeyboardDevice, default fallback: UInt64, override: (key: String, source: UInt64?)? = nil) -> UInt64 {
+        let key = device.identity.key
+        if let override, override.key == key { return override.source ?? fallback }
+        return known[key]?.source ?? fallback
+    }
     func isSelected(_ device: KeyboardDevice) -> Bool {
         (known[device.identity.key]?.mode ?? .default).applies(defaultEnabled: defaultEnabled)
     }
@@ -188,7 +200,7 @@ final class KeyboardManager {
         var updated = known
         for device in devices {
             let key = device.identity.key
-            updated[key] = SavedKeyboard(key: key, name: device.name, detail: device.identity.detail, mode: known[key]?.mode ?? .default)
+            updated[key] = SavedKeyboard(key: key, name: device.name, detail: device.identity.detail, mode: known[key]?.mode ?? .default, source: known[key]?.source)
         }
         if updated != known { known = updated; saveKnown() }
         return devices
@@ -251,7 +263,7 @@ final class KeyboardManager {
             let selected = active && isSelected(device)
             if selected { next.selected += 1 }
             do {
-                if selected { try apply(device, source: source, target: target); next.applied += 1 }
+                if selected { try apply(device, source: self.source(for: device, default: source), target: target); next.applied += 1 }
                 else { try restore(device) }
                 failures.removeValue(forKey: device.registryID)
             } catch {

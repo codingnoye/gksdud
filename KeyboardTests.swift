@@ -270,6 +270,28 @@ func runKeyboardTests() {
     _ = repair()
     precondition(reconnected.mappings.contains(mapping(command, targets[4].usage)), "Off restores existing external mapping")
 
+    // Per-keyboard Korean/English key overrides the global key on that keyboard only.
+    let perKeyA = TestKeyboard("7", serial: "per-key-a"), perKeyB = TestKeyboard("8", serial: "per-key-b")
+    devices = [perKeyA, perKeyB]
+    _ = repair()
+    precondition(perKeyA.mappings == [mapping(command, f19)] && perKeyB.mappings == [mapping(command, f19)])
+    manager.setSource(option, for: perKeyB.identity.key)
+    _ = repair()
+    precondition(perKeyA.mappings == [mapping(command, f19)], "Other keyboards keep the global key")
+    precondition(perKeyB.mappings == [mapping(option, f19)], "Override replaces only our old source mapping")
+    precondition(KeyboardManager(defaults: defaults, discover: discover).known[perKeyB.identity.key]?.source == option,
+        "Per-keyboard key survives restart")
+    _ = repair(sources[2])
+    precondition(perKeyA.mappings == [mapping(sources[2], f19)] && perKeyB.mappings == [mapping(option, f19)],
+        "Changing the global key does not affect overrides")
+    manager.setSource(nil, for: perKeyB.identity.key)
+    _ = repair(sources[2])
+    precondition(perKeyB.mappings == [mapping(sources[2], f19)], "Clearing an override follows the global key again")
+    _ = repair(sources[2], active: false)
+    precondition(perKeyA.mappings.isEmpty && perKeyB.mappings.isEmpty)
+    let legacy = try! JSONDecoder().decode(SavedKeyboard.self, from: Data(#"{"key":"k","name":"n","detail":"d","mode":"on"}"#.utf8))
+    precondition(legacy.source == nil, "Saved keyboards from older versions follow the global key")
+
     let a = KeyboardIdentity(properties: ["Product": "Keyboard", "VendorID": "2", "ProductID": "4", "SerialNumber": "S", "LocationID": "1"])
     let b = KeyboardIdentity(properties: ["Product": "Keyboard", "VendorID": "2", "ProductID": "4", "SerialNumber": "S", "LocationID": "2"])
     precondition(a.key == b.key, "Serial identity survives a port change")
@@ -462,6 +484,34 @@ func renderKeyboardUI(to directory: String) throws {
     delegate.refreshKeyboardState()
     delegate.window.appearance = NSAppearance(named: .aqua)
     try save(delegate.window.contentView!, "settings-recovered.png")
-    print("PASS: native default segments, per-keyboard segment actions, disconnected editing/reconnection, warning UI recovery")
+
+    // Keyboard dropdown: Default edits the global key, a keyboard edits only its override.
+    // Activation stays off, so picker actions save choices without touching system shortcuts.
+    delegate.resetSelection()
+    precondition(delegate.enabled.state == .off)
+    precondition(delegate.keyboardScopePicker.numberOfItems == 1 + engine.keyboards.known.count)
+    precondition(delegate.selectedKeyboardScope == nil && delegate.picker.numberOfItems == sources.count)
+    func choose(_ popup: NSPopUpButton, _ index: Int) {
+        popup.selectItem(at: index); _ = popup.sendAction(popup.action, to: popup.target)
+    }
+    let virtualScope = delegate.keyboardScopePicker.itemArray.firstIndex { $0.representedObject as? String == virtual.identity.key }!
+    choose(delegate.keyboardScopePicker, virtualScope)
+    precondition(delegate.selectedKeyboardScope == virtual.identity.key)
+    precondition(delegate.picker.numberOfItems == sources.count + 1 && delegate.picker.indexOfSelectedItem == 0,
+        "A keyboard without an override shows the Default row")
+    choose(delegate.picker, 2)
+    precondition(engine.keyboards.known[virtual.identity.key]?.source == sources[1] && engine.source == sources[0])
+    delegate.refreshKeyboardState()
+    precondition(delegate.selectedKeyboardScope == virtual.identity.key && delegate.picker.indexOfSelectedItem == 2,
+        "Periodic refresh keeps the chosen keyboard")
+    try save(delegate.window.contentView!, "settings-keyboard-key.png")
+    choose(delegate.picker, 0)
+    precondition(engine.keyboards.known[virtual.identity.key]?.source == nil)
+    choose(delegate.keyboardScopePicker, 0)
+    choose(delegate.picker, 2)
+    precondition(engine.source == sources[2] && delegate.picker.numberOfItems == sources.count)
+    choose(delegate.picker, 0)
+    precondition(engine.source == sources[0])
+    print("PASS: native default segments, per-keyboard segment actions, disconnected editing/reconnection, warning UI recovery, per-keyboard Korean/English key dropdown")
     print("Rendered UI to \(directory)")
 }

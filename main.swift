@@ -15,7 +15,14 @@ struct TargetKey {
 let targets = zip(13...20, [105, 107, 113, 106, 64, 79, 80, 90]).map {
     TargetKey(name: "F\($0.0)", usage: 0x700000068 + UInt64($0.0 - 13), keyCode: $0.1)
 }
-let sources: [UInt64] = [0x7000000e7, 0x7000000e6, 0x700000039, 0x7000000e4]
+// Name and usage live in one list, so a new key cannot shift the picker titles.
+struct SourceKey {
+    let name: String
+    let usage: UInt64
+}
+let sourceKeys = [SourceKey(name: "우측 Command ⌘", usage: 0x7000000e7), SourceKey(name: "우측 Option ⌥", usage: 0x7000000e6),
+                  SourceKey(name: "Caps Lock ⇪", usage: 0x700000039), SourceKey(name: "우측 Control ⌃", usage: 0x7000000e4)]
+let sources = sourceKeys.map(\.usage)
 typealias Mapping = [String: NSNumber]
 
 func targetConflict(_ mappings: [Mapping], source: UInt64, target: UInt64, owned: [String: String]?) -> Bool {
@@ -99,16 +106,21 @@ final class Engine {
     func services() -> [KeyboardDevice] { (try? keyboards.snapshot()) ?? [] }
     func mappings(_ service: KeyboardDevice) -> [Mapping] { (try? service.readMappings()) ?? [] }
     func id(_ service: KeyboardDevice) -> String { service.registryID }
-    func conflicts(_ source: UInt64, target: TargetKey) -> Bool {
-        services().filter { keyboards.isSelected($0) }.contains { service in mappings(service).contains {
-            let managed = records[id(service)]
-            let owned = managed?["source"] == String(source) && managed?["target"] == $0[dstKey].map { String($0.uint64Value) }
-            return $0[srcKey]?.uint64Value == source && $0[dstKey]?.uint64Value != target.usage && !owned
-        } }
-    }
-    func targetInUse(_ source: UInt64, target: TargetKey) -> Bool {
+    typealias SourceOverride = (key: String, source: UInt64?)
+    func conflicts(_ defaultSource: UInt64, target: TargetKey, override: SourceOverride? = nil) -> Bool {
         services().filter { keyboards.isSelected($0) }.contains { service in
-            targetConflict(mappings(service), source: source, target: target.usage, owned: records[id(service)])
+            let source = keyboards.source(for: service, default: defaultSource, override: override)
+            return mappings(service).contains {
+                let managed = records[id(service)]
+                let owned = managed?["source"] == String(source) && managed?["target"] == $0[dstKey].map { String($0.uint64Value) }
+                return $0[srcKey]?.uint64Value == source && $0[dstKey]?.uint64Value != target.usage && !owned
+            }
+        }
+    }
+    func targetInUse(_ defaultSource: UInt64, target: TargetKey, override: SourceOverride? = nil) -> Bool {
+        services().filter { keyboards.isSelected($0) }.contains { service in
+            let source = keyboards.source(for: service, default: defaultSource, override: override)
+            return targetConflict(mappings(service), source: source, target: target.usage, owned: records[id(service)])
         }
     }
     static func ownsShortcut(_ raw: Any?, keyCode: Int) -> Bool {
@@ -376,6 +388,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     let keyboardWarning = NSTextField(wrappingLabelWithString: "")
     let keyboardWarningRow = NSStackView()
     let warningBadge = WarningBadgeView()
+    let keyboardScopePicker = NSPopUpButton()
+    var keyboardScopeSignature = ""
     let picker = NSPopUpButton()
     let targetPicker = NSPopUpButton()
     let testInput = NSTextField()
@@ -775,8 +789,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         warningBadge.isHidden = warning == nil
         enabled.toolTip = warning
         keyboardSettings?.refresh()
+        refreshKeyboardScopes()
         updateInputIndicator()
     }
+    // nil edits the global key; otherwise the saved identity of one keyboard.
+    var selectedKeyboardScope: String? { keyboardScopePicker.selectedItem?.representedObject as? String }
+    // While a keyboard is selected, the first source row follows the global key.
+    var pickedSource: UInt64? {
+        let index = max(0, picker.indexOfSelectedItem)
+        guard selectedKeyboardScope != nil else { return sources[index] }
+        return index > 0 ? sources[index - 1] : nil
+    }
+    func refreshKeyboardScopes() {
+        let manager = engine.keyboards
+        let keyboards = manager.keyboards
+        let signature = keyboards.map { "\($0.key)|\($0.name)|\(manager.connected.contains($0.key))" }.joined(separator: "\n")
+        guard signature != keyboardScopeSignature || keyboardScopePicker.numberOfItems == 0 else { return }
+        keyboardScopeSignature = signature
+        let selected = selectedKeyboardScope
+        // Build items directly: addItem(withTitle:) merges keyboards with the same name.
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        menu.addItem(NSMenuItem(title: "기본값", action: nil, keyEquivalent: ""))
+        for keyboard in keyboards {
+            let connected = manager.connected.contains(keyboard.key)
+            let entry = NSMenuItem(title: connected ? keyboard.name : "\(keyboard.name) (연결 안 됨)", action: nil, keyEquivalent: "")
+            entry.representedObject = keyboard.key
+            entry.toolTip = keyboard.detail
+            menu.addItem(entry)
+        }
+        keyboardScopePicker.menu = menu
+        let index = selected.flatMap { key in menu.items.firstIndex { $0.representedObject as? String == key } } ?? 0
+        keyboardScopePicker.selectItem(at: index)
+        if selectedKeyboardScope != selected { refreshSourcePicker() }
+    }
+    func refreshSourcePicker() {
+        picker.removeAllItems()
+        let global = sources.firstIndex(of: engine.source) ?? 0
+        if let key = selectedKeyboardScope {
+            picker.addItem(withTitle: "기본값 (\(sourceKeys[global].name))")
+            picker.addItems(withTitles: sourceKeys.map(\.name))
+            let saved = engine.keyboards.known[key]?.source.flatMap { sources.firstIndex(of: $0) }
+            picker.selectItem(at: saved.map { $0 + 1 } ?? 0)
+        } else {
+            picker.addItems(withTitles: sourceKeys.map(\.name))
+            picker.selectItem(at: global)
+        }
+    }
+    @objc func keyboardScopeChanged() { refreshSourcePicker() }
     func updateMenu() {
         if showInMenuBar.state == .off { if let item { NSStatusBar.system.removeStatusItem(item) }; item = nil; return }
         guard item == nil else { return }
@@ -959,7 +1019,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         } catch { login.state = SMAppService.mainApp.status == .enabled ? .on : .off; report(error) }
     }
     func resetSelection() {
-        picker.selectItem(at: sources.firstIndex(of: engine.source) ?? 0)
+        refreshKeyboardScopes(); refreshSourcePicker()
         targetPicker.selectItem(withTitle: engine.target.name)
         enabled.state = engine.active ? .on : .off
     }
@@ -973,26 +1033,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         cancelLongPress()
         if enabled.state == .on { applyNow() }
         else {
-            engine.defaults.set(String(sources[picker.indexOfSelectedItem]), forKey: "source")
+            if let key = selectedKeyboardScope { engine.keyboards.setSource(pickedSource, for: key) }
+            else if let source = pickedSource { engine.defaults.set(String(source), forKey: "source") }
             engine.defaults.set(targets[targetPicker.indexOfSelectedItem].name, forKey: "target")
+            resetSelection()
         }
     }
     func applyNow() {
         guard !engine.isUpdatingSettings else { return }
         defer { resetSelection(); refreshKeyboardState() }
-        let source = sources[picker.indexOfSelectedItem]
+        let scope = selectedKeyboardScope
+        let override: Engine.SourceOverride? = scope.map { (key: $0, source: pickedSource) }
+        let source = scope == nil ? pickedSource ?? engine.source : engine.source
         let target = targets[targetPicker.indexOfSelectedItem]
-        if engine.targetInUse(source, target: target) {
+        if engine.targetInUse(source, target: target, override: override) {
             let alert = NSAlert(); alert.messageText = "\(target.name)은 다른 키 매핑에서 사용 중입니다."
             alert.informativeText = "다른 앱과 충돌할 수 있습니다. 대상 키를 바꿔주세요."
             alert.runModal(); resetSelection(); return
         }
-        if engine.conflicts(source, target: target) {
+        if engine.conflicts(source, target: target, override: override) {
             let alert = NSAlert(); alert.messageText = "이 키에 다른 매핑이 있습니다."
             alert.informativeText = "선택한 키를 한영 전환 전용으로 바꿉니다. 다른 앱에서도 이 키의 재매핑을 꺼주세요. 기존 매핑은 해제 시 복원됩니다."
             alert.addButton(withTitle: "변경"); alert.addButton(withTitle: "취소")
             guard alert.runModal() == .alertFirstButtonReturn else { resetSelection(); return }
         }
+        if let override { engine.keyboards.setSource(override.source, for: override.key) }
         do { _ = try engine.apply(source: source, target: target); lastError = ""; stickyError = ""; repairFailed = false; ensureKeyTap(); refreshStatus() } catch { report(error); resetSelection() }
     }
     func restoreNow() {

@@ -3,7 +3,7 @@ import ServiceManagement
 
 extension AppDelegate {
     func buildWindow() {
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 384, height: 636), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 384, height: 700), styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.title = "gksdud"; window.isReleasedWhenClosed = false
         window.delegate = self; window.hidesOnDeactivate = false; window.center()
         let content = window.contentView!
@@ -99,10 +99,15 @@ extension AppDelegate {
         general.addArrangedSubview(pressRow)
         hint("버튼을 뗄 때가 아닌 누를 때 전환하도록 해 더 빠르게 전환합니다.\n글자 씹힘도 더 개선됩니다.", in: general)
         separator(in: general)
-        picker.addItems(withTitles: ["우측 Command ⌘", "우측 Option ⌥", "Caps Lock ⇪", "우측 Control ⌃"])
-        picker.selectItem(at: sources.firstIndex(of: engine.source) ?? 0)
+        keyboardScopePicker.target = self; keyboardScopePicker.action = #selector(keyboardScopeChanged)
+        keyboardScopePicker.setAccessibilityLabel("한영 키를 설정할 키보드")
+        keyboardScopePicker.widthAnchor.constraint(lessThanOrEqualToConstant: 220).isActive = true
+        (keyboardScopePicker.cell as? NSPopUpButtonCell)?.lineBreakMode = .byTruncatingTail
+        refreshKeyboardScopes(); refreshSourcePicker()
         picker.target = self; picker.action = #selector(selectionChanged)
+        row("키보드", [keyboardScopePicker], in: general)
         row("한영 키", [picker], in: general)
+        hint("키보드별로 다른 한영 키를 지정할 수 있습니다.", in: general)
         targetPicker.addItems(withTitles: targets.map(\.name)); targetPicker.selectItem(withTitle: engine.target.name)
         targetPicker.target = self; targetPicker.action = #selector(selectionChanged)
         row("내부 전환 키", [targetPicker], in: general)
