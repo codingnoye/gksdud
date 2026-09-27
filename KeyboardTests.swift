@@ -531,8 +531,11 @@ func renderKeyboardUI(to directory: String) throws {
     precondition(delegate.selectedKeyboardScope == virtual.identity.key)
     precondition(delegate.picker.numberOfItems == sources.count + 1 && delegate.picker.indexOfSelectedItem == 0,
         "A keyboard without an override shows the Default row")
+    // The picker checks above leave the global key on the last key they tried.
+    let globalSource = engine.source
     choose(delegate.picker, 2)
-    precondition(engine.keyboards.known[virtual.identity.key]?.source == sources[1] && engine.source == sources[0])
+    precondition(engine.keyboards.known[virtual.identity.key]?.source == sources[1] && engine.source == globalSource,
+        "A keyboard's key must not change the global key")
     delegate.refreshKeyboardState()
     precondition(delegate.selectedKeyboardScope == virtual.identity.key && delegate.picker.indexOfSelectedItem == 2,
         "Periodic refresh keeps the chosen keyboard")
