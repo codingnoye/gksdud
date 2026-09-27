@@ -185,11 +185,16 @@ final class KeyboardManager {
         guard known[key] != nil, known[key]?.source != source else { return }
         known[key]?.source = source; saveKnown()
     }
-    // A pending override lets callers check conflicts before saving a choice.
-    func source(for device: KeyboardDevice, default fallback: UInt64, override: (key: String, source: UInt64?)? = nil) -> UInt64 {
+    // A choice not saved yet, so callers can check conflicts before saving it.
+    typealias SourceOverride = (key: String, source: UInt64?)
+    func source(for device: KeyboardDevice, default fallback: UInt64, override: SourceOverride? = nil) -> UInt64 {
         let key = device.identity.key
         if let override, override.key == key { return override.source ?? fallback }
         return known[key]?.source ?? fallback
+    }
+    // What a keyboard list shows, so views rebuild their rows only when it changes.
+    func rowSignature(_ keyboards: [SavedKeyboard]) -> String {
+        keyboards.map { "\($0.key)|\($0.name)|\(connected.contains($0.key))" }.joined(separator: "\n")
     }
     func isSelected(_ device: KeyboardDevice) -> Bool {
         (known[device.identity.key]?.mode ?? .default).applies(defaultEnabled: defaultEnabled)

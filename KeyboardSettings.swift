@@ -126,7 +126,7 @@ final class KeyboardSettingsController: NSObject, NSTableViewDataSource, NSTable
         for keyboard in keyboards {
             controls[keyboard.key]?.selectedSegment = modes.firstIndex(of: keyboard.mode)!
         }
-        let signature = keyboards.map { "\($0.key)|\($0.name)|\(manager.connected.contains($0.key))" }.joined(separator: "\n")
+        let signature = manager.rowSignature(keyboards)
         emptyLabel.isHidden = !keyboards.isEmpty
         guard signature != lastRows || table.numberOfRows != keyboards.count else { return }
         lastRows = signature

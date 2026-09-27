@@ -357,6 +357,35 @@ func runRightControlTests() {
     print("PASS: right Control across F13-F20, left Control preservation, source changes, saved selection, restart, disable restoration")
 }
 
+// Conflict checks must use each keyboard's own key, including a choice not saved yet.
+func runPerKeyboardConflictTests() {
+    func mapping(_ source: UInt64, _ target: UInt64) -> Mapping { [srcKey: NSNumber(value: source), dstKey: NSNumber(value: target)] }
+    let command = sources[0], option = sources[1], capsLock = sources[2]
+    let suite = "io.gksdud.per-keyboard-conflict-tests.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+    // Another app remaps Right Option on A and already sends Caps Lock to the target on B.
+    let a = TestKeyboard("conflict-a", serial: "conflict-a", mappings: [mapping(option, 0x7000000e3)])
+    let b = TestKeyboard("conflict-b", serial: "conflict-b", mappings: [mapping(capsLock, f19)])
+    let engine = Engine(defaults: defaults, discover: { [a, b] })
+    let target = targets[6]
+    _ = engine.services()
+    precondition(!engine.conflicts(command, target: target), "The global key is free on both keyboards")
+    precondition(engine.conflicts(command, target: target, override: (key: a.identity.key, source: option)),
+        "A pending choice for A must see A's own Right Option mapping")
+    precondition(!engine.conflicts(command, target: target, override: (key: b.identity.key, source: option)),
+        "The same choice for B has nothing to replace")
+    engine.keyboards.setSource(option, for: a.identity.key)
+    precondition(engine.conflicts(command, target: target), "A saved choice is checked like a pending one")
+    precondition(!engine.conflicts(command, target: target, override: (key: a.identity.key, source: nil)),
+        "Returning A to the default key clears its conflict")
+    precondition(engine.targetInUse(command, target: target), "B already sends Caps Lock to the target")
+    precondition(!engine.targetInUse(command, target: target, override: (key: b.identity.key, source: capsLock)),
+        "Choosing that key for B takes over its own mapping instead of colliding")
+    precondition(a.writes == 0 && b.writes == 0, "Checks never write to a keyboard")
+    print("PASS: per-keyboard conflict checks with saved and pending keys, default fallback, target collisions, no writes")
+}
+
 // Renders native UI against fake devices; never opens a real HID client or applies system settings.
 func renderKeyboardUI(to directory: String) throws {
     let app = NSApplication.shared
@@ -368,7 +397,10 @@ func renderKeyboardUI(to directory: String) throws {
     let virtual = TestKeyboard("preview-2", name: "Karabiner DriverKit VirtualHIDKeyboard 1.8.0", serial: "virtual")
     let disconnected = TestKeyboard("preview-3", name: "SP109 Wireless Keyboard", serial: "external")
     var devices: [KeyboardDevice] = [builtIn, virtual, disconnected]
-    let engine = Engine(defaults: defaults, discover: { devices })
+    // UI actions must never reach the real system shortcut; any attempt fails the run.
+    let noShortcuts = ShortcutPreferences(read: { [:] }, write: { _ in preconditionFailure("UI checks must not write system shortcuts") },
+        activate: { preconditionFailure("UI checks must not activate system shortcuts") })
+    let engine = Engine(defaults: defaults, discover: { devices }, shortcutPreferences: noShortcuts)
     _ = engine.keyboards.reconcile(source: sources[0], target: f19, active: true)
     engine.keyboards.setMode(.on, for: virtual.identity.key)
     engine.keyboards.setMode(.off, for: disconnected.identity.key)
@@ -512,6 +544,20 @@ func renderKeyboardUI(to directory: String) throws {
     precondition(engine.source == sources[2] && delegate.picker.numberOfItems == sources.count)
     choose(delegate.picker, 0)
     precondition(engine.source == sources[0])
-    print("PASS: native default segments, per-keyboard segment actions, disconnected editing/reconnection, warning UI recovery, per-keyboard Korean/English key dropdown")
+    // With activation on, one keyboard's key updates that keyboard at once without the system shortcut.
+    defaults.set(true, forKey: "active"); delegate.resetSelection()
+    precondition(delegate.enabled.state == .on)
+    let externalScope = delegate.keyboardScopePicker.itemArray.firstIndex { $0.representedObject as? String == disconnected.identity.key }!
+    choose(delegate.keyboardScopePicker, externalScope)
+    choose(delegate.picker, 3)
+    precondition(engine.keyboards.known[disconnected.identity.key]?.source == sources[2] && engine.source == sources[0])
+    precondition(disconnected.mappings.contains { $0[srcKey]?.uint64Value == sources[2] && $0[dstKey]?.uint64Value == f19 }
+        && !disconnected.mappings.contains { $0[srcKey]?.uint64Value == sources[0] }, "The new key applies and the old one is restored")
+    choose(delegate.picker, 0)
+    precondition(engine.keyboards.known[disconnected.identity.key]?.source == nil
+        && disconnected.mappings.contains { $0[srcKey]?.uint64Value == sources[0] && $0[dstKey]?.uint64Value == f19 },
+        "Default follows the global key again")
+    defaults.set(false, forKey: "active"); delegate.resetSelection()
+    print("PASS: native default segments, per-keyboard segment actions, disconnected editing/reconnection, warning UI recovery, per-keyboard Korean/English key dropdown, active per-keyboard change without system shortcuts")
     print("Rendered UI to \(directory)")
 }

@@ -106,18 +106,17 @@ final class Engine {
     func services() -> [KeyboardDevice] { (try? keyboards.snapshot()) ?? [] }
     func mappings(_ service: KeyboardDevice) -> [Mapping] { (try? service.readMappings()) ?? [] }
     func id(_ service: KeyboardDevice) -> String { service.registryID }
-    typealias SourceOverride = (key: String, source: UInt64?)
-    func conflicts(_ defaultSource: UInt64, target: TargetKey, override: SourceOverride? = nil) -> Bool {
+    func conflicts(_ defaultSource: UInt64, target: TargetKey, override: KeyboardManager.SourceOverride? = nil) -> Bool {
         services().filter { keyboards.isSelected($0) }.contains { service in
             let source = keyboards.source(for: service, default: defaultSource, override: override)
+            let managed = records[id(service)]
             return mappings(service).contains {
-                let managed = records[id(service)]
                 let owned = managed?["source"] == String(source) && managed?["target"] == $0[dstKey].map { String($0.uint64Value) }
                 return $0[srcKey]?.uint64Value == source && $0[dstKey]?.uint64Value != target.usage && !owned
             }
         }
     }
-    func targetInUse(_ defaultSource: UInt64, target: TargetKey, override: SourceOverride? = nil) -> Bool {
+    func targetInUse(_ defaultSource: UInt64, target: TargetKey, override: KeyboardManager.SourceOverride? = nil) -> Bool {
         services().filter { keyboards.isSelected($0) }.contains { service in
             let source = keyboards.source(for: service, default: defaultSource, override: override)
             return targetConflict(mappings(service), source: source, target: target.usage, owned: records[id(service)])
@@ -794,17 +793,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
     // nil edits the global key; otherwise the saved identity of one keyboard.
     var selectedKeyboardScope: String? { keyboardScopePicker.selectedItem?.representedObject as? String }
-    // While a keyboard is selected, the first source row follows the global key.
-    var pickedSource: UInt64? {
-        let index = max(0, picker.indexOfSelectedItem)
-        guard selectedKeyboardScope != nil else { return sources[index] }
-        return index > 0 ? sources[index - 1] : nil
-    }
+    // Rows carry their key. A keyboard's first row carries none: it follows the global key.
+    var pickedSource: UInt64? { (picker.selectedItem?.representedObject as? NSNumber)?.uint64Value }
     func refreshKeyboardScopes() {
         let manager = engine.keyboards
         let keyboards = manager.keyboards
-        let signature = keyboards.map { "\($0.key)|\($0.name)|\(manager.connected.contains($0.key))" }.joined(separator: "\n")
+        let signature = manager.rowSignature(keyboards)
         guard signature != keyboardScopeSignature || keyboardScopePicker.numberOfItems == 0 else { return }
+        // Post-wake repairs can run while a menu is open. Swapping the menu under an open
+        // dropdown can drop the choice, so a later refresh applies the change instead.
+        guard RunLoop.current.currentMode != .eventTracking else { return }
         keyboardScopeSignature = signature
         let selected = selectedKeyboardScope
         // Build items directly: addItem(withTitle:) merges keyboards with the same name.
@@ -825,16 +823,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
     func refreshSourcePicker() {
         picker.removeAllItems()
-        let global = sources.firstIndex(of: engine.source) ?? 0
-        if let key = selectedKeyboardScope {
-            picker.addItem(withTitle: "기본값 (\(sourceKeys[global].name))")
-            picker.addItems(withTitles: sourceKeys.map(\.name))
-            let saved = engine.keyboards.known[key]?.source.flatMap { sources.firstIndex(of: $0) }
-            picker.selectItem(at: saved.map { $0 + 1 } ?? 0)
-        } else {
-            picker.addItems(withTitles: sourceKeys.map(\.name))
-            picker.selectItem(at: global)
+        let global = sourceKeys.first { $0.usage == engine.source } ?? sourceKeys[0]
+        let scope = selectedKeyboardScope
+        if scope != nil { picker.addItem(withTitle: "기본값 (\(global.name))") }
+        for key in sourceKeys {
+            picker.addItem(withTitle: key.name)
+            picker.lastItem?.representedObject = NSNumber(value: key.usage)
         }
+        let chosen: UInt64? = scope.map { engine.keyboards.known[$0]?.source } ?? global.usage
+        picker.selectItem(at: picker.itemArray.firstIndex { ($0.representedObject as? NSNumber)?.uint64Value == chosen } ?? 0)
     }
     @objc func keyboardScopeChanged() { refreshSourcePicker() }
     func updateMenu() {
@@ -1043,7 +1040,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         guard !engine.isUpdatingSettings else { return }
         defer { resetSelection(); refreshKeyboardState() }
         let scope = selectedKeyboardScope
-        let override: Engine.SourceOverride? = scope.map { (key: $0, source: pickedSource) }
+        let override: KeyboardManager.SourceOverride? = scope.map { (key: $0, source: pickedSource) }
         let source = scope == nil ? pickedSource ?? engine.source : engine.source
         let target = targets[targetPicker.indexOfSelectedItem]
         if engine.targetInUse(source, target: target, override: override) {
@@ -1057,8 +1054,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             alert.addButton(withTitle: "변경"); alert.addButton(withTitle: "취소")
             guard alert.runModal() == .alertFirstButtonReturn else { resetSelection(); return }
         }
-        if let override { engine.keyboards.setSource(override.source, for: override.key) }
-        do { _ = try engine.apply(source: source, target: target); lastError = ""; stickyError = ""; repairFailed = false; ensureKeyTap(); refreshStatus() } catch { report(error); resetSelection() }
+        // One keyboard's key only changes its own HID mapping. Skip rewriting and reactivating
+        // the system shortcut, which blocks the window and can fail after the choice is saved.
+        if let override, engine.active, target.name == engine.target.name {
+            engine.keyboards.setSource(override.source, for: override.key)
+            do { _ = try engine.reconcile() } catch { report(error) }
+            refreshStatus(); return
+        }
+        do {
+            _ = try engine.apply(source: source, target: target)
+            // Like the global key, save a choice only once applying succeeded.
+            if let override { engine.keyboards.setSource(override.source, for: override.key) }
+            lastError = ""; stickyError = ""; repairFailed = false; ensureKeyTap(); refreshStatus()
+        } catch { report(error); resetSelection() }
     }
     func restoreNow() {
         optionInput.cancel()
@@ -1125,6 +1133,7 @@ if CommandLine.arguments.dropFirst().first == "--install-update" {
     runFeatureTests()
     runKeyboardTests()
     runRightControlTests()
+    runPerKeyboardConflictTests()
     for initial in [false, true] {
         for holdEnabled in [false, true] {
             var caps = EnglishCapsState()
