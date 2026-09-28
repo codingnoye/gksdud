@@ -11,8 +11,6 @@
     `[FEAT]`, `[FIX]`, `[CHORE]`, `[DOCS]`, `[REFACTOR]`, `[TEST]`, `[CI]`, `[PERF]`, `[BUILD]`, `[REVERT]` 중 하나를 사용해주세요.
 3. 리뷰 완료 후 **Squash and merge**로 병합하게 됩니다. PR 제목은 main에 남을 커밋 제목이므로 변경 내용을 간결하게 적습니다.
 
-사용자에게 보이는 변경은 `CHANGELOG.md`의 `미출시`에 적습니다.
-
 ## 개발 환경과 빌드
 
 Xcode Command Line Tools가 설치된 macOS에서 빌드합니다.
