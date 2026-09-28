@@ -99,16 +99,16 @@ extension AppDelegate {
         general.addArrangedSubview(pressRow)
         hint("버튼을 뗄 때가 아닌 누를 때 전환하도록 해 더 빠르게 전환합니다.\n글자 씹힘도 더 개선됩니다.", in: general)
         separator(in: general)
-        picker.addItems(withTitles: ["우측 Command ⌘", "우측 Option ⌥", "Caps Lock ⇪", "우측 Control ⌃"])
-        picker.selectItem(at: sources.firstIndex(of: engine.source) ?? 0)
-        picker.target = self; picker.action = #selector(selectionChanged)
+        picker.show(engine.defaultSources)
+        picker.onChange = { [weak self] _ in self?.selectionChanged() }
         row("한영 키", [picker], in: general)
+        let keyboards = NSButton(title: "고급 설정", target: self, action: #selector(showKeyboardSettings)); keyboards.bezelStyle = .rounded
+        general.setCustomSpacing(8, after: general.arrangedSubviews.last!)
+        row("", [keyboards], in: general)
         targetPicker.addItems(withTitles: targets.map(\.name)); targetPicker.selectItem(withTitle: engine.target.name)
         targetPicker.target = self; targetPicker.action = #selector(selectionChanged)
         row("내부 전환 키", [targetPicker], in: general)
         hint("시스템의 '이전 입력 소스 선택' 단축키의 값을 변경합니다.\n다른 앱과 겹치지 않는, 기능 없는 키를 골라주세요.", in: general)
-        let keyboards = NSButton(title: "대상 키보드 설정", target: self, action: #selector(showKeyboardSettings)); keyboards.bezelStyle = .rounded
-        general.addArrangedSubview(keyboards)
         separator(in: general)
         login.target = self; login.action = #selector(toggleLogin)
         login.state = SMAppService.mainApp.status == .enabled ? .on : .off

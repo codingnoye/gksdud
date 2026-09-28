@@ -16,14 +16,21 @@ let targets = zip(13...20, [105, 107, 113, 106, 64, 79, 80, 90]).map {
     TargetKey(name: "F\($0.0)", usage: 0x700000068 + UInt64($0.0 - 13), keyCode: $0.1)
 }
 let sources: [UInt64] = [0x7000000e7, 0x7000000e6, 0x700000039, 0x7000000e4]
+let sourceNames = ["우측 Command ⌘", "우측 Option ⌥", "Caps Lock ⇪", "우측 Control ⌃"]
 typealias Mapping = [String: NSNumber]
 
-func targetConflict(_ mappings: [Mapping], source: UInt64, target: UInt64, owned: [String: String]?) -> Bool {
+// Several keys are saved comma-separated, so a single key saved by an older version reads unchanged.
+func encodeSources(_ keys: [UInt64]) -> String { keys.map(String.init).joined(separator: ",") }
+func decodeSources(_ value: String?) -> [UInt64] { (value ?? "").split(separator: ",").compactMap { UInt64($0) } }
+
+func owns(_ record: [String: String]?, _ mapping: Mapping) -> Bool {
+    guard let record, let source = mapping[srcKey]?.uint64Value else { return false }
+    return decodeSources(record["source"]).contains(source) && record["target"] == mapping[dstKey].map { String($0.uint64Value) }
+}
+
+func targetConflict(_ mappings: [Mapping], sources: [UInt64], target: UInt64, owned: [String: String]?) -> Bool {
     mappings.contains { mapping in
-        let ours = owned?["source"] == mapping[srcKey].map { String($0.uint64Value) }
-            && owned?["target"] == mapping[dstKey].map { String($0.uint64Value) }
-            && owned != nil
-        return mapping[srcKey]?.uint64Value != source && mapping[dstKey]?.uint64Value == target && !ours
+        !sources.contains(mapping[srcKey]?.uint64Value ?? 0) && mapping[dstKey]?.uint64Value == target && !owns(owned, mapping)
     }
 }
 
@@ -82,7 +89,10 @@ final class Engine {
         self.shortcutPreferences = shortcutPreferences
         keyboards = KeyboardManager(defaults: defaults, discover: discover)
     }
-    var source: UInt64 { UInt64(defaults.string(forKey: "source") ?? "") ?? sources[0] }
+    var defaultSources: [UInt64] {
+        get { let saved = decodeSources(defaults.string(forKey: "source")); return saved.isEmpty ? [sources[0]] : saved }
+        set { defaults.set(encodeSources(newValue), forKey: "source") }
+    }
     var active: Bool { defaults.object(forKey: "active") == nil || defaults.bool(forKey: "active") }
     var switchOnKeyDown: Bool { defaults.object(forKey: "switchOnKeyDown") == nil || defaults.bool(forKey: "switchOnKeyDown") }
     var longPressCapsLock: Bool { defaults.bool(forKey: "longPressCapsLock") }
@@ -99,16 +109,24 @@ final class Engine {
     func services() -> [KeyboardDevice] { (try? keyboards.snapshot()) ?? [] }
     func mappings(_ service: KeyboardDevice) -> [Mapping] { (try? service.readMappings()) ?? [] }
     func id(_ service: KeyboardDevice) -> String { service.registryID }
-    func conflicts(_ source: UInt64, target: TargetKey) -> Bool {
-        services().filter { keyboards.isSelected($0) }.contains { service in mappings(service).contains {
-            let managed = records[id(service)]
-            let owned = managed?["source"] == String(source) && managed?["target"] == $0[dstKey].map { String($0.uint64Value) }
-            return $0[srcKey]?.uint64Value == source && $0[dstKey]?.uint64Value != target.usage && !owned
-        } }
+    // `keyboard` checks one keyboard with keys that are not saved yet; nil sources means Default.
+    private func selected(_ fallback: [UInt64], keyboard: (key: String, sources: [UInt64]?)?) -> [(KeyboardDevice, [UInt64])] {
+        services().filter { keyboards.isSelected($0) && (keyboard == nil || $0.identity.key == keyboard?.key) }.map { service in
+            (service, keyboard.map { $0.sources ?? fallback } ?? keyboards.sources(for: service, default: fallback))
+        }
     }
-    func targetInUse(_ source: UInt64, target: TargetKey) -> Bool {
-        services().filter { keyboards.isSelected($0) }.contains { service in
-            targetConflict(mappings(service), source: source, target: target.usage, owned: records[id(service)])
+    // Returns the first key that another mapping already uses.
+    func conflict(_ fallback: [UInt64], target: TargetKey, keyboard: (key: String, sources: [UInt64]?)? = nil) -> UInt64? {
+        for (service, keys) in selected(fallback, keyboard: keyboard) {
+            let managed = records[id(service)]
+            let used = mappings(service).filter { $0[dstKey]?.uint64Value != target.usage && !owns(managed, $0) }.compactMap { $0[srcKey]?.uint64Value }
+            if let key = keys.first(where: used.contains) { return key }
+        }
+        return nil
+    }
+    func targetInUse(_ fallback: [UInt64], target: TargetKey, keyboard: (key: String, sources: [UInt64]?)? = nil) -> Bool {
+        selected(fallback, keyboard: keyboard).contains { service, keys in
+            targetConflict(mappings(service), sources: keys, target: target.usage, owned: records[id(service)])
         }
     }
     static func ownsShortcut(_ raw: Any?, keyCode: Int) -> Bool {
@@ -152,11 +170,11 @@ final class Engine {
         try shortcutPreferences.write(keys)
         try shortcutPreferences.activate()
     }
-    func apply(source: UInt64, target: TargetKey) throws -> Int {
+    func apply(sources: [UInt64], target: TargetKey) throws -> Int {
         settingsUpdateDepth += 1
         defer { settingsUpdateDepth -= 1 }
         try shortcut(target: target)
-        defaults.set(String(source), forKey: "source")
+        defaultSources = sources
         defaults.set(target.name, forKey: "target")
         defaults.set(true, forKey: "active")
         let count = try reconcile()
@@ -201,13 +219,13 @@ final class Engine {
         defaults.removeObject(forKey: "inputMenuBackedUp")
     }
     func reconcile() throws -> Int {
-        keyboards.reconcile(source: source, target: target.usage, active: active).applied
+        keyboards.reconcile(sources: defaultSources, target: target.usage, active: active).applied
     }
     func restore() throws {
         settingsUpdateDepth += 1
         defer { settingsUpdateDepth -= 1 }
         defaults.set(false, forKey: "active")
-        let mappingResult = keyboards.reconcile(source: source, target: target.usage, active: false)
+        let mappingResult = keyboards.reconcile(sources: defaultSources, target: target.usage, active: false)
         // A failed quit must not restore the shortcut while some keys still emit our target.
         if mappingResult.pending > 0 { throw KeyboardError.verification }
         try restoreSystemInputMenu()
@@ -248,7 +266,7 @@ final class Engine {
         try restore()
     }
     func restoreMappings() throws {
-        let result = keyboards.reconcile(source: source, target: target.usage, active: false)
+        let result = keyboards.reconcile(sources: defaultSources, target: target.usage, active: false)
         // Normal repair is non-modal. Explicit quit must preserve undo state if cleanup failed.
         if result.pending > 0 { throw KeyboardError.verification }
     }
@@ -376,7 +394,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     let keyboardWarning = NSTextField(wrappingLabelWithString: "")
     let keyboardWarningRow = NSStackView()
     let warningBadge = WarningBadgeView()
-    let picker = NSPopUpButton()
+    let picker = SourcePicker()
     let targetPicker = NSPopUpButton()
     let testInput = NSTextField()
     let inputBadge = NSImageView()
@@ -763,7 +781,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     @objc func showKeyboardSettings() {
         repair()
         if keyboardSettings == nil {
-            keyboardSettings = KeyboardSettingsController(manager: engine.keyboards) { [weak self] in self?.repair() }
+            keyboardSettings = KeyboardSettingsController(engine: engine, sourcesChanged: { [weak self] keys in
+                self?.picker.show(keys); self?.selectionChanged()
+            }, confirmSources: { [weak self] key, keys in
+                guard let self, engine.active else { return true }
+                return confirmMapping(engine.defaultSources, target: engine.target, keyboard: (key, keys))
+            }) { [weak self] in self?.repair() }
         }
         keyboardSettings?.show(on: window)
     }
@@ -959,7 +982,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         } catch { login.state = SMAppService.mainApp.status == .enabled ? .on : .off; report(error) }
     }
     func resetSelection() {
-        picker.selectItem(at: sources.firstIndex(of: engine.source) ?? 0)
+        picker.show(engine.defaultSources)
         targetPicker.selectItem(withTitle: engine.target.name)
         enabled.state = engine.active ? .on : .off
     }
@@ -973,27 +996,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         cancelLongPress()
         if enabled.state == .on { applyNow() }
         else {
-            engine.defaults.set(String(sources[picker.indexOfSelectedItem]), forKey: "source")
+            if let keys = picker.selection { engine.defaultSources = keys }
             engine.defaults.set(targets[targetPicker.indexOfSelectedItem].name, forKey: "target")
         }
+    }
+    func confirmMapping(_ keys: [UInt64], target: TargetKey, keyboard: (key: String, sources: [UInt64]?)? = nil) -> Bool {
+        if engine.targetInUse(keys, target: target, keyboard: keyboard) {
+            let alert = NSAlert(); alert.messageText = "\(target.name)은 다른 키 매핑에서 사용 중입니다."
+            alert.informativeText = "다른 앱과 충돌할 수 있습니다. 대상 키를 바꿔주세요."
+            alert.runModal(); return false
+        }
+        if let key = engine.conflict(keys, target: target, keyboard: keyboard) {
+            let alert = NSAlert(); alert.messageText = "\(sourceNames[sources.firstIndex(of: key) ?? 0])에 다른 매핑이 있습니다."
+            alert.informativeText = "선택한 키를 한영 전환 전용으로 바꿉니다. 다른 앱에서도 이 키의 재매핑을 꺼주세요. 기존 매핑은 해제 시 복원됩니다."
+            alert.addButton(withTitle: "변경"); alert.addButton(withTitle: "취소")
+            return alert.runModal() == .alertFirstButtonReturn
+        }
+        return true
     }
     func applyNow() {
         guard !engine.isUpdatingSettings else { return }
         defer { resetSelection(); refreshKeyboardState() }
-        let source = sources[picker.indexOfSelectedItem]
+        let keys = picker.selection ?? engine.defaultSources
         let target = targets[targetPicker.indexOfSelectedItem]
-        if engine.targetInUse(source, target: target) {
-            let alert = NSAlert(); alert.messageText = "\(target.name)은 다른 키 매핑에서 사용 중입니다."
-            alert.informativeText = "다른 앱과 충돌할 수 있습니다. 대상 키를 바꿔주세요."
-            alert.runModal(); resetSelection(); return
-        }
-        if engine.conflicts(source, target: target) {
-            let alert = NSAlert(); alert.messageText = "이 키에 다른 매핑이 있습니다."
-            alert.informativeText = "선택한 키를 한영 전환 전용으로 바꿉니다. 다른 앱에서도 이 키의 재매핑을 꺼주세요. 기존 매핑은 해제 시 복원됩니다."
-            alert.addButton(withTitle: "변경"); alert.addButton(withTitle: "취소")
-            guard alert.runModal() == .alertFirstButtonReturn else { resetSelection(); return }
-        }
-        do { _ = try engine.apply(source: source, target: target); lastError = ""; stickyError = ""; repairFailed = false; ensureKeyTap(); refreshStatus() } catch { report(error); resetSelection() }
+        guard confirmMapping(keys, target: target) else { resetSelection(); return }
+        do { _ = try engine.apply(sources: keys, target: target); lastError = ""; stickyError = ""; repairFailed = false; ensureKeyTap(); refreshStatus() } catch { report(error); resetSelection() }
     }
     func restoreNow() {
         optionInput.cancel()
@@ -1187,9 +1214,11 @@ if CommandLine.arguments.dropFirst().first == "--install-update" {
     let existing: [Mapping] = [[srcKey: NSNumber(value: option), dstKey: NSNumber(value: UInt64(0x70000006d))]]
     let first = merged(existing, source: command, previous: nil, original: nil)
     let owned = ["source": String(command), "target": String(f19)]
-    precondition(!targetConflict(first, source: sources[2], target: f19, owned: owned), "Own old mapping must not block source changes")
-    precondition(targetConflict(first, source: sources[2], target: f19, owned: nil), "Unowned target remains a conflict")
-    precondition(targetConflict(existing, source: command, target: 0x70000006d, owned: owned), "Unrelated target collision remains blocked")
+    precondition(!targetConflict(first, sources: [sources[2]], target: f19, owned: owned), "Own old mapping must not block source changes")
+    precondition(targetConflict(first, sources: [sources[2]], target: f19, owned: nil), "Unowned target remains a conflict")
+    precondition(targetConflict(existing, sources: [command], target: 0x70000006d, owned: owned), "Unrelated target collision remains blocked")
+    precondition(!targetConflict(first, sources: [sources[2]], target: f19, owned: ["source": encodeSources([sources[2], command]), "target": String(f19)]),
+        "Every key in a multi-key record is ours")
     precondition(first.count == 2 && first[0] == existing[0])
     precondition(merged(first, source: command, previous: command, original: nil) == first)
     let switched = merged(first, source: sources[2], previous: command, original: nil)
@@ -1208,7 +1237,7 @@ if CommandLine.arguments.dropFirst().first == "--install-update" {
     let engine = Engine(defaults: suite)
     defer { try? engine.restore(); suite.removePersistentDomain(forName: suiteName) }
     do {
-        let count = try engine.apply(source: sources[0], target: targets[6])
+        let count = try engine.apply(sources: [sources[0]], target: targets[6])
         guard count > 0 else { throw NSError(domain: "asd", code: 7, userInfo: [NSLocalizedDescriptionKey: "No real keyboard services visible"]) }
         let menuDomain = "com.apple.TextInputMenu" as CFString
         func nativeMenuVisible() -> Bool? {
@@ -1231,7 +1260,7 @@ if CommandLine.arguments.dropFirst().first == "--install-update" {
         for service in engine.services() {
             precondition(engine.mappings(service).contains { $0[srcKey]?.uint64Value == sources[0] && $0[dstKey]?.uint64Value == targets[6].usage })
         }
-        _ = try engine.apply(source: sources[0], target: targets[7])
+        _ = try engine.apply(sources: [sources[0]], target: targets[7])
         for service in engine.services() {
             precondition(engine.mappings(service).contains { $0[srcKey]?.uint64Value == sources[0] && $0[dstKey]?.uint64Value == targets[7].usage })
         }
@@ -1239,7 +1268,7 @@ if CommandLine.arguments.dropFirst().first == "--install-update" {
         precondition(engine.active, "Normal quit must remember activation")
         let restarted = Engine(defaults: suite)
         precondition(restarted.active && restarted.target.name == "F20")
-        _ = try restarted.apply(source: restarted.source, target: restarted.target)
+        _ = try restarted.apply(sources: restarted.defaultSources, target: restarted.target)
         try restarted.restore()
         try restarted.prepareForExit()
         precondition(!restarted.active, "Explicitly disabled must stay disabled")
