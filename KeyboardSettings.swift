@@ -127,7 +127,7 @@ final class KeyboardSettingsController: NSObject, NSTableViewDataSource, NSTable
     init(engine: Engine, sourcesChanged: @escaping ([UInt64]) -> Void, confirmSources: @escaping (String, [UInt64]?) -> Bool,
          changed: @escaping () -> Void) {
         self.engine = engine; self.sourcesChanged = sourcesChanged; self.confirmSources = confirmSources; self.changed = changed
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 680, height: 410), styleMask: [.titled], backing: .buffered, defer: false)
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 680, height: 436), styleMask: [.titled], backing: .buffered, defer: false)
         super.init()
         window.title = "고급 설정"
         window.isReleasedWhenClosed = false
@@ -149,6 +149,8 @@ final class KeyboardSettingsController: NSObject, NSTableViewDataSource, NSTable
             self?.refresh()
         }
         defaultSourcePicker.setAccessibilityLabel("기본 한영 키")
+        let listTitle = NSTextField(labelWithString: "키보드별 설정")
+        listTitle.font = .systemFont(ofSize: 13, weight: .semibold)
 
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("keyboard"))
         column.resizingMask = .autoresizingMask
@@ -190,7 +192,7 @@ final class KeyboardSettingsController: NSObject, NSTableViewDataSource, NSTable
         ])
         let done = NSButton(title: "완료", target: self, action: #selector(close))
         done.bezelStyle = .rounded; done.keyEquivalent = "\r"
-        for view in [title, defaultRow, defaultSourcePicker, defaultHint, list, done] {
+        for view in [title, defaultRow, defaultSourcePicker, defaultHint, listTitle, list, done] {
             view.translatesAutoresizingMaskIntoConstraints = false; content.addSubview(view)
         }
         NSLayoutConstraint.activate([
@@ -206,7 +208,9 @@ final class KeyboardSettingsController: NSObject, NSTableViewDataSource, NSTable
             defaultHint.centerYAnchor.constraint(equalTo: defaultSourcePicker.centerYAnchor),
             defaultHint.leadingAnchor.constraint(equalTo: defaultRow.leadingAnchor),
             defaultHint.trailingAnchor.constraint(lessThanOrEqualTo: defaultSourcePicker.leadingAnchor, constant: -12),
-            list.topAnchor.constraint(equalTo: defaultSourcePicker.bottomAnchor, constant: 12),
+            listTitle.topAnchor.constraint(equalTo: defaultSourcePicker.bottomAnchor, constant: 18),
+            listTitle.leadingAnchor.constraint(equalTo: list.leadingAnchor, constant: 2),
+            list.topAnchor.constraint(equalTo: listTitle.bottomAnchor, constant: 8),
             list.leadingAnchor.constraint(equalTo: title.leadingAnchor),
             list.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -24),
             list.bottomAnchor.constraint(equalTo: done.topAnchor, constant: -18),
