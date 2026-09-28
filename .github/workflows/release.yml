@@ -2,7 +2,7 @@ name: Release
 
 on:
   push:
-    tags: ['v*', 'pre-v*']
+    tags: ['pre-v*']
   workflow_dispatch:
     inputs:
       source_ref:
@@ -28,7 +28,7 @@ concurrency:
 
 jobs:
   release:
-    if: github.repository == 'codingnoye/gksdud' && ((github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/pre-v'))) || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))
+    if: github.repository == 'codingnoye/gksdud' && ((github.event_name == 'push' && startsWith(github.ref, 'refs/tags/pre-v')) || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))
     runs-on: macos-15
     timeout-minutes: 30
     environment: release

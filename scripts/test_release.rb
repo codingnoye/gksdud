@@ -26,18 +26,14 @@ class ReleaseTests < Minitest::Test
     assert_equal 'gksdud-1.2.0-macos-universal.zip', stable.filename
     assert_equal 'gksdud-1.2.0-pre-macos-universal.zip', pre.filename
     refute_equal stable.asset_version, pre.asset_version
-    legacy = ReleaseMetadata.new('1.2.0', 'pre-v.1.2.0')
-    assert legacy.prerelease?
-    assert_equal pre.filename, legacy.filename
   end
 
-  def test_workflow_triggers_for_both_prerelease_tag_formats
+  def test_only_prerelease_tags_trigger_on_push
     workflow = YAML.load_file("#{ROOT}/.github/workflows/release.yml")
     triggers = workflow.fetch('on') { workflow.fetch(true) }
     patterns = triggers.fetch('push').fetch('tags')
-    %w[v1.2.0 pre-v1.2.0 pre-v.1.2.0].each do |tag|
-      assert patterns.any? { |pattern| File.fnmatch?(pattern, tag) }, "No push trigger for #{tag}"
-    end
+    assert patterns.any? { |pattern| File.fnmatch?(pattern, 'pre-v1.2.0') }, 'No push trigger for pre-v1.2.0'
+    refute patterns.any? { |pattern| File.fnmatch?(pattern, 'v1.2.0') }, 'Stable tags must use manual release'
   end
 
   def with_release_repository
@@ -60,7 +56,7 @@ class ReleaseTests < Minitest::Test
 
   def test_pushed_tags_must_match_source_version
     with_release_repository do |selection, _, _|
-      %w[v1.2.0 pre-v1.2.0 pre-v.1.2.0].each do |tag|
+      %w[v1.2.0 pre-v1.2.0].each do |tag|
         result = selection.resolve(event: 'push', tag: tag, version: '', source: '', summary: '')
         assert_equal '1.2.0', result.fetch(:version)
         assert_equal tag.start_with?('pre-v'), result.fetch(:prerelease)
@@ -169,18 +165,16 @@ class ReleaseTests < Minitest::Test
   end
 
   def test_prerelease_is_published_without_changing_latest
-    %w[pre-v1.2.0 pre-v.1.2.0].each do |tag|
-      args = release_arguments(tag)
-      assert_equal ['release', 'create', tag], args.first(3)
-      assert_includes args, '--prerelease'
-      assert_includes args, '--latest=false'
-      refute_includes args, '--draft'
-      assert_includes args, 'release-source/outputs/gksdud-1.2.0-pre-macos-universal.zip'
-      assert_includes args, 'release-source/outputs/release-1.2.0-pre/SHA256SUMS'
-      assert_includes args, '.github/PRERELEASE_NOTES.md'
-      assert_includes args, '--generate-notes'
-      assert_includes args, '--verify-tag'
-    end
+    args = release_arguments('pre-v1.2.0')
+    assert_equal ['release', 'create', 'pre-v1.2.0'], args.first(3)
+    assert_includes args, '--prerelease'
+    assert_includes args, '--latest=false'
+    refute_includes args, '--draft'
+    assert_includes args, 'release-source/outputs/gksdud-1.2.0-pre-macos-universal.zip'
+    assert_includes args, 'release-source/outputs/release-1.2.0-pre/SHA256SUMS'
+    assert_includes args, '.github/PRERELEASE_NOTES.md'
+    assert_includes args, '--generate-notes'
+    assert_includes args, '--verify-tag'
   end
 
   def test_stable_publication_requires_explicit_dispatch_and_keeps_tap_in_actions
