@@ -441,7 +441,7 @@ func renderKeyboardUI(to directory: String) throws {
             try bitmap.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: directory).appendingPathComponent("menubar-warning.png"))
         }
     }
-    func descendantsOf(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendantsOf) }
+    func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
     func save(_ view: NSView, _ name: String) throws {
         let visible = view.window?.isVisible == true
         view.wantsLayer = true
@@ -512,7 +512,7 @@ func renderKeyboardUI(to directory: String) throws {
         var warning: String?
         let reply = Timer(timeInterval: 0.2, repeats: false) { _ in
             if let alert = NSApp.modalWindow, let view = alert.contentView {
-                warning = descendantsOf(view).compactMap { ($0 as? NSTextField)?.stringValue }.joined(separator: " ")
+                warning = descendants(view).compactMap { ($0 as? NSTextField)?.stringValue }.joined(separator: " ")
                 view.layoutSubtreeIfNeeded()
                 if let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
                     view.cacheDisplay(in: view.bounds, to: bitmap)
@@ -549,7 +549,6 @@ func renderKeyboardUI(to directory: String) throws {
     delegate.selectTab(0)
     // Kept on screen like the open sheet in the app; a hidden window skips periodic refreshes.
     settings.window.orderFront(nil)
-    func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
     func setSegment(_ control: NSSegmentedControl, _ segment: Int) { control.selectedSegment = segment; _ = control.sendAction(control.action, to: control.target) }
     let ui = descendants(settings.window.contentView!)
     let toggle = ui.compactMap { $0 as? NSSegmentedControl }.first { $0.segmentCount == 2 }!

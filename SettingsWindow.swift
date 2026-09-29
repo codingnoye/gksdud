@@ -97,7 +97,7 @@ extension AppDelegate {
         let activation = NSStackView(views: [enabled, keyboardWarningRow])
         activation.orientation = .vertical; activation.alignment = .leading; activation.spacing = 6
         full(activation, in: general); keyboardWarningRow.isHidden = true
-        pressSwitch.target = self; pressSwitch.action = #selector(togglePressSwitch)
+        pressSwitch.target = self; pressSwitch.action = #selector(toggleFeature(_:))
         pressAccess.target = self; pressAccess.action = #selector(requestPressAccess); pressAccess.bezelStyle = .rounded
         let pressRow = NSStackView(views: [pressSwitch, pressAccess]); pressRow.spacing = 16; pressRow.alignment = .centerY
         general.addArrangedSubview(pressRow)
@@ -131,12 +131,12 @@ extension AppDelegate {
         englishPreview.setAccessibilityLabel("영어 아이콘 미리보기")
         row("메뉴바 아이콘", [iconPicker, koreanPreview, englishPreview], in: general)
         let caps = tabPanels[1]
-        longPressSwitch.target = self; longPressSwitch.action = #selector(toggleLongPress)
-        preserveCapsSwitch.target = self; preserveCapsSwitch.action = #selector(togglePreserveCaps)
+        longPressSwitch.target = self; longPressSwitch.action = #selector(toggleFeature(_:))
+        preserveCapsSwitch.target = self; preserveCapsSwitch.action = #selector(toggleFeature(_:))
         caps.addArrangedSubview(longPressSwitch)
         hint("누른 즉시 한영 전환, 길게 유지시 대소문자 전환", in: caps)
         caps.addArrangedSubview(preserveCapsSwitch)
-        koreanCapsSwitch.target = self; koreanCapsSwitch.action = #selector(toggleKoreanCaps)
+        koreanCapsSwitch.target = self; koreanCapsSwitch.action = #selector(toggleFeature(_:))
         caps.addArrangedSubview(koreanCapsSwitch)
         let extras = tabPanels[2]
         heading("특수문자", in: extras)
@@ -149,7 +149,7 @@ extension AppDelegate {
         extras.setCustomSpacing(28, after: extras.arrangedSubviews.last!)
         full(specialStatus, in: extras); extras.setCustomSpacing(28, after: specialStatus)
         heading("기타", in: extras)
-        escapeSwitch.target = self; escapeSwitch.action = #selector(toggleEscape)
+        escapeSwitch.target = self; escapeSwitch.action = #selector(toggleFeature(_:))
         extras.addArrangedSubview(escapeSwitch)
         let about = tabPanels[3]; about.alignment = .centerX; about.spacing = 18
         let appIcon = NSImageView(image: NSApp.applicationIconImage)

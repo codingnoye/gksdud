@@ -69,8 +69,13 @@ func runEnglishSwitchTests() {
     featureCheck(escape(.keyDown, "ko"), "ESC in Korean ends in English lowercase")
     featureCheck(escape(.keyDown, "en", .maskAlphaShift), "ESC in English uppercase turns Caps Lock off")
     featureCheck(!escape(.keyDown, "en"), "ESC in English lowercase changes nothing")
-    featureCheck(escape(.keyDown, "ja"))
+    featureCheck(!escape(.keyDown, "ja") && !escape(.keyDown, "ja", .maskAlphaShift) && !escape(.keyDown, ""),
+        "Other input sources stay; the switch key would only return to the previous one")
     featureCheck(!escape(.keyDown, "ko", repeated: true), "Held ESC switches once")
+    let sent = SentSwitch(from: "ko", at: 10)
+    featureCheck(sent.inFlight(now: 10.1, language: "ko"), "A Korean/English key just before ESC is still on its way")
+    featureCheck(!sent.inFlight(now: 10.1, language: "en"), "Once the source changed, ESC needs no pulse of its own")
+    featureCheck(!sent.inFlight(now: 10.5, language: "ko"), "A pulse macOS ignored does not block later switches")
     featureCheck(!escape(.keyUp, "ko"))
     featureCheck(!escape(.flagsChanged, "ko", .maskAlphaShift, code: kVK_CapsLock) && !escape(.keyDown, "ko", code: kVK_ANSI_A))
     for modifier: CGEventFlags in [.maskCommand, .maskControl, .maskAlternate, .maskShift] {
@@ -115,7 +120,7 @@ func runEnglishSwitchTests() {
     featureCheck(!engine.capsLockSwitches())
     engine.keyboards.setMode(.on, for: keyboard.identity.key); engine.keyboards.setSources(nil, for: keyboard.identity.key)
     featureCheck(engine.capsLockSwitches(), "An enabled keyboard following the default")
-    print("PASS: ESC to English lowercase, modifier and repeat exclusions, Caps Lock in Korean setting the English case, Caps Lock key conflicts")
+    print("PASS: ESC to English lowercase from Korean only, modifier and repeat exclusions, a switch already on its way, Caps Lock in Korean setting the English case, Caps Lock key conflicts")
 }
 
 func runOptionInputTests() {
