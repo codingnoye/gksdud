@@ -119,16 +119,12 @@ final class Engine {
     var switchOnKeyDown: Bool { defaults.object(forKey: "switchOnKeyDown") == nil || defaults.bool(forKey: "switchOnKeyDown") }
     var longPressCapsLock: Bool { defaults.bool(forKey: "longPressCapsLock") }
     var preserveCapsLock: Bool { defaults.object(forKey: "preserveCapsLock") == nil || defaults.bool(forKey: "preserveCapsLock") }
-    var koreanCapsLock: Bool { defaults.bool(forKey: "koreanCapsLock") }
+    // The saved choice waits while Caps Lock is a Korean/English key, however that key was saved.
+    var koreanCapsLock: Bool { defaults.bool(forKey: "koreanCapsLock") && !capsLockSwitches() }
     var escapeToEnglish: Bool { defaults.bool(forKey: "escapeToEnglish") }
     // A Caps Lock chosen as a Korean/English key reaches macOS as the reserved F-key, never as Caps Lock.
     // `fallback` checks default keys before they are saved.
-    func capsLockSwitches(_ fallback: [UInt64]? = nil) -> Bool {
-        let caps = sources[2], fallback = fallback ?? defaultSources
-        return keyboards.defaultEnabled && fallback.contains(caps) || keyboards.known.values.contains {
-            $0.mode.applies(defaultEnabled: keyboards.defaultEnabled) && ($0.sources ?? fallback).contains(caps)
-        }
-    }
+    func capsLockSwitches(_ fallback: [UInt64]? = nil) -> Bool { keyboards.maps(sources[2], default: fallback ?? defaultSources) }
     var testInputText: String {
         get { defaults.string(forKey: "testInputText") ?? "한dud한dud한dud한dud" }
         set { defaults.set(newValue, forKey: "testInputText") }
@@ -359,22 +355,28 @@ struct LongPressState {
 // It is session-local: activation starts from the current keyboard state.
 struct EnglishCapsState {
     private(set) var remembered: Bool?
-    var switching = false
+    var switching = false { didSet { if !switching { intoEnglish = false } } }
+    // A switch that started outside English is on its way there. The input method turns the lock off only on the way
+    // into Korean, so a Caps Lock press meanwhile is the user's.
+    private var intoEnglish = false
     mutating func enable(actual: Bool) { if remembered == nil { remembered = actual } }
     mutating func reset() { remembered = nil; switching = false }
     mutating func willSwitch(english: Bool, actual: Bool, longPress: Bool) {
         if remembered == nil || (english && !longPress && !switching) { remembered = actual }
-        switching = true
+        switching = true; intoEnglish = !english
     }
     // A press in Korean sets the English case too when `korean` (Caps Lock in Korean) is on.
     mutating func capsKeyChanged(english: Bool, actual: Bool, korean: Bool = false) {
-        guard english || korean, !switching else { return }
+        guard english || korean, !switching || intoEnglish else { return }
         remembered = actual
     }
     func target(english: Bool) -> Bool? { english ? remembered : nil }
     func beforeLongPress(actual: Bool, preserving: Bool) -> Bool { preserving ? (remembered ?? actual) : actual }
     mutating func committedLongPress(_ desired: Bool) { remembered = desired }
 }
+
+// Caps Lock in Korean keeps the lock on only here: 2-Set types Hangul whatever the lock. Other layouts are not checked.
+let capsSafeKorean = "com.apple.inputmethod.Korean.2SetKorean"
 
 func setCapsLock(_ enabled: Bool) throws {
     let service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("IOHIDSystem"))
@@ -388,13 +390,11 @@ func setCapsLock(_ enabled: Bool) throws {
         throw NSError(domain: "gksdud", code: Int(opened), userInfo: [NSLocalizedDescriptionKey: "Caps Lock 제어 연결에 실패했습니다."])
     }
     defer { IOServiceClose(connection) }
+    // No readback: right after a change that took effect it can still report the old state. The restore checks after a
+    // switch catch a change that did not.
     let result = IOHIDSetModifierLockState(connection, Int32(kIOHIDCapsLockState), enabled)
     guard result == KERN_SUCCESS else {
         throw NSError(domain: "gksdud", code: Int(result), userInfo: [NSLocalizedDescriptionKey: "Caps Lock 상태를 변경하지 못했습니다."])
-    }
-    var actual = false
-    guard IOHIDGetModifierLockState(connection, Int32(kIOHIDCapsLockState), &actual) == KERN_SUCCESS, actual == enabled else {
-        throw NSError(domain: "gksdud", code: 21, userInfo: [NSLocalizedDescriptionKey: "Caps Lock 상태 변경을 확인하지 못했습니다."])
     }
 }
 
@@ -418,13 +418,17 @@ func nativeSwitchPulse(keyCode: Int, marker: Int64) -> (CGEvent, CGEvent)? {
     CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(keyCode), keyDown: true).flatMap { nativeSwitchPulse(from: $0, marker: marker) }
 }
 
+// ESC that may switch: modified ESC stays a shortcut, and a held one acts once.
+func plainEscape(type: CGEventType, code: Int64, flags: CGEventFlags, repeated: Bool) -> Bool {
+    type == .keyDown && code == Int64(kVK_Escape) && !repeated
+        && flags.intersection([.maskCommand, .maskControl, .maskAlternate, .maskShift]).isEmpty
+}
+
 // ESC ends in English lowercase; false when it is already there. The ESC itself still reaches the app.
-// Other input sources are left alone: the switch key only returns to the previous source.
-func escapeNeedsEnglish(type: CGEventType, code: Int64, flags: CGEventFlags, repeated: Bool, language: @autoclosure () -> String) -> Bool {
-    guard type == .keyDown, code == Int64(kVK_Escape), !repeated,
-          flags.intersection([.maskCommand, .maskControl, .maskAlternate, .maskShift]).isEmpty else { return false }
-    let language = language()
-    return language.hasPrefix("ko") || language.hasPrefix("en") && flags.contains(.maskAlphaShift)
+// In English, `upper` includes the case preservation restores, even before it has, and `switching` tells a switch still on its
+// way from that source. Other input sources are left alone: the switch key only returns to the previous source.
+func escapeNeedsEnglish(language: String, upper: Bool, switching: Bool) -> Bool {
+    language.hasPrefix("ko") || language.hasPrefix("en") && (upper || switching)
 }
 
 // The last switch pulse until macOS acts on it; a second pulse meanwhile would switch back.
@@ -432,6 +436,21 @@ struct SentSwitch {
     let from: String
     let at: TimeInterval
     func inFlight(now: TimeInterval, language: String) -> Bool { now - at < 0.5 && language == from }
+}
+
+// How a transition reaches English. A switch still on its way lands on the other source:
+// from Korean it reaches English by itself, from English another one has to come back.
+enum EnglishRoute { case now, awaitSwitch, sendSwitch }
+func englishRoute(from language: String, switching: Bool) -> EnglishRoute {
+    language.hasPrefix("en") ? (switching ? .sendSwitch : .now) : (switching ? .awaitSwitch : .sendSwitch)
+}
+
+// Whether a Korean/English key event starts a switch, and whether that switch is already on its way:
+// switching on press posts a pulse, and the native shortcut acts on this press's release.
+// A hold switches only on a short release, so its press has sent nothing yet.
+func switchKeyEvent(down: Bool, repeated: Bool, onPress: Bool, longPress: Bool) -> (begins: Bool, sent: Bool) {
+    let begins = down && !repeated || !down && !onPress && !longPress
+    return (begins, begins && (onPress || !longPress))
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDelegate, NSTextFieldDelegate {
@@ -494,6 +513,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     lazy var capsTransitionFeature = longPressSwitch
     var switchErrors: [NSButton: String] = [:]
     var sentSwitch: SentSwitch?
+    // Tests answer warnings here without a modal loop.
+    var runAlert: (NSAlert) -> NSApplication.ModalResponse = { $0.runModal() }
     var capsConfirmationTimer: DispatchWorkItem?
     var englishCaps = EnglishCapsState()
     var capsRestoreGeneration = 0
@@ -586,17 +607,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 // queued strokes, a combination waits in its queue to keep the order.
                 if (type == .keyDown || type == .keyUp) && !owner.optionInput.busy && owner.handleSpaceCombo(event) { return nil }
                 if owner.optionInput.handle(event, mode: owner.specialMode, active: owner.engine.active) { return nil }
-                // The keycode first: most events are not ESC.
-                if type == .keyDown && event.getIntegerValueField(.keyboardEventKeycode) == Int64(kVK_Escape)
-                    && owner.engine.active && owner.engine.escapeToEnglish && escapeNeedsEnglish(type: type, code: Int64(kVK_Escape),
-                        flags: event.flags, repeated: event.getIntegerValueField(.keyboardEventAutorepeat) != 0, language: owner.currentLanguage) {
-                    owner.switchToLowercaseEnglish()
+                // Only the event is checked here. ESC goes on to the app, and the input source is read right after.
+                if plainEscape(type: type, code: event.getIntegerValueField(.keyboardEventKeycode), flags: event.flags,
+                               repeated: event.getIntegerValueField(.keyboardEventAutorepeat) != 0)
+                    && owner.engine.active && owner.engine.escapeToEnglish {
+                    let caps = event.flags.contains(.maskAlphaShift)
+                    DispatchQueue.main.async { [weak owner] in owner?.switchToLowercaseEnglish(caps: caps) }
                 }
                 if type == .flagsChanged {
                     if owner.capsPreservationActive && event.getIntegerValueField(.keyboardEventKeycode) == 57 {
-                        let language = owner.currentLanguage
-                        owner.englishCaps.capsKeyChanged(english: language.hasPrefix("en"), actual: event.flags.contains(.maskAlphaShift),
-                            korean: owner.engine.koreanCapsLock && language.hasPrefix("ko"))
+                        let source = owner.currentSource
+                        owner.englishCaps.capsKeyChanged(english: source?.language.hasPrefix("en") == true,
+                            actual: event.flags.contains(.maskAlphaShift), korean: owner.showsEnglishCase(source))
                     }
                     return Unmanaged.passUnretained(event)
                 }
@@ -606,12 +628,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 }
                 let code = event.getIntegerValueField(.keyboardEventKeycode)
                 let repeated = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
-                let beginsSwitch = type == .keyDown && !repeated
-                    || (type == .keyUp && !owner.engine.switchOnKeyDown && !owner.engine.longPressCapsLock)
-                if owner.engine.active && beginsSwitch && code == Int64(owner.engine.target.keyCode) {
+                let switchKey = switchKeyEvent(down: type == .keyDown, repeated: repeated,
+                    onPress: owner.engine.switchOnKeyDown, longPress: owner.engine.longPressCapsLock)
+                if owner.engine.active && switchKey.begins && code == Int64(owner.engine.target.keyCode) {
                     owner.rememberCapsBeforeSwitch()
-                    // The native shortcut on release posts no pulse, yet it is on its way too.
-                    owner.noteSwitchSent()
+                    // A pulse notes itself; the native shortcut posts none.
+                    if switchKey.sent && !owner.engine.switchOnKeyDown { owner.noteSwitchSent() }
                 }
                 if owner.longPress.key == code {
                     if type == .keyUp { owner.finishLongPress(code: code) }
@@ -662,10 +684,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         // Caps Lock used as a Korean/English key cannot also turn on uppercase; choosing it turns this off after a warning.
         // It changes the case that preservation keeps, so it works only with preservation.
         let capsTaken = engine.capsLockSwitches()
-        koreanCapsSwitch.state = trusted && engine.koreanCapsLock && !capsTaken ? .on : .off
+        koreanCapsSwitch.state = trusted && engine.koreanCapsLock ? .on : .off
         koreanCapsSwitch.isEnabled = trusted && engine.preserveCapsLock && !capsTaken
         koreanCapsSwitch.toolTip = !trusted ? accessibilityHint : capsTaken ? "Caps Lock을 한영 키로 사용하는 동안은 쓸 수 없습니다."
-            : !engine.preserveCapsLock ? "대소문자 보존을 켜야 쓸 수 있습니다." : "한영 전환 없이, 영어로 돌아왔을 때의 대소문자를 바꿉니다."
+            : !engine.preserveCapsLock ? "대소문자 보존을 켜야 쓸 수 있습니다." : "2벌식에서 한영 전환 없이, 영어로 돌아왔을 때의 대소문자를 바꿉니다."
         escapeSwitch.state = trusted && engine.escapeToEnglish ? .on : .off
         escapeSwitch.isEnabled = trusted
         escapeSwitch.toolTip = trusted ? switchErrors[escapeSwitch] : accessibilityHint
@@ -682,14 +704,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         guard let key = keys[sender] else { return }
         cancelLongPress()
         switchErrors[sender] = nil
+        let koreanCaps = koreanCapsActive
         engine.defaults.set(sender.state == .on, forKey: key)
         ensureKeyTap()
+        if koreanCaps { releaseKoreanCaps() }
     }
     var currentLanguage: String {
         TISCopyCurrentKeyboardInputSource().map { language($0.takeRetainedValue()) } ?? ""
     }
+    var currentSource: InputSourceIdentity? { TISCopyCurrentKeyboardInputSource().flatMap { Self.sourceIdentity($0.takeRetainedValue()) } }
     var actualCaps: Bool { CGEventSource.flagsState(.combinedSessionState).contains(.maskAlphaShift) }
     var capsPreservationActive: Bool { engine.active && engine.preserveCapsLock && AXIsProcessTrusted() }
+    var koreanCapsActive: Bool { capsPreservationActive && engine.koreanCapsLock }
+    // With Caps Lock in Korean, the lock shows the English case in Korean too.
+    func showsEnglishCase(_ source: InputSourceIdentity?) -> Bool { source?.id == capsSafeKorean && engine.koreanCapsLock }
+    // Once Caps Lock in Korean stops, the lock it kept on in Korean goes off, as the Korean input method turns it off
+    // on the way in. Only a running tap kept it on.
+    func releaseKoreanCaps() {
+        guard keyTap != nil, !koreanCapsActive, currentSource?.id == capsSafeKorean, actualCaps else { return }
+        try? setCapsLock(false)
+    }
+    // The English case preservation restores, even before it has.
+    var rememberedUpper: Bool { capsPreservationActive && englishCaps.target(english: true) == true }
     func syncCapsPreservation() {
         if capsPreservationActive { englishCaps.enable(actual: actualCaps) }
         else { cancelCapsRestore(); englishCaps.reset() }
@@ -722,8 +758,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     func restoreEnglishCaps() {
         guard !optionInput.busy, capsPreservationActive, pendingCapsState == nil else { return }
         // With Caps Lock in Korean, Korean shows the English case as well; its input method turns Caps Lock off on the way in.
-        let language = currentLanguage
-        guard let desired = englishCaps.target(english: language.hasPrefix("en") || engine.koreanCapsLock && language.hasPrefix("ko")),
+        let source = currentSource
+        guard let desired = englishCaps.target(english: source?.language.hasPrefix("en") == true || showsEnglishCase(source)),
               actualCaps != desired else { return }
         do { try setCapsLock(desired); showSwitchError(nil, on: preserveCapsSwitch) }
         catch { showSwitchError(error.localizedDescription, on: preserveCapsSwitch) }
@@ -737,7 +773,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         // Bounded checks never replay text and are invalidated on subsequent transitions.
         // The Korean input method has turned Caps Lock off as late as 0.1 seconds after the notification. Only Caps Lock
         // in Korean restores it there, so only it waits that long; Caps Lock presses are ignored until the last check.
-        let delays = engine.koreanCapsLock && currentLanguage.hasPrefix("ko") ? [0.0, 0.05, 0.15, 0.3] : [0.0, 0.05, 0.15]
+        let delays = showsEnglishCase(currentSource) ? [0.0, 0.05, 0.15, 0.3] : [0.0, 0.05, 0.15]
         for delay in delays {
             let task = DispatchWorkItem { [weak self] in
                 guard let self, self.capsRestoreGeneration == generation, self.capsPreservationActive else { return }
@@ -790,35 +826,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         guard engine.active, engine.longPressCapsLock, AXIsProcessTrusted(),
               longPressOwner == NSWorkspace.shared.frontmostApplication?.processIdentifier else { cancelLongPress(); return }
         beginCapsTransition(!longPressInitialCaps, pulse: longPressEvent.flatMap { nativeSwitchPulse(from: $0, marker: nativePulseMarker) },
-            from: longPressSwitch, failure: "영어 전환을 확인하지 못해 대문자 전환을 취소했습니다. 영어와 한국어를 최근 입력 소스로 선택해주세요.")
+            from: longPressSwitch)
     }
     // ESC takes the long-press path with a generated switch key. It has no owner app:
-    // ESC often closes the window it was pressed in.
-    func switchToLowercaseEnglish() {
-        // A switch already on its way just ends lowercase; another pulse would switch back.
-        if pendingCapsState != nil { pendingCapsState = false; return }
+    // ESC often closes the window it was pressed in. `caps` is the lock ESC came with.
+    func switchToLowercaseEnglish(caps: Bool) {
+        // A transition already on its way ends lowercase; another pulse would switch back.
+        // It is ESC's now, so it no longer depends on the app a long press started in.
+        if pendingCapsState != nil { pendingCapsState = false; longPressOwner = nil; capsTransitionFeature = escapeSwitch; return }
+        let language = currentLanguage
+        guard escapeNeedsEnglish(language: language, upper: caps || rememberedUpper, switching: switchInFlight(from: language)) else { return }
         cancelLongPress()
-        beginCapsTransition(false, pulse: nativeSwitchPulse(keyCode: engine.target.keyCode, marker: nativePulseMarker),
-            from: escapeSwitch, failure: "영어 전환을 확인하지 못했습니다. 영어와 한국어를 최근 입력 소스로 선택해주세요.")
+        beginCapsTransition(false, pulse: nativeSwitchPulse(keyCode: engine.target.keyCode, marker: nativePulseMarker), from: escapeSwitch)
     }
-    func beginCapsTransition(_ desired: Bool, pulse: (CGEvent, CGEvent)?, from feature: NSButton, failure: String) {
+    func switchFailure(_ feature: NSButton) -> String {
+        feature === escapeSwitch ? "영어 전환을 확인하지 못했습니다. 영어와 한국어를 최근 입력 소스로 선택해주세요."
+            : "영어 전환을 확인하지 못해 대문자 전환을 취소했습니다. 영어와 한국어를 최근 입력 소스로 선택해주세요."
+    }
+    func beginCapsTransition(_ desired: Bool, pulse: (CGEvent, CGEvent)?, from feature: NSButton) {
         guard let current = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue(),
               availableSource("en") != nil else { cancelLongPress(); return }
         pendingCapsState = desired
         capsTransitionFeature = feature
-        let from = language(current)
-        if from.hasPrefix("en") { completeCapsTransition(); return }
-        // Keep composition on the native shortcut path; no text replay or direct TIS selection.
-        // A switch already on its way (a Korean/English key just before ESC) reaches English by itself.
-        if sentSwitch?.inFlight(now: ProcessInfo.processInfo.systemUptime, language: from) != true {
+        let from = language(current), switching = switchInFlight(from: from), route = englishRoute(from: from, switching: switching)
+        switch route {
+        case .now: completeCapsTransition(); return
+        case .awaitSwitch: break
+        case .sendSwitch:
+            // Keep composition on the native shortcut path; no text replay or direct TIS selection.
             guard let pulse else { cancelLongPress(); return }
             postSwitchPulse(pulse)
+            // Two are on their way back here, so neither is in flight from this source.
+            if switching { sentSwitch = nil }
         }
+        // ESC switches only to reach English, so its own switch that went to another source goes back.
+        let start = Self.sourceIdentity(current)?.id, revert = feature === escapeSwitch && route == .sendSwitch
         let generation = longPressGeneration
         let timeout = DispatchWorkItem { [weak self] in
             guard let self, self.longPressGeneration == generation, self.pendingCapsState != nil else { return }
+            let feature = self.capsTransitionFeature
             self.cancelLongPress()
-            self.showSwitchError(failure, on: feature)
+            self.showSwitchError(self.switchFailure(feature), on: feature)
+            if revert, let now = self.currentSource, !now.language.hasPrefix("en"), now.id != start,
+               let pulse = nativeSwitchPulse(keyCode: self.engine.target.keyCode, marker: self.nativePulseMarker) {
+                self.postSwitchPulse(pulse)
+            }
         }
         capsConfirmationTimer = timeout
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: timeout)
@@ -846,7 +898,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         noteSwitchSent()
         pulse.0.post(tap: .cghidEventTap); pulse.1.post(tap: .cghidEventTap)
     }
-    func noteSwitchSent() { sentSwitch = SentSwitch(from: currentLanguage, at: ProcessInfo.processInfo.systemUptime) }
+    // Only ESC asks, so the input source is read only while it is on.
+    func noteSwitchSent() {
+        guard engine.escapeToEnglish else { return }
+        sentSwitch = SentSwitch(from: currentLanguage, at: ProcessInfo.processInfo.systemUptime)
+    }
+    func switchInFlight(from language: String) -> Bool { sentSwitch?.inFlight(now: ProcessInfo.processInfo.systemUptime, language: language) == true }
     @objc func requestPressAccess() {
         returningFromPermissionSettings = true
         permissionSettingsWasActive = false
@@ -915,15 +972,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         if keyboardSettings == nil {
             keyboardSettings = KeyboardSettingsController(engine: engine, sourcesChanged: { [weak self] keys in
                 self?.picker.show(keys); self?.selectionChanged()
-            }, confirm: { [weak self] keyboards in
-                guard let self else { return true }
-                guard confirmCapsLockKey(engine.capsLockSwitches()),
-                      !engine.active || confirmMapping(engine.defaultSources, target: engine.target, only: keyboards) else { return false }
-                releaseKoreanCapsLock()
-                return true
-            }) { [weak self] in self?.repair() }
+            }, confirm: { [weak self] keyboards in self?.confirmKeyboardChange(keyboards) ?? true }) { [weak self] in self?.repair() }
         }
         keyboardSettings?.show(on: window)
+    }
+    // The keyboard sheet saves a change before this check and undoes it on false.
+    func confirmKeyboardChange(_ keyboards: Set<String>) -> Bool {
+        guard confirmCapsLockKey(engine.capsLockSwitches()),
+              !engine.active || confirmMapping(engine.defaultSources, target: engine.target, only: keyboards) else { return false }
+        releaseKoreanCapsLock()
+        return true
     }
     func refreshKeyboardState() {
         let warning = engine.keyboards.warning
@@ -1032,6 +1090,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     @objc func inputSourceChanged() {
         RunLoop.main.perform(inModes: [.common]) { [weak self] in
             guard let self else { return }
+            // The switch on its way has landed, so the next ESC needs its own.
+            self.sentSwitch = nil
             guard !self.optionInput.busy else { return }
             self.completeCapsTransition()
             self.scheduleCapsRestore()
@@ -1139,29 +1199,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
     // False keeps the old keys.
     func confirmCapsLockKey(_ taken: Bool) -> Bool {
-        guard taken, engine.koreanCapsLock else { return true }
+        // The saved choice: the keyboard sheet asks after saving the new keys, which already pause it.
+        guard taken, engine.defaults.bool(forKey: "koreanCapsLock") else { return true }
         let alert = NSAlert(); alert.messageText = "Caps Lock을 한영 키로 사용합니다."
         alert.informativeText = "'\(koreanCapsSwitch.title)' 기능이 꺼집니다."
         alert.addButton(withTitle: "변경"); alert.addButton(withTitle: "취소")
-        return alert.runModal() == .alertFirstButtonReturn
+        return runAlert(alert) == .alertFirstButtonReturn
     }
     // Caps Lock in Korean goes off only once Caps Lock is saved as a Korean/English key, so a later warning that
     // cancels the change keeps it.
     func releaseKoreanCapsLock() {
-        if engine.koreanCapsLock && engine.capsLockSwitches() { engine.defaults.set(false, forKey: "koreanCapsLock") }
+        if engine.defaults.bool(forKey: "koreanCapsLock") && engine.capsLockSwitches() {
+            engine.defaults.set(false, forKey: "koreanCapsLock")
+            releaseKoreanCaps()
+        }
         updatePressAccess()
     }
     func confirmMapping(_ keys: [UInt64], target: TargetKey, only keyboards: Set<String>? = nil) -> Bool {
         if engine.targetInUse(keys, target: target, only: keyboards) {
             let alert = NSAlert(); alert.messageText = "\(target.name)은 다른 키 매핑에서 사용 중입니다."
             alert.informativeText = "다른 앱과 충돌할 수 있습니다. 대상 키를 바꿔주세요."
-            alert.runModal(); return false
+            _ = runAlert(alert); return false
         }
         if let key = engine.conflict(keys, target: target, only: keyboards) {
             let alert = NSAlert(); alert.messageText = "\(sourceName(key))에 다른 매핑이 있습니다."
             alert.informativeText = "선택한 키를 한영 전환 전용으로 바꿉니다. 다른 앱에서도 이 키의 재매핑을 꺼주세요. 기존 매핑은 해제 시 복원됩니다."
             alert.addButton(withTitle: "변경"); alert.addButton(withTitle: "취소")
-            return alert.runModal() == .alertFirstButtonReturn
+            return runAlert(alert) == .alertFirstButtonReturn
         }
         return true
     }

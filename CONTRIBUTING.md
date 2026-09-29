@@ -31,4 +31,4 @@ GKSDUD_SIGN_MODE=ad-hoc bash build.sh
 - USB/Bluetooth 재연결, Karabiner 가상 키보드 재생성, 로그인 및 잠자기 복귀 후 자동 적용
 - 접근성 권한 해제 후 재허용
 
-설정 창 UI는 `gksdud.app/Contents/MacOS/gksdud --render-keyboard-ui /private/tmp/gksdud-ui`로 밝은/어두운 모드 PNG를 저장해 확인할 수 있습니다.
+설정 창 UI는 `build.sh`가 마지막에 출력하는 테스트용 앱의 `Contents/MacOS/gksdud --render-keyboard-ui /private/tmp/gksdud-ui`로 밝은/어두운 모드 PNG를 저장해 확인할 수 있습니다.

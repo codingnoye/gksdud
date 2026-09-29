@@ -185,11 +185,16 @@ final class KeyboardManager {
         known[key]?.sources = sources.flatMap { selectable($0) }; saveKnown()
     }
     // Only single keys are mapped per keyboard; Space combinations never reach HID.
-    func sources(for device: KeyboardDevice, default fallback: [UInt64]) -> [UInt64] {
-        known[device.identity.key]?.sources.flatMap { selectable($0) } ?? selectable(fallback) ?? []
+    func sources(for device: KeyboardDevice, default fallback: [UInt64]) -> [UInt64] { sources(device.identity.key, default: fallback) }
+    func isSelected(_ device: KeyboardDevice) -> Bool { isSelected(device.identity.key) }
+    // A keyboard not seen yet (nil) starts on Default.
+    private func sources(_ key: String?, default fallback: [UInt64]) -> [UInt64] {
+        key.flatMap { known[$0]?.sources }.flatMap { selectable($0) } ?? selectable(fallback) ?? []
     }
-    func isSelected(_ device: KeyboardDevice) -> Bool {
-        (known[device.identity.key]?.mode ?? .default).applies(defaultEnabled: defaultEnabled)
+    private func isSelected(_ key: String?) -> Bool { (key.flatMap { known[$0] }?.mode ?? .default).applies(defaultEnabled: defaultEnabled) }
+    // Whether some keyboard maps `source`, counting keyboards not connected yet.
+    func maps(_ source: UInt64, default fallback: [UInt64]) -> Bool {
+        ([nil] + known.keys.map(Optional.some)).contains { isSelected($0) && sources($0, default: fallback).contains(source) }
     }
     func snapshot() throws -> [KeyboardDevice] {
         let devices = try discover()

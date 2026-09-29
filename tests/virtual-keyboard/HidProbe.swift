@@ -163,6 +163,10 @@ if settings.bool(forKey: "escapeToEnglish") {
     start(english, caps: false); switchSource()
     _ = send("down \(switchKey)"); _ = send("down esc"); pump(0.03); _ = send("up \(switchKey)"); _ = send("up esc"); pump(0.8)
     check("ESC rolled over the switch key", "en", caps: false, letter: "r")
+    // The same from English: the switch on its way leaves English, so ESC comes back.
+    start(english, caps: false)
+    _ = send("down \(switchKey)"); _ = send("down esc"); pump(0.03); _ = send("up \(switchKey)"); _ = send("up esc"); pump(0.8)
+    check("ESC rolled over the switch key in English", "en", caps: false, letter: "r")
 }
 // A Caps Lock press right after a switch into English is the user's, not the input method's.
 start(english, caps: false); switchSource()
