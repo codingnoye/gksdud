@@ -441,6 +441,7 @@ func renderKeyboardUI(to directory: String) throws {
             try bitmap.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: directory).appendingPathComponent("menubar-warning.png"))
         }
     }
+    func descendantsOf(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendantsOf) }
     func save(_ view: NSView, _ name: String) throws {
         let visible = view.window?.isVisible == true
         view.wantsLayer = true
@@ -504,6 +505,39 @@ func renderKeyboardUI(to directory: String) throws {
         try save(delegate.window.contentView!, "right-control-\(name).png")
     }
     print("PASS: source picker actions and saved selection for right Command, right Option, Caps Lock, right Control and Space combinations")
+    // Choosing Caps Lock as a Korean/English key warns while Caps Lock in Korean is on; the answer comes from a modal timer.
+    defaults.set(true, forKey: "koreanCapsLock")
+    let savedSources = engine.defaultSources
+    for answer in [NSApplication.ModalResponse.alertSecondButtonReturn, .alertFirstButtonReturn] {
+        var warning: String?
+        let reply = Timer(timeInterval: 0.2, repeats: false) { _ in
+            if let alert = NSApp.modalWindow, let view = alert.contentView {
+                warning = descendantsOf(view).compactMap { ($0 as? NSTextField)?.stringValue }.joined(separator: " ")
+                view.layoutSubtreeIfNeeded()
+                if let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
+                    view.cacheDisplay(in: view.bounds, to: bitmap)
+                    try? bitmap.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: directory).appendingPathComponent("caps-taken-alert.png"))
+                }
+            }
+            NSApp.stopModal(withCode: answer)
+        }
+        RunLoop.current.add(reply, forMode: .modalPanel)
+        delegate.picker.selectItem(withTitle: "Caps Lock ⇪")
+        precondition(delegate.picker.sendAction(delegate.picker.action, to: delegate.picker.target))
+        precondition(warning?.contains("Caps Lock을 한영 키로 사용합니다.") == true, "Caps Lock in Korean warns before Caps Lock becomes a Korean/English key")
+        if answer == .alertSecondButtonReturn {
+            precondition(engine.defaultSources == savedSources && engine.koreanCapsLock, "Cancel keeps both the keys and Caps Lock in Korean")
+        } else {
+            precondition(engine.defaultSources == [sources[2]] && !engine.koreanCapsLock, "Confirming turns Caps Lock in Korean off")
+            precondition(!delegate.koreanCapsSwitch.isEnabled && delegate.koreanCapsSwitch.state == .off)
+            delegate.selectTab(1)
+            try save(delegate.window.contentView!, "caps-taken.png")
+        }
+    }
+    engine.defaultSources = savedSources; delegate.resetSelection()
+    defaults.removeObject(forKey: "koreanCapsLock")
+    delegate.specialStatus.isHidden = false; delegate.refreshSpecialMode()
+    precondition(delegate.specialStatus.isHidden, "Empty special-character status takes no room")
     for mode in [1, 2, 1] {
         // Exercise real checkbox actions with activation off so no live tap is installed.
         delegate.specialButtons[mode - 1].performClick(nil)

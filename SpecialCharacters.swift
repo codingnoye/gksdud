@@ -228,8 +228,10 @@ extension AppDelegate {
     }
     func refreshSpecialMode() {
         for button in specialButtons { button.state = button.tag == specialMode.rawValue ? .on : .off }
-        specialStatus.stringValue = ""
+        showSpecialStatus("")
     }
+    // Empty, it takes no room between the sections.
+    func showSpecialStatus(_ text: String) { specialStatus.stringValue = text; specialStatus.isHidden = text.isEmpty }
     static func sourceIdentity(_ source: TISInputSource) -> InputSourceIdentity? {
         guard let id = TISGetInputSourceProperty(source, kTISPropertyInputSourceID),
               let languages = TISGetInputSourceProperty(source, kTISPropertyInputSourceLanguages) else { return nil }
@@ -271,7 +273,7 @@ extension AppDelegate {
             // character. Only a zero-length result means another stroke is pending.
             return result == noErr ? (length == 0 ? next : 0) : nil
         }), marker: nativePulseMarker)
-        controller.report = { [weak self] text in self?.specialStatus.stringValue = text }
+        controller.report = { [weak self] text in self?.showSpecialStatus(text) }
         controller.willBegin = { [weak self] in self?.cancelLongPress(); self?.cancelCapsRestore(); self?.refreshSpecialMode() }
         controller.didFinish = { [weak self] in
             DispatchQueue.main.async { self?.updateInputIndicator(); self?.scheduleCapsRestore() }

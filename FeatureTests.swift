@@ -59,6 +59,63 @@ func runFeatureTests() {
     runOptionInputTests()
     runOptionRepeatTests()
     runNativeOptionSymbolTests()
+    runEnglishSwitchTests()
+}
+
+func runEnglishSwitchTests() {
+    func escape(_ type: CGEventType, _ language: String, _ flags: CGEventFlags = [], repeated: Bool = false, code: Int = kVK_Escape) -> Bool {
+        escapeNeedsEnglish(type: type, code: Int64(code), flags: flags, repeated: repeated, language: language)
+    }
+    featureCheck(escape(.keyDown, "ko"), "ESC in Korean ends in English lowercase")
+    featureCheck(escape(.keyDown, "en", .maskAlphaShift), "ESC in English uppercase turns Caps Lock off")
+    featureCheck(!escape(.keyDown, "en"), "ESC in English lowercase changes nothing")
+    featureCheck(escape(.keyDown, "ja"))
+    featureCheck(!escape(.keyDown, "ko", repeated: true), "Held ESC switches once")
+    featureCheck(!escape(.keyUp, "ko"))
+    featureCheck(!escape(.flagsChanged, "ko", .maskAlphaShift, code: kVK_CapsLock) && !escape(.keyDown, "ko", code: kVK_ANSI_A))
+    for modifier: CGEventFlags in [.maskCommand, .maskControl, .maskAlternate, .maskShift] {
+        featureCheck(!escape(.keyDown, "ko", modifier), "Modified ESC stays a shortcut")
+    }
+    for initial in [false, true] {
+        for korean in [false, true] {
+            var caps = EnglishCapsState()
+            caps.enable(actual: initial)
+            caps.willSwitch(english: true, actual: initial, longPress: false); caps.switching = false
+            caps.capsKeyChanged(english: false, actual: !initial, korean: korean)
+            caps.willSwitch(english: false, actual: !initial, longPress: false)
+            featureCheck(caps.target(english: true) == (korean ? !initial : initial),
+                "Caps Lock pressed in Korean sets the English case only with Caps Lock in Korean on")
+        }
+    }
+    var caps = EnglishCapsState()
+    caps.enable(actual: false)
+    caps.willSwitch(english: true, actual: false, longPress: false)
+    caps.capsKeyChanged(english: false, actual: true, korean: true)
+    featureCheck(caps.target(english: true) == false, "A Caps Lock change during a switch is still ignored")
+
+    let suite = "io.gksdud.english-switch-tests.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let keyboard = TestKeyboard("english-switch-1", name: "Keyboard", serial: "english-switch")
+    let engine = Engine(defaults: defaults, discover: { [keyboard] })
+    _ = engine.keyboards.reconcile(sources: engine.defaultSources, target: f19, active: true)
+    featureCheck(!engine.koreanCapsLock && !engine.escapeToEnglish, "Both keys are opt-in")
+    featureCheck(!engine.capsLockSwitches())
+    engine.defaultSources = [sources[0], sources[2]]
+    featureCheck(engine.capsLockSwitches(), "Caps Lock among default Korean/English keys")
+    featureCheck(!engine.capsLockSwitches([sources[0]]) && engine.capsLockSwitches([sources[3], sources[2]]), "Checks keys before saving them")
+    engine.keyboards.setSources([sources[2]], for: keyboard.identity.key)
+    engine.defaultSources = [sources[0]]
+    featureCheck(engine.capsLockSwitches(), "Caps Lock as one keyboard's own key")
+    engine.keyboards.setMode(.off, for: keyboard.identity.key)
+    featureCheck(!engine.capsLockSwitches(), "Keyboards left off do not count")
+    engine.defaultSources = [sources[2]]
+    featureCheck(engine.capsLockSwitches(), "New keyboards follow the default")
+    engine.keyboards.defaultEnabled = false
+    featureCheck(!engine.capsLockSwitches())
+    engine.keyboards.setMode(.on, for: keyboard.identity.key); engine.keyboards.setSources(nil, for: keyboard.identity.key)
+    featureCheck(engine.capsLockSwitches(), "An enabled keyboard following the default")
+    print("PASS: ESC to English lowercase, modifier and repeat exclusions, Caps Lock in Korean setting the English case, Caps Lock key conflicts")
 }
 
 func runOptionInputTests() {

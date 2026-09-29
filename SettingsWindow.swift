@@ -38,12 +38,12 @@ extension AppDelegate {
         }
         let tabs = NSStackView(); tabs.distribution = .fillEqually; tabs.spacing = 8
         tabs.translatesAutoresizingMaskIntoConstraints = false; content.addSubview(tabs)
-        for (index, title) in ["일반", "대소문자", "특수문자", "gksdud"].enumerated() {
+        for (index, title) in ["일반", "대소문자", "추가기능", "gksdud"].enumerated() {
             let button = NSButton(title: title, target: self, action: #selector(changeTab(_:)))
             button.tag = index; button.setButtonType(.toggle); button.bezelStyle = .regularSquare
             button.isBordered = false; button.imagePosition = .imageAbove; button.imageScaling = .scaleProportionallyDown
             button.font = .systemFont(ofSize: 10)
-            button.image = index == 0 ? sourceMenuIcon(korean: true) : tabGlyph(["", "Aa", "⌥", "?"][index])
+            button.image = index == 0 ? sourceMenuIcon(korean: true) : tabGlyph(["", "Aa", "+", "?"][index])
             button.setAccessibilityLabel(title + " 탭")
             tabs.addArrangedSubview(button); tabButtons.append(button)
         }
@@ -77,6 +77,10 @@ extension AppDelegate {
             NSLayoutConstraint.activate([label.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: indent), label.trailingAnchor.constraint(equalTo: container.trailingAnchor), label.topAnchor.constraint(equalTo: container.topAnchor), label.bottomAnchor.constraint(equalTo: container.bottomAnchor)])
         }
         func separator(in panel: NSStackView) { let line = NSBox(); line.boxType = .separator; full(line, in: panel) }
+        func heading(_ text: String, in panel: NSStackView) {
+            let label = NSTextField(labelWithString: text); label.font = .systemFont(ofSize: 13, weight: .semibold)
+            panel.addArrangedSubview(label)
+        }
         func row(_ title: String, _ views: [NSView], in panel: NSStackView) {
             let label = NSTextField(labelWithString: title); label.widthAnchor.constraint(equalToConstant: 95).isActive = true
             let row = NSStackView(views: [label] + views); row.spacing = 16; row.alignment = .centerY
@@ -132,14 +136,21 @@ extension AppDelegate {
         caps.addArrangedSubview(longPressSwitch)
         hint("누른 즉시 한영 전환, 길게 유지시 대소문자 전환", in: caps)
         caps.addArrangedSubview(preserveCapsSwitch)
-        let symbols = tabPanels[2]
+        koreanCapsSwitch.target = self; koreanCapsSwitch.action = #selector(toggleKoreanCaps)
+        caps.addArrangedSubview(koreanCapsSwitch)
+        let extras = tabPanels[2]
+        heading("특수문자", in: extras)
         for (index, title) in ["영어처럼 특수문자 입력", "Option 문자 입력 차단"].enumerated() {
             let button = NSButton(checkboxWithTitle: title, target: self, action: #selector(changeSpecialMode(_:)))
-            button.tag = index + 1; specialButtons.append(button); symbols.addArrangedSubview(button)
-            hint(index == 0 ? "한글 상태에서도 ⌥8 → • 처럼 입력합니다." : "⌥+문자를 일반 문자로 입력합니다.", in: symbols)
+            button.tag = index + 1; specialButtons.append(button); extras.addArrangedSubview(button)
+            hint(index == 0 ? "한글 상태에서도 ⌥8 → • 처럼 입력합니다." : "⌥+문자를 일반 문자로 입력합니다.", in: extras)
         }
         specialStatus.font = .systemFont(ofSize: 11); specialStatus.textColor = .secondaryLabelColor
-        full(specialStatus, in: symbols)
+        extras.setCustomSpacing(28, after: extras.arrangedSubviews.last!)
+        full(specialStatus, in: extras); extras.setCustomSpacing(28, after: specialStatus)
+        heading("기타", in: extras)
+        escapeSwitch.target = self; escapeSwitch.action = #selector(toggleEscape)
+        extras.addArrangedSubview(escapeSwitch)
         let about = tabPanels[3]; about.alignment = .centerX; about.spacing = 18
         let appIcon = NSImageView(image: NSApp.applicationIconImage)
         appIcon.widthAnchor.constraint(equalToConstant: 72).isActive = true
