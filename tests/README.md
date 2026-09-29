@@ -18,4 +18,4 @@ bash tests/virtual-keyboard/run.sh
 - 실행하는 30초 동안 테스트 창이 포커스를 가져갑니다. 키보드와 마우스를 만지지 마세요.
 - gksdud의 현재 설정으로 확인하고, 끝나면 입력 소스와 영어 대소문자를 되돌립니다. 중간에 멈췄다면 `run.sh --reset`으로 영어 소문자를 되돌립니다.
 
-sudo 없이 ESC 경로만 확인하려면 `open -n -W --stdout <파일> /Applications/gksdud.app --args --probe-escape`를 실행합니다.
+sudo 없이 ESC 경로만 확인하려면 `build.sh`가 마지막에 출력하는 테스트용 앱으로 `open -n -W --stdout <파일> <테스트용 앱> --args --probe-escape`를 실행합니다. 테스트 코드는 이 테스트용 앱에만 들어가고 배포 앱에는 포함되지 않습니다.

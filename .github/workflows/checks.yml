@@ -57,7 +57,7 @@ jobs:
         if: failure()
         shell: bash
         run: |
-          for binary in /private/tmp/gksdud-build.*/gksdud-"$(uname -m)"; do
+          for binary in /private/tmp/gksdud-build.*/test/gksdud.app/Contents/MacOS/gksdud; do
             if [[ -f "$binary" ]]; then
               lldb --batch -o run --one-line-on-crash 'thread backtrace all' -- "$binary" --self-test
               break

@@ -1,6 +1,7 @@
 import AppKit
 import Carbon
 
+#if TESTS
 // Preserve an actionable failure location in optimized CI builds, where Swift's
 // precondition trap otherwise loses its message and buffered stdout.
 func featureCheck(_ condition: @autoclosure () -> Bool, _ message: String = "", file: StaticString = #filePath, line: UInt = #line) {
@@ -445,8 +446,8 @@ func probeOptionInput() throws {
 }
 
 // Drives the running gksdud with HID-level keys from a second instance, then reads the input source and the Caps Lock lock.
-// Launch the installed bundle so it has gksdud's Accessibility permission:
-// open -n -W --stdout <file> /Applications/gksdud.app --args --probe-escape
+// Launch the test app from build.sh, signed like the installed one, so it has gksdud's Accessibility permission:
+// open -n -W --stdout <file> <test app> --args --probe-escape
 // It needs ESC to English on in the running app. Keys go only while this probe's window is frontmost.
 // A physical Caps Lock press cannot be generated: posted Caps Lock events do not toggle the lock.
 func probeEscape() throws {
@@ -746,3 +747,4 @@ func runNativeOptionSymbolTests() {
     }
     print("PASS: native Option-won/keypad during selection/delivery, repeated symbols, ordered Hangul replay and balanced key-up")
 }
+#endif

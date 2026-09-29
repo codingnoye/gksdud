@@ -1,5 +1,6 @@
 import AppKit
 
+#if TESTS
 func runSettingsReentrancyTests() throws {
     let suite = "io.gksdud.reentrancy-tests.\(UUID().uuidString)"
     let defaults = UserDefaults(suiteName: suite)!
@@ -684,3 +685,4 @@ func renderKeyboardUI(to directory: String) throws {
     print("PASS: default and per-keyboard segments and key dropdowns, warnings on key and mode changes, sheet cancel, rows rebuilt under a sheet, hidden refresh, warning UI recovery")
     print("Rendered UI to \(directory)")
 }
+#endif

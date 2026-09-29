@@ -26,8 +26,10 @@ mkdir -p "$stage/gksdud.app/Contents/MacOS" "$stage/gksdud.app/Contents/Resource
 swiftc -parse-as-library -D ICON_GENERATOR -module-cache-path "$stage/module-cache" DudIcon.swift -o "$stage/icon-generator"
 "$stage/icon-generator" "$stage/AppIcon.iconset"
 iconutil -c icns "$stage/AppIcon.iconset" -o "$stage/gksdud.app/Contents/Resources/AppIcon.icns"
+sources=(main.swift DudIcon.swift KeyboardManagement.swift KeyboardSettings.swift SettingsWindow.swift UpdateChecking.swift UpdateInstaller.swift SpecialCharacters.swift KeyboardTests.swift FeatureTests.swift SelfTest.swift)
+compile() { swiftc -swift-version 5 -O -module-cache-path "$stage/module-cache" -import-objc-header Bridge.h "${sources[@]}" -framework AppKit -framework IOKit -framework ServiceManagement "$@"; }
 for arch in arm64 x86_64; do
-  swiftc -swift-version 5 -O -target "$arch-apple-macos13.0" -module-cache-path "$stage/module-cache" -import-objc-header Bridge.h main.swift DudIcon.swift KeyboardManagement.swift KeyboardSettings.swift KeyboardTests.swift SettingsWindow.swift UpdateChecking.swift UpdateInstaller.swift SpecialCharacters.swift FeatureTests.swift -o "$stage/gksdud-$arch" -framework AppKit -framework IOKit -framework ServiceManagement
+  compile -target "$arch-apple-macos13.0" -o "$stage/gksdud-$arch"
 done
 lipo -create "$stage/gksdud-arm64" "$stage/gksdud-x86_64" -output "$stage/gksdud.app/Contents/MacOS/gksdud"
 cp Info.plist "$stage/gksdud.app/Contents/Info.plist"
@@ -43,8 +45,14 @@ if [[ -n "${GKSDUD_BUILD_NUMBER:-}" ]]; then
 fi
 codesign --force "${sign_args[@]}" --options runtime "$stage/gksdud.app"
 codesign --verify --deep --strict "$stage/gksdud.app"
-"$stage/gksdud.app/Contents/MacOS/gksdud" --self-test
+# The release app has no test code; the same bundle with the test modes compiled in (-D TESTS) runs them.
+test_app="$stage/test/gksdud.app"
+ditto "$stage/gksdud.app" "$test_app"
+compile -D TESTS -target "$(uname -m)-apple-macos13.0" -o "$test_app/Contents/MacOS/gksdud"
+codesign --force "${sign_args[@]}" --options runtime "$test_app"
+"$test_app/Contents/MacOS/gksdud" --self-test
 version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$stage/gksdud.app/Contents/Info.plist")
 ditto -c -k --keepParent --norsrc "$stage/gksdud.app" "$output_dir/gksdud-$version-macos-universal.zip"
 codesign -d -r- "$stage/gksdud.app"
 echo "Built app: $stage/gksdud.app"
+echo "Test app: $test_app"
