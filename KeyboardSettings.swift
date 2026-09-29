@@ -16,16 +16,22 @@ final class WarningBadgeView: NSView {
 
 // Picks one Korean/English key from the menu. Its last item edits several keys in a sheet,
 // and once several are chosen a click opens that sheet directly.
-final class SourcePicker: NSPopUpButton {
+final class SourcePicker: NSPopUpButton, NSMenuDelegate {
+    // Space combinations need the event tap, which needs Accessibility.
+    static var combosAvailable: () -> Bool = { AXIsProcessTrusted() }
     var onChange: (([UInt64]?) -> Void)?
     private(set) var selection: [UInt64]?
+    let options: [UInt64]
     // Per-keyboard pickers start with a Default item that follows these keys.
     private var defaultKeys: [UInt64]?
 
-    init(controlSize size: NSControl.ControlSize = .regular) {
+    // Per-keyboard pickers offer only the single keys; combinations are global.
+    init(controlSize size: NSControl.ControlSize = .regular, options: [UInt64] = hangulKeys) {
+        self.options = options
         super.init(frame: .zero, pullsDown: false)
         controlSize = size; font = .systemFont(ofSize: NSFont.systemFontSize(for: size))
         target = self; action = #selector(choose)
+        autoenablesItems = false; menu?.delegate = self
     }
     required init?(coder: NSCoder) { fatalError() }
     private static func title(_ keys: [UInt64]) -> String {
@@ -33,29 +39,40 @@ final class SourcePicker: NSPopUpButton {
     }
     func show(_ keys: [UInt64]?, default defaultKeys: [UInt64]? = nil) {
         // Saved data may hold no keys or unknown ones; those show as no choice.
-        let keys = keys.flatMap(selectable)
+        let keys = keys.flatMap { selectable($0, from: options) }
         selection = keys; self.defaultKeys = defaultKeys
         removeAllItems()
-        if let defaultKeys { addItem(withTitle: "기본값 (\(Self.title(defaultKeys)))") }
-        addItems(withTitles: sourceNames)
+        if let defaultKeys { addItem(withTitle: defaultKeys.isEmpty ? "기본값" : "기본값 (\(Self.title(defaultKeys)))") }
+        for key in options {
+            if key == spaceCombos.first { menu?.addItem(.separator()) }
+            addItem(withTitle: sourceName(key)); lastItem?.representedObject = NSNumber(value: key)
+        }
         menu?.addItem(.separator())
         addItem(withTitle: "다중 한영 키")
+        if let menu { menuNeedsUpdate(menu) }
         guard let keys else { selectItem(at: 0); return }
         if keys.count > 1 { lastItem?.title = Self.title(keys); selectItem(at: numberOfItems - 1) }
         else { selectItem(withTitle: Self.title(keys)) }
+    }
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        guard options.contains(where: spaceCombos.contains) else { return }
+        let available = Self.combosAvailable()
+        for item in menu.items where (item.representedObject as? NSNumber).map({ spaceCombos.contains($0.uint64Value) }) == true {
+            item.isEnabled = available; item.toolTip = available ? nil : accessibilityHint
+        }
     }
     override func mouseDown(with event: NSEvent) {
         if (selection?.count ?? 0) > 1 { editMultiple() } else { super.mouseDown(with: event) }
     }
     @objc private func choose() {
-        let index = indexOfSelectedItem, offset = defaultKeys == nil ? 0 : 1
-        if index == numberOfItems - 1 { editMultiple(); return }
-        commit(index < offset ? nil : [sources[index - offset]])
+        if indexOfSelectedItem == numberOfItems - 1 { editMultiple(); return }
+        // The Default item carries no key.
+        commit((selectedItem?.representedObject as? NSNumber).map { [$0.uint64Value] })
     }
     private func editMultiple() {
         show(selection, default: defaultKeys)
         guard let parent = window else { return }
-        let sheet = MultiSourceSheet(checked: selection ?? defaultKeys ?? [])
+        let sheet = MultiSourceSheet(options: options, checked: selection ?? defaultKeys ?? [])
         // Keep the picker until the sheet ends: a table reload can drop its row meanwhile.
         parent.beginSheet(sheet.window) { [self] response in
             let checked = sheet.checked
@@ -75,21 +92,27 @@ final class SourcePicker: NSPopUpButton {
 
 final class MultiSourceSheet: NSObject {
     let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 240, height: 0), styleMask: [.titled], backing: .buffered, defer: false)
+    private let options: [UInt64]
     private var boxes: [NSButton] = []
-    var checked: [UInt64] { zip(sources, boxes).filter { $0.1.state == .on }.map(\.0) }
+    var checked: [UInt64] { zip(options, boxes).filter { $0.1.state == .on }.map(\.0) }
 
-    init(checked: [UInt64]) {
+    init(options: [UInt64], checked: [UInt64]) {
+        self.options = options
         super.init()
         let title = NSTextField(labelWithString: "다중 한영 키")
         title.font = .systemFont(ofSize: 13, weight: .semibold)
-        boxes = zip(sources, sourceNames).map { key, name in
-            let box = NSButton(checkboxWithTitle: name, target: nil, action: nil)
+        let combosAvailable = SourcePicker.combosAvailable()
+        boxes = options.map { key in
+            let box = NSButton(checkboxWithTitle: sourceName(key), target: nil, action: nil)
             box.state = checked.contains(key) ? .on : .off
+            if spaceCombos.contains(key) && !combosAvailable { box.isEnabled = false; box.toolTip = accessibilityHint }
             return box
         }
         let list = NSStackView(views: [title] + boxes)
         list.orientation = .vertical; list.alignment = .leading; list.spacing = 8
         list.setCustomSpacing(12, after: title)
+        // Set the combinations apart from the single keys.
+        if let first = options.firstIndex(where: spaceCombos.contains), first > 0 { list.setCustomSpacing(16, after: boxes[first - 1]) }
         let done = NSButton(title: "완료", target: self, action: #selector(finish))
         done.bezelStyle = .rounded; done.keyEquivalent = "\r"
         let cancel = NSButton(title: "취소", target: self, action: #selector(discard))
@@ -250,7 +273,7 @@ final class KeyboardSettingsController: NSObject, NSTableViewDataSource, NSTable
         keyboards = manager.keyboards
         for keyboard in keyboards {
             controls[keyboard.key]?.selectedSegment = modes.firstIndex(of: keyboard.mode)!
-            sourcePickers[keyboard.key]?.show(keyboard.sources, default: engine.defaultSources)
+            sourcePickers[keyboard.key]?.show(keyboard.sources, default: engine.mappedSources)
         }
         let signature = keyboards.map { "\($0.key)|\($0.name)|\(manager.connected.contains($0.key))" }.joined(separator: "\n")
         emptyLabel.isHidden = !keyboards.isEmpty
@@ -285,9 +308,9 @@ final class KeyboardSettingsController: NSObject, NSTableViewDataSource, NSTable
         control.sizeToFit()
         control.setFrameOrigin(NSPoint(x: cell.bounds.width - control.frame.width - 12, y: (cell.bounds.height - control.frame.height) / 2))
         control.autoresizingMask = [.minXMargin, .minYMargin, .maxYMargin]
-        let picker = SourcePicker(controlSize: .small)
+        let picker = SourcePicker(controlSize: .small, options: sources)
         sourcePickers[keyboard.key] = picker
-        picker.show(keyboard.sources, default: engine.defaultSources)
+        picker.show(keyboard.sources, default: engine.mappedSources)
         picker.onChange = { [weak self] keys in
             guard let self else { return }
             let saved = manager.known[keyboard.key]?.sources

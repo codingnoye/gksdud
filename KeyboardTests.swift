@@ -309,6 +309,14 @@ func runKeyboardTests() {
     manager.setSources([command], for: unverified.identity.key)
     precondition(repair(command, targets[7].usage).applied == 1 && unverified.mappings == [mapping(command, targets[7].usage)],
         "A key dropped after a failed readback is ours, not a conflict")
+    let comboOnly = TestKeyboard("11", serial: "combo-only")
+    devices = [comboOnly]; _ = repair()
+    _ = manager.reconcile(sources: [capsLock, spaceCombos[0]], target: f19, active: true)
+    precondition(comboOnly.mappings == [mapping(capsLock, f19)], "Space combinations are never mapped in HID")
+    precondition(manager.reconcile(sources: [spaceCombos[1]], target: f19, active: true).applied == 0
+        && comboOnly.mappings.isEmpty && manager.records[comboOnly.registryID] == nil, "With only combinations, keyboards get their own keys back")
+    manager.setSources([spaceCombos[0], option], for: comboOnly.identity.key)
+    precondition(manager.known[comboOnly.identity.key]?.sources == [option], "A keyboard's own keys cannot hold combinations")
     let savedSuite = "io.gksdud.saved-keys-tests.\(UUID().uuidString)"
     let savedDefaults = UserDefaults(suiteName: savedSuite)!
     defer { savedDefaults.removePersistentDomain(forName: savedSuite) }
@@ -390,6 +398,8 @@ func runRightControlTests() {
 func renderKeyboardUI(to directory: String) throws {
     let app = NSApplication.shared
     app.setActivationPolicy(.accessory)
+    // Rendering must not depend on this process's Accessibility permission.
+    SourcePicker.combosAvailable = { true }
     let suiteName = "io.gksdud.ui-preview.\(UUID().uuidString)"
     let defaults = UserDefaults(suiteName: suiteName)!
     defer { defaults.removePersistentDomain(forName: suiteName) }
@@ -471,7 +481,9 @@ func renderKeyboardUI(to directory: String) throws {
     precondition(delegate.tabButtons[3].accessibilityLabel() == "gksdud 탭" && delegate.updateButton.isHidden && updateEntry.isHidden)
     defaults.set(false, forKey: "active")
     delegate.resetSelection()
-    for (title, usage): (String, UInt64) in [("우측 Command ⌘", 0x7000000e7), ("우측 Option ⌥", 0x7000000e6),
+    // Right Control goes last: the screenshots and later checks start from it.
+    for (title, usage): (String, UInt64) in [("Ctrl ⌃ + Space ␣", spaceCombos[0]), ("Cmd ⌘ + Space ␣", spaceCombos[1]), ("Opt ⌥ + Space ␣", spaceCombos[2]),
+                                          ("우측 Command ⌘", 0x7000000e7), ("우측 Option ⌥", 0x7000000e6),
                                           ("Caps Lock ⇪", 0x700000039), ("우측 Control ⌃", 0x7000000e4)] {
         delegate.picker.selectItem(withTitle: title)
         precondition(delegate.picker.sendAction(delegate.picker.action, to: delegate.picker.target))
@@ -480,12 +492,18 @@ func renderKeyboardUI(to directory: String) throws {
         delegate.resetSelection()
         precondition(delegate.picker.titleOfSelectedItem == title, "Saved key selection must be restored")
     }
+    SourcePicker.combosAvailable = { false }
+    if let menu = delegate.picker.menu { delegate.picker.menuNeedsUpdate(menu) }
+    precondition(spaceComboNames.allSatisfy { delegate.picker.item(withTitle: $0)?.isEnabled == false }
+        && sourceNames.allSatisfy { delegate.picker.item(withTitle: $0)?.isEnabled == true }, "Combinations wait for Accessibility")
+    SourcePicker.combosAvailable = { true }
+    if let menu = delegate.picker.menu { delegate.picker.menuNeedsUpdate(menu) }
     delegate.selectTab(0)
     for (name, appearance) in [("light", NSAppearance.Name.aqua), ("dark", NSAppearance.Name.darkAqua)] {
         delegate.window.appearance = NSAppearance(named: appearance)
         try save(delegate.window.contentView!, "right-control-\(name).png")
     }
-    print("PASS: source picker actions and saved selection for right Command, right Option, Caps Lock and right Control")
+    print("PASS: source picker actions and saved selection for right Command, right Option, Caps Lock, right Control and Space combinations")
     for mode in [1, 2, 1] {
         // Exercise real checkbox actions with activation off so no live tap is installed.
         delegate.specialButtons[mode - 1].performClick(nil)
@@ -588,6 +606,30 @@ func renderKeyboardUI(to directory: String) throws {
     delegate.resetSelection()
     toggleMultiple(delegate.picker, [sourceNames[2]])
     precondition(engine.defaultSources == [sources[1], sources[2]] && delegate.picker.titleOfSelectedItem == "\(sourceNames[1]) +1")
+    settings.refresh()
+    precondition(defaultPicker.itemTitles.contains(spaceComboNames[0]) && !builtInPicker.itemTitles.contains(spaceComboNames[0]),
+        "Only the global picker offers combinations")
+    toggleMultiple(defaultPicker, [spaceComboNames[0]])
+    settings.changed()
+    precondition(engine.defaultSources == [sources[1], sources[2], spaceCombos[0]] && defaultPicker.titleOfSelectedItem == "\(sourceNames[1]) +2"
+        && builtInPicker.titleOfSelectedItem == "기본값 (\(sourceNames[1]) +1)" && !builtIn.mappings.contains { $0[srcKey]?.uint64Value == spaceCombos[0] },
+        "Default rows follow only the single global keys")
+    choose(defaultPicker, defaultPicker.numberOfItems - 1)
+    try save(settings.window.attachedSheet!.contentView!, "keyboards-combos-sheet.png")
+    descendants(settings.window.attachedSheet!.contentView!).compactMap { $0 as? NSButton }.first { $0.title == "취소" }!.performClick(nil)
+    toggleMultiple(defaultPicker, [sourceNames[1], sourceNames[2]])
+    settings.changed()
+    precondition(engine.defaultSources == [spaceCombos[0]] && builtInPicker.titleOfSelectedItem == "기본값"
+        && !builtIn.mappings.contains { $0[dstKey]?.uint64Value == f19 }, "With only combinations, Default keyboards keep their own keys")
+    SourcePicker.combosAvailable = { false }
+    choose(defaultPicker, defaultPicker.numberOfItems - 1)
+    let unavailable = descendants(settings.window.attachedSheet!.contentView!).compactMap { $0 as? NSButton }
+    precondition(unavailable.first { $0.title == spaceComboNames[0] }?.isEnabled == false && unavailable.first { $0.title == sourceNames[0] }?.isEnabled == true,
+        "The sheet also waits for Accessibility")
+    unavailable.first { $0.title == "취소" }!.performClick(nil)
+    SourcePicker.combosAvailable = { true }
+    toggleMultiple(defaultPicker, [sourceNames[1], sourceNames[2], spaceComboNames[0]])
+    precondition(engine.defaultSources == [sources[1], sources[2]])
     settings.refresh()
     choose(detachedPicker, detachedPicker.numberOfItems - 1)
     let sheet = settings.window.attachedSheet!

@@ -182,10 +182,11 @@ final class KeyboardManager {
     }
     func setSources(_ sources: [UInt64]?, for key: String) {
         guard known[key] != nil else { return }
-        known[key]?.sources = sources.flatMap(selectable); saveKnown()
+        known[key]?.sources = sources.flatMap { selectable($0) }; saveKnown()
     }
+    // Only single keys are mapped per keyboard; Space combinations never reach HID.
     func sources(for device: KeyboardDevice, default fallback: [UInt64]) -> [UInt64] {
-        known[device.identity.key]?.sources.flatMap(selectable) ?? fallback
+        known[device.identity.key]?.sources.flatMap { selectable($0) } ?? selectable(fallback) ?? []
     }
     func isSelected(_ device: KeyboardDevice) -> Bool {
         (known[device.identity.key]?.mode ?? .default).applies(defaultEnabled: defaultEnabled)
@@ -278,8 +279,10 @@ final class KeyboardManager {
         for device in devices {
             let selected = active && isSelected(device)
             if selected { next.selected += 1 }
+            // With only Space combinations chosen, a keyboard has nothing to map.
+            let keys = selected ? sources(for: device, default: fallback) : []
             do {
-                if selected { try apply(device, sources: sources(for: device, default: fallback), target: target); next.applied += 1 }
+                if !keys.isEmpty { try apply(device, sources: keys, target: target); next.applied += 1 }
                 else { try restore(device) }
                 failures.removeValue(forKey: device.registryID)
             } catch {

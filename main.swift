@@ -17,16 +17,28 @@ let targets = zip(13...20, [105, 107, 113, 106, 64, 79, 80, 90]).map {
 }
 let sources: [UInt64] = [0x7000000e7, 0x7000000e6, 0x700000039, 0x7000000e4]
 let sourceNames = ["우측 Command ⌘", "우측 Option ⌥", "Caps Lock ⇪", "우측 Control ⌃"]
-func sourceName(_ key: UInt64) -> String { sources.firstIndex(of: key).map { sourceNames[$0] } ?? "알 수 없는 키" }
+// Space combinations are caught by the event tap, not mapped in HID, so they apply to every keyboard.
+// Their IDs only name them in saved settings and are never written to HID.
+let spaceCombos: [UInt64] = [0xffff00000001, 0xffff00000002, 0xffff00000003]
+let spaceComboNames = ["Ctrl ⌃ + Space ␣", "Cmd ⌘ + Space ␣", "Opt ⌥ + Space ␣"]
+// Every key the global choice offers, in menu order.
+let hangulKeys = sources + spaceCombos, hangulKeyNames = sourceNames + spaceComboNames
+func sourceName(_ key: UInt64) -> String { hangulKeys.firstIndex(of: key).map { hangulKeyNames[$0] } ?? "알 수 없는 키" }
+let accessibilityHint = "일반 탭의 접근성 권한 허용 버튼으로 권한을 허용해주세요."
 typealias Mapping = [String: NSNumber]
 
 // Several keys are saved comma-separated, so a single key saved by an older version reads unchanged.
 func encodeSources(_ keys: [UInt64]) -> String { keys.map(String.init).joined(separator: ",") }
 func decodeSources(_ value: String?) -> [UInt64] { (value ?? "").split(separator: ",").compactMap { UInt64($0) } }
 // A saved choice keeps only keys the menu offers, in menu order; nothing left means no choice.
-func selectable(_ keys: [UInt64]) -> [UInt64]? {
-    let valid = sources.filter(keys.contains)
+func selectable(_ keys: [UInt64], from options: [UInt64] = sources) -> [UInt64]? {
+    let valid = options.filter(keys.contains)
     return valid.isEmpty ? nil : valid
+}
+// Space with exactly one modifier, from either side of the keyboard.
+func spaceCombo(flags: CGEventFlags) -> UInt64? {
+    let modifiers = flags.intersection([.maskShift, .maskControl, .maskAlternate, .maskCommand])
+    return [CGEventFlags.maskControl, .maskCommand, .maskAlternate].firstIndex(of: modifiers).map { spaceCombos[$0] }
 }
 
 // A failed readback may have written the pending target, so it is ours as well.
@@ -97,9 +109,12 @@ final class Engine {
         keyboards = KeyboardManager(defaults: defaults, discover: discover)
     }
     var defaultSources: [UInt64] {
-        get { selectable(decodeSources(defaults.string(forKey: "source"))) ?? [sources[0]] }
+        get { selectable(decodeSources(defaults.string(forKey: "source")), from: hangulKeys) ?? [sources[0]] }
         set { defaults.set(encodeSources(newValue), forKey: "source") }
     }
+    // Keyboards map only the single keys, so a keyboard's Default follows just these.
+    var mappedSources: [UInt64] { selectable(defaultSources) ?? [] }
+    var chosenCombos: [UInt64] { active ? defaultSources.filter(spaceCombos.contains) : [] }
     var active: Bool { defaults.object(forKey: "active") == nil || defaults.bool(forKey: "active") }
     var switchOnKeyDown: Bool { defaults.object(forKey: "switchOnKeyDown") == nil || defaults.bool(forKey: "switchOnKeyDown") }
     var longPressCapsLock: Bool { defaults.bool(forKey: "longPressCapsLock") }
@@ -291,6 +306,19 @@ struct PressGate {
     }
 }
 
+// Claims a Space that starts a chosen combination, with its repeats and release,
+// even if the modifier is let go first. Never reads or stores typed text.
+struct SpaceComboGate {
+    var held = false
+    mutating func handle(down: Bool, repeatKey: Bool, flags: CGEventFlags, chosen: [UInt64]) -> (consume: Bool, switchNow: Bool) {
+        if repeatKey { return (down && held, false) }
+        if !down { defer { held = false }; return (held, false) }
+        // A fresh press, even after a release missed while the tap was disabled.
+        held = spaceCombo(flags: flags).map(chosen.contains) ?? false
+        return (held, held)
+    }
+}
+
 // This is an explicit user-selected threshold, not a claimed macOS default.
 struct LongPressState {
     static let delay: TimeInterval = 0.5
@@ -374,6 +402,10 @@ func nativeSwitchPulse(from event: CGEvent, marker: Int64) -> (CGEvent, CGEvent)
     }
     return (down, up)
 }
+// A Space combination has no F-key event to copy; a new one carries the flags macOS gives F-keys.
+func nativeSwitchPulse(keyCode: Int, marker: Int64) -> (CGEvent, CGEvent)? {
+    CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(keyCode), keyDown: true).flatMap { nativeSwitchPulse(from: $0, marker: marker) }
+}
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDelegate, NSTextFieldDelegate {
     let engine: Engine
@@ -424,6 +456,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     var keyTap: CFMachPort?
     var keyTapSource: CFRunLoopSource?
     var pressGate = PressGate()
+    var spaceGate = SpaceComboGate()
     var longPress = LongPressState()
     var longPressTimer: DispatchWorkItem?
     var longPressEvent: CGEvent?
@@ -495,14 +528,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         longPress = LongPressState()
         if let source = keyTapSource { CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes) }
         if let tap = keyTap { CFMachPortInvalidate(tap) }
-        keyTapSource = nil; keyTap = nil; pressGate.held.removeAll()
+        keyTapSource = nil; keyTap = nil; pressGate.held.removeAll(); spaceGate = SpaceComboGate()
     }
     func ensureKeyTap() {
         guard AXIsProcessTrusted() else { stopKeyTap(); updatePressAccess(); return }
         if let tap = keyTap, !CFMachPortIsValid(tap) { stopKeyTap() }
         syncCapsPreservation()
         if !engine.active || !engine.longPressCapsLock { cancelLongPress() }
-        guard engine.active, engine.switchOnKeyDown || engine.longPressCapsLock || engine.preserveCapsLock || specialMode != .none, keyTap == nil else { updatePressAccess(); return }
+        guard engine.active, engine.switchOnKeyDown || engine.longPressCapsLock || engine.preserveCapsLock || specialMode != .none || !engine.chosenCombos.isEmpty,
+              keyTap == nil else { updatePressAccess(); return }
         let mask = (CGEventMask(1) << CGEventType.keyDown.rawValue) | (CGEventMask(1) << CGEventType.keyUp.rawValue) | (CGEventMask(1) << CGEventType.flagsChanged.rawValue) | (CGEventMask(1) << CGEventType.leftMouseDown.rawValue) | (CGEventMask(1) << CGEventType.rightMouseDown.rawValue) | (CGEventMask(1) << CGEventType.otherMouseDown.rawValue)
         guard let tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .defaultTap,
             eventsOfInterest: mask, callback: { _, type, event, info in
@@ -515,6 +549,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                     if let tap = owner.keyTap { CGEvent.tapEnable(tap: tap, enable: true) }
                     return Unmanaged.passUnretained(event)
                 }
+                // Before Option input, which would otherwise type Option+Space. While it replays
+                // queued strokes, a combination waits in its queue to keep the order.
+                if (type == .keyDown || type == .keyUp) && !owner.optionInput.busy && owner.handleSpaceCombo(event) { return nil }
                 if owner.optionInput.handle(event, mode: owner.specialMode, active: owner.engine.active) { return nil }
                 if type == .flagsChanged {
                     if owner.capsPreservationActive && event.getIntegerValueField(.keyboardEventKeycode) == 57 {
@@ -580,7 +617,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         preserveCapsSwitch.state = trusted && engine.preserveCapsLock ? .on : .off
         preserveCapsSwitch.isEnabled = trusted
         preserveCapsSwitch.toolTip = "영어의 대소문자 상태를 기억해 한글에서 영어로 돌아올 때 복원합니다. 길게 누르기와 별도로 설정할 수 있습니다."
-        longPressSwitch.toolTip = trusted ? "선택한 한영 키를 0.5초 누르면 영어로 전환하고 Caps Lock을 켜거나 끕니다." : "일반 탭의 접근성 권한 허용 버튼으로 권한을 허용해주세요."
+        longPressSwitch.toolTip = trusted ? "선택한 한영 키를 0.5초 누르면 영어로 전환하고 Caps Lock을 켜거나 끕니다." : accessibilityHint
         pressAccess.toolTip = "키를 누르는 순간 전환하려면 접근성 권한이 필요합니다."
         pressSwitch.toolTip = !trusted ? "오른쪽 버튼으로 접근성 권한을 허용해주세요. 허용 전에는 기존 방식으로 동작합니다." :
             !engine.switchOnKeyDown ? "기존 macOS 단축키 방식으로 전환합니다." :
@@ -615,6 +652,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         capsRestoreGeneration += 1
         capsRestoreTasks.forEach { $0.cancel() }
         capsRestoreTasks.removeAll()
+    }
+    // True when the Space belongs to a chosen combination and must reach neither apps nor system shortcuts.
+    func handleSpaceCombo(_ event: CGEvent) -> Bool {
+        guard event.getIntegerValueField(.keyboardEventKeycode) == Int64(kVK_Space) else { return false }
+        let decision = spaceGate.handle(down: event.type == .keyDown,
+            repeatKey: event.getIntegerValueField(.keyboardEventAutorepeat) != 0, flags: event.flags, chosen: engine.chosenCombos)
+        if decision.switchNow {
+            // Without a pulse, give the Space back instead of swallowing it.
+            guard let (down, up) = nativeSwitchPulse(keyCode: engine.target.keyCode, marker: nativePulseMarker) else { spaceGate.held = false; return false }
+            rememberCapsBeforeSwitch()
+            down.post(tap: .cghidEventTap)
+            up.post(tap: .cghidEventTap)
+        }
+        return decision.consume
     }
     func rememberCapsBeforeSwitch() {
         guard capsPreservationActive else { return }
@@ -1035,7 +1086,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         do { try engine.restore(); lastError = ""; stickyError = ""; repairFailed = false; refreshStatus() } catch { report(error) }
         resetSelection(); syncCapsPreservation(); updatePressAccess(); refreshKeyboardState()
     }
-    func recover() { optionInput.cancel(); cancelCapsRestore(); englishCaps.switching = false; cancelLongPress(); longPress = LongPressState(); pressGate.held.removeAll(); for delay in [0.5, 2.0, 5.0] { DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.repair() } } }
+    func recover() { optionInput.cancel(); cancelCapsRestore(); englishCaps.switching = false; cancelLongPress(); longPress = LongPressState(); pressGate.held.removeAll(); spaceGate = SpaceComboGate(); for delay in [0.5, 2.0, 5.0] { DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.repair() } } }
     func repair() {
         guard !engine.isUpdatingSettings else { return }
         ensureKeyTap()
@@ -1048,7 +1099,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let result = engine.keyboards.result
         status.stringValue = result.pending > 0 ? "키보드 설정을 다시 적용하고 있습니다."
             : !stickyError.isEmpty ? stickyError
-            : engine.active && result.selected == 0 ? "적용할 키보드 연결 대기 중"
+            : !engine.chosenCombos.isEmpty && !AXIsProcessTrusted() ? "조합 키를 쓰려면 접근성 권한을 허용하세요."
+            : engine.active && result.selected == 0 && !engine.mappedSources.isEmpty ? "적용할 키보드 연결 대기 중"
             : window.isVisible && login.state == .on && SMAppService.mainApp.status == .requiresApproval ? "시스템 설정 → 로그인 항목에서 gksdud를 허용하세요." : ""
     }
     var lastError = ""
@@ -1177,6 +1229,33 @@ if CommandLine.arguments.dropFirst().first == "--install-update" {
     precondition(gate.handle(code: 90, down: true, repeatKey: false, active: true, target: 90).switchNow)
     precondition(gate.handle(code: 90, down: false, repeatKey: false, active: true, target: 90).consume)
     print("PASS: key-down switch, repeat suppression, release consumption, inactive pass-through, target change")
+    let rightOption = CGEventFlags(rawValue: CGEventFlags.maskAlternate.rawValue | UInt64(NX_DEVICERALTKEYMASK))
+    precondition(spaceCombo(flags: .maskControl) == spaceCombos[0] && spaceCombo(flags: [.maskCommand, .maskAlphaShift]) == spaceCombos[1]
+        && spaceCombo(flags: rightOption) == spaceCombos[2], "Each combination is Space with one modifier on either side, whatever Caps Lock is")
+    precondition([[], .maskShift, [.maskControl, .maskAlternate], [.maskCommand, .maskAlternate], [.maskCommand, .maskShift]]
+        .allSatisfy { spaceCombo(flags: $0) == nil }, "Other modifier sets keep their meaning")
+    var space = SpaceComboGate()
+    func spaceKey(_ down: Bool, _ flags: CGEventFlags, repeatKey: Bool = false, chosen: [UInt64] = [spaceCombos[0], spaceCombos[2]]) -> (consume: Bool, switchNow: Bool) {
+        space.handle(down: down, repeatKey: repeatKey, flags: flags, chosen: chosen)
+    }
+    let comboPress = spaceKey(true, .maskControl), comboRepeat = spaceKey(true, .maskControl, repeatKey: true)
+    precondition(comboPress.consume && comboPress.switchNow && comboRepeat.consume && !comboRepeat.switchNow, "One switch per press")
+    precondition(spaceKey(false, []).consume, "The release stays claimed after the modifier is let go")
+    precondition(!spaceKey(true, []).consume && !spaceKey(true, [], repeatKey: true).consume && !spaceKey(false, []).consume, "Plain Space passes")
+    precondition(!spaceKey(true, .maskCommand).consume && !spaceKey(false, .maskCommand).consume, "An unchosen combination keeps its system shortcut")
+    precondition(!spaceKey(true, .maskControl, chosen: []).consume && !spaceKey(false, .maskControl, chosen: []).consume, "Inactive passes")
+    precondition(spaceKey(true, .maskAlternate).switchNow && !spaceKey(true, [], chosen: []).consume && !spaceKey(false, []).consume,
+        "A press after a release missed by a disabled tap starts fresh")
+    let comboSuiteName = "io.gksdud.space-combo-test.\(UUID().uuidString)"
+    let comboSuite = UserDefaults(suiteName: comboSuiteName)!
+    let comboEngine = Engine(defaults: comboSuite)
+    comboEngine.defaultSources = [spaceCombos[1], 1, sources[2]]
+    precondition(comboEngine.defaultSources == [sources[2], spaceCombos[1]] && comboEngine.mappedSources == [sources[2]]
+        && comboEngine.chosenCombos == [spaceCombos[1]], "Global keys hold both kinds; only single keys are mapped")
+    comboSuite.set(false, forKey: "active")
+    precondition(comboEngine.chosenCombos.isEmpty, "Combinations stop with activation")
+    comboSuite.removePersistentDomain(forName: comboSuiteName)
+    print("PASS: Space combinations with one exact modifier, claimed repeats and release, unchosen and inactive pass-through, missed release")
     let suiteName = "io.gksdud.inputswitch.defaults-test.\(UUID().uuidString)"
     let suite = UserDefaults(suiteName: suiteName)!
     let preferences = Engine(defaults: suite)
