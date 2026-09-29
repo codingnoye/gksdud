@@ -163,17 +163,22 @@ extension AppDelegate {
         updateStatus.font = .systemFont(ofSize: 11); updateStatus.textColor = .secondaryLabelColor; updateStatus.alignment = .center
         about.setCustomSpacing(8, after: actions); full(updateStatus, in: about)
         about.setCustomSpacing(28, after: updateStatus)
-        let project = NSButton(title: "GitHub", target: self, action: #selector(openProject)); project.bezelStyle = .rounded
-        if let url = Bundle.main.url(forResource: "github", withExtension: "svg"), let image = NSImage(contentsOf: url) {
-            image.size = NSSize(width: 16, height: 16); image.isTemplate = true
-            project.image = image; project.imagePosition = .imageLeading
+        func link(_ title: String, icon: String, template: Bool = true, action: Selector) -> NSButton {
+            let button = NSButton(title: title, target: self, action: action); button.bezelStyle = .rounded
+            if let url = Bundle.main.url(forResource: icon, withExtension: "svg"), let image = NSImage(contentsOf: url) {
+                image.size = NSSize(width: 16, height: 16 * image.size.height / image.size.width); image.isTemplate = template
+                button.image = image; button.imagePosition = .imageLeading
+            }
+            return button
         }
-        let support = NSButton(title: "후원", target: self, action: #selector(openSupport)); support.bezelStyle = .rounded
-        support.isHidden = supportURL == nil
-        about.addArrangedSubview(NSStackView(views: [project, support]))
-        let credit = NSTextField(labelWithString: "© 2026 CodingNoye · codingnoye@gmail.com")
-        credit.font = .systemFont(ofSize: 10); credit.textColor = .secondaryLabelColor
-        about.addArrangedSubview(credit)
+        let project = link("GitHub", icon: "github", action: #selector(openProject)); about.addArrangedSubview(project)
+        about.setCustomSpacing(28, after: project); separator(in: about)
+        let supportTitle = NSTextField(labelWithString: "후원하기"); supportTitle.font = .systemFont(ofSize: 13, weight: .semibold)
+        about.setCustomSpacing(20, after: about.arrangedSubviews.last!); about.addArrangedSubview(supportTitle)
+        let supportNote = NSTextField(wrappingLabelWithString: "후원해주시면 큰 힘이 됩니다!\nApp Store 등록에 사용하겠습니다.")
+        supportNote.font = .systemFont(ofSize: 11); supportNote.textColor = .secondaryLabelColor; supportNote.alignment = .center
+        about.setCustomSpacing(6, after: supportTitle); about.addArrangedSubview(supportNote)
+        about.setCustomSpacing(12, after: supportNote); about.addArrangedSubview(link("Fairy", icon: "fairy", template: false, action: #selector(openSupport)))
         selectTab(0); updatePressAccess(); refreshSpecialMode(); refreshUpdates(); refreshIconPreviews(); refreshKeyboardState(); updateInputIndicator()
     }
     func tabGlyph(_ text: String) -> NSImage {
@@ -224,13 +229,7 @@ extension AppDelegate {
             installer.fail(error); repair()
         }
     }
-    var supportURL: URL? {
-        guard let value = Bundle.main.object(forInfoDictionaryKey: "GKSDUDSupportURL") as? String,
-              let url = URL(string: value), url.scheme == "https", url.host != nil,
-              url.user == nil, url.password == nil else { return nil }
-        return url
-    }
-    @objc func openSupport() { if let url = supportURL { NSWorkspace.shared.open(url) } }
+    @objc func openSupport() { NSWorkspace.shared.open(URL(string: "https://fairy.hada.io/@gksdud")!) }
     @objc func openProject() { NSWorkspace.shared.open(URL(string: "https://github.com/codingnoye/gksdud")!) }
     func refreshUpdates() {
         let release = updates.available

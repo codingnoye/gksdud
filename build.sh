@@ -32,7 +32,7 @@ done
 lipo -create "$stage/gksdud-arm64" "$stage/gksdud-x86_64" -output "$stage/gksdud.app/Contents/MacOS/gksdud"
 cp Info.plist "$stage/gksdud.app/Contents/Info.plist"
 cp LICENSE "$stage/gksdud.app/Contents/Resources/LICENSE"
-cp Resources/github.svg Resources/OCTICONS-LICENSE "$stage/gksdud.app/Contents/Resources/"
+cp Resources/github.svg Resources/fairy.svg Resources/OCTICONS-LICENSE "$stage/gksdud.app/Contents/Resources/"
 if [[ -n "${GKSDUD_APP_VERSION:-}" ]]; then
   [[ "$GKSDUD_APP_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
   /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $GKSDUD_APP_VERSION" "$stage/gksdud.app/Contents/Info.plist"
