@@ -917,9 +917,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 self?.picker.show(keys); self?.selectionChanged()
             }, confirm: { [weak self] keyboards in
                 guard let self else { return true }
-                guard confirmCapsLockKey(engine.capsLockSwitches()) else { return false }
-                guard engine.active else { return true }
-                return confirmMapping(engine.defaultSources, target: engine.target, only: keyboards)
+                guard confirmCapsLockKey(engine.capsLockSwitches()),
+                      !engine.active || confirmMapping(engine.defaultSources, target: engine.target, only: keyboards) else { return false }
+                releaseKoreanCapsLock()
+                return true
             }) { [weak self] in self?.repair() }
         }
         keyboardSettings?.show(on: window)
@@ -1133,18 +1134,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         else {
             if let keys = picker.selection { engine.defaultSources = keys }
             engine.defaults.set(targets[targetPicker.indexOfSelectedItem].name, forKey: "target")
-            updatePressAccess()
         }
+        releaseKoreanCapsLock()
     }
-    // False keeps the old keys; confirming turns Caps Lock in Korean off.
+    // False keeps the old keys.
     func confirmCapsLockKey(_ taken: Bool) -> Bool {
         guard taken, engine.koreanCapsLock else { return true }
         let alert = NSAlert(); alert.messageText = "Caps Lock을 한영 키로 사용합니다."
         alert.informativeText = "'\(koreanCapsSwitch.title)' 기능이 꺼집니다."
         alert.addButton(withTitle: "변경"); alert.addButton(withTitle: "취소")
-        guard alert.runModal() == .alertFirstButtonReturn else { return false }
-        engine.defaults.set(false, forKey: "koreanCapsLock")
-        return true
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+    // Caps Lock in Korean goes off only once Caps Lock is saved as a Korean/English key, so a later warning that
+    // cancels the change keeps it.
+    func releaseKoreanCapsLock() {
+        if engine.koreanCapsLock && engine.capsLockSwitches() { engine.defaults.set(false, forKey: "koreanCapsLock") }
+        updatePressAccess()
     }
     func confirmMapping(_ keys: [UInt64], target: TargetKey, only keyboards: Set<String>? = nil) -> Bool {
         if engine.targetInUse(keys, target: target, only: keyboards) {

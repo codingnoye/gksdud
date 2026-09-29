@@ -536,6 +536,24 @@ func renderKeyboardUI(to directory: String) throws {
         }
     }
     engine.defaultSources = savedSources; delegate.resetSelection()
+    // Confirmed, then cancelled at the next warning: Caps Lock already has another mapping, so nothing is applied.
+    builtIn.mappings.append([srcKey: NSNumber(value: sources[2]), dstKey: NSNumber(value: UInt64(0x7000000e2))])
+    precondition(engine.conflict([sources[2]], target: engine.target) == sources[2], "The mapping warning must come before anything is applied")
+    defaults.set(true, forKey: "koreanCapsLock")
+    var answers = [NSApplication.ModalResponse.alertFirstButtonReturn, .alertSecondButtonReturn], warnings: [String] = []
+    let replies = Timer(timeInterval: 0.2, repeats: true) { _ in
+        guard let view = NSApp.modalWindow?.contentView else { return }
+        warnings.append(descendants(view).compactMap { ($0 as? NSTextField)?.stringValue }.joined(separator: " "))
+        NSApp.stopModal(withCode: answers.isEmpty ? .alertSecondButtonReturn : answers.removeFirst())
+    }
+    RunLoop.current.add(replies, forMode: .modalPanel)
+    delegate.enabled.state = .on
+    delegate.picker.selectItem(withTitle: "Caps Lock ⇪")
+    precondition(delegate.picker.sendAction(delegate.picker.action, to: delegate.picker.target))
+    replies.invalidate()
+    precondition(warnings.count == 2 && warnings[1].contains("다른 매핑이 있습니다."), "Both warnings are shown in order")
+    precondition(engine.defaultSources == savedSources && engine.koreanCapsLock, "A change cancelled after the Caps Lock warning keeps Caps Lock in Korean")
+    builtIn.mappings.removeLast()
     defaults.removeObject(forKey: "koreanCapsLock")
     delegate.specialStatus.isHidden = false; delegate.refreshSpecialMode()
     precondition(delegate.specialStatus.isHidden, "Empty special-character status takes no room")
