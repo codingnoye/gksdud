@@ -444,6 +444,132 @@ func probeOptionInput() throws {
     guard passed == total else { throw NSError(domain: "probe", code: 3, userInfo: [NSLocalizedDescriptionKey: "Native input expectations failed."]) }
 }
 
+// Drives the running gksdud with HID-level keys from a second instance, then reads the input source and the Caps Lock lock.
+// Launch the installed bundle so it has gksdud's Accessibility permission:
+// open -n -W --stdout <file> /Applications/gksdud.app --args --probe-escape
+// It needs ESC to English on in the running app. Keys go only while this probe's window is frontmost.
+// A physical Caps Lock press cannot be generated: posted Caps Lock events do not toggle the lock.
+func probeEscape() throws {
+    func failure(_ code: Int, _ message: String) -> NSError { NSError(domain: "probe", code: code, userInfo: [NSLocalizedDescriptionKey: message]) }
+    let app = NSApplication.shared
+    app.setActivationPolicy(.regular); app.finishLaunching()
+    guard AXIsProcessTrusted() else { throw failure(1, "Launch the gksdud bundle with open -n so the probe has its accessibility permission.") }
+    // The running app's settings, read only.
+    let saved = UserDefaults.standard
+    let target = targets.first { $0.name == saved.string(forKey: "target") } ?? targets[6]
+    guard NSRunningApplication.runningApplications(withBundleIdentifier: "io.gksdud.inputswitch").contains(where: { $0.processIdentifier != getpid() }),
+          saved.object(forKey: "active") == nil || saved.bool(forKey: "active"), saved.bool(forKey: "escapeToEnglish") else {
+        throw failure(2, "Run gksdud with ESC to English turned on first.")
+    }
+    let suite = "io.gksdud.escape-probe.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    let delegate = AppDelegate(engine: Engine(defaults: defaults, discover: { [] }))
+    guard let korean = delegate.availableSource("ko"), let english = delegate.availableSource("en") else {
+        defaults.removePersistentDomain(forName: suite); throw failure(3, "Korean and English input sources are required.")
+    }
+    func lock() -> Bool {
+        let service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("IOHIDSystem"))
+        defer { IOObjectRelease(service) }
+        var connection: io_connect_t = 0, state = false
+        guard IOServiceOpen(service, mach_task_self_, UInt32(kIOHIDParamConnectType), &connection) == KERN_SUCCESS else { return false }
+        defer { IOServiceClose(connection) }
+        IOHIDGetModifierLockState(connection, Int32(kIOHIDCapsLockState), &state)
+        return state
+    }
+    // ESC in a text view would open completions, so ESC cases send it to a plain view.
+    final class KeySink: NSView {
+        override var acceptsFirstResponder: Bool { true }
+        override func keyDown(with event: NSEvent) {}
+    }
+    let panel = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 120), styleMask: [.titled], backing: .buffered, defer: false)
+    panel.title = "gksdud ESC 실험"
+    let text = NSTextView(frame: NSRect(x: 10, y: 10, width: 400, height: 100)), sink = KeySink(frame: .zero)
+    text.font = .systemFont(ofSize: 24); panel.contentView!.addSubview(text); panel.contentView!.addSubview(sink)
+    let previousApp = NSWorkspace.shared.frontmostApplication
+    let savedSource = TISCopyCurrentKeyboardInputSource()!.takeRetainedValue(), savedCaps = lock()
+    defer {
+        _ = TISSelectInputSource(savedSource); RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.6)); try? setCapsLock(savedCaps)
+        panel.orderOut(nil); previousApp?.activate(options: [])
+        defaults.removePersistentDomain(forName: suite)
+    }
+    func pump(_ duration: TimeInterval) {
+        let end = Date(timeIntervalSinceNow: duration)
+        while Date() < end {
+            if let event = app.nextEvent(matching: .any, until: Date(timeIntervalSinceNow: 0.005), inMode: .default, dequeue: true) { app.sendEvent(event) }
+        }
+    }
+    func frontmost() -> Bool { panel.isKeyWindow && NSWorkspace.shared.frontmostApplication?.processIdentifier == getpid() }
+    // Through the HID stream, so the running gksdud's tap and the system shortcut see it. Posted flags also become the
+    // session's flags, so they carry the Caps Lock lock.
+    func post(_ code: Int, hold: TimeInterval = 0) throws {
+        guard frontmost() else { throw failure(4, "The probe window lost focus; no more keys were sent.") }
+        for down in [true, false] {
+            let event = CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(code), keyDown: down)!
+            if lock() { event.flags.insert(.maskAlphaShift) }
+            event.post(tap: .cghidEventTap)
+            if down && hold > 0 { pump(hold) }
+        }
+    }
+    // Waits out the running app's Caps Lock checks after the source change before setting the lock.
+    func prepare(_ source: TISInputSource, caps: Bool, responder: NSResponder) throws {
+        panel.makeKeyAndOrderFront(nil); panel.makeFirstResponder(responder); app.activate(ignoringOtherApps: true)
+        _ = TISSelectInputSource(source); pump(0.6)
+        // setCapsLock's immediate readback can lag here; the lock is checked below after a pause.
+        try? setCapsLock(caps); pump(0.2)
+        guard frontmost(), delegate.currentLanguage == delegate.language(source), lock() == caps else {
+            throw failure(5, "Could not prepare \(delegate.language(source)) with Caps Lock \(caps ? "on" : "off").")
+        }
+    }
+    var passed = 0, total = 0
+    func expect(_ name: String, _ language: String, caps: Bool) {
+        let actual = delegate.currentLanguage, actualCaps = lock()
+        let ok = actual.hasPrefix(language) && actualCaps == caps
+        total += 1; if ok { passed += 1 }
+        print("PROBE \(ok ? "PASS" : "FAIL"): \(name), expected=\(language) Caps Lock \(caps), actual=\(actual) Caps Lock \(actualCaps)")
+    }
+    try prepare(korean, caps: false, responder: sink)
+    try post(kVK_Escape); pump(0.8)
+    expect("ESC in Korean", "en", caps: false)
+    try prepare(english, caps: true, responder: sink)
+    try post(kVK_Escape); pump(0.8)
+    expect("ESC in English uppercase", "en", caps: false)
+    // The switch key's pulse is still on its way when ESC arrives; a second pulse would return to Korean.
+    try prepare(korean, caps: false, responder: sink)
+    try post(target.keyCode); try post(kVK_Escape); pump(0.8)
+    expect("Korean/English key right before ESC", "en", caps: false)
+    // 2-Set Korean types Hangul whatever the lock, so showing the English case in Korean is safe.
+    try prepare(korean, caps: true, responder: text)
+    text.string = ""
+    for down in [true, false] {
+        let event = CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(kVK_ANSI_R), keyDown: down)!
+        event.flags = .maskAlphaShift; event.postToPid(getpid())
+    }
+    pump(0.3); text.unmarkText()
+    total += 1; if text.string == "ㄱ" { passed += 1 }
+    print("PROBE \(text.string == "ㄱ" ? "PASS" : "FAIL"): Caps Lock in Korean, expected=ㄱ, actual=\(text.string)")
+    // Preservation remembers English uppercase; ESC still ends lowercase, even when the frontmost app changes meanwhile.
+    // Last, since the probe gives up focus.
+    for activation in [false, true] {
+        // With long press on, a switch keeps the remembered case, so a hold sets it instead.
+        if saved.bool(forKey: "longPressCapsLock") {
+            try prepare(english, caps: false, responder: sink)
+            // A hold toggles the remembered case, which may already be uppercase.
+            for _ in 0..<2 where !lock() { try post(target.keyCode, hold: 0.7); pump(0.5) }
+        } else {
+            try prepare(english, caps: true, responder: sink)
+        }
+        guard delegate.currentLanguage.hasPrefix("en"), lock() else { throw failure(6, "Could not reach English uppercase.") }
+        try post(target.keyCode); pump(0.8)
+        guard delegate.currentLanguage.hasPrefix("ko") else { throw failure(6, "The switch key did not reach Korean.") }
+        try post(kVK_Escape)
+        if activation { NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.finder").first?.activate(options: []) }
+        pump(0.8)
+        expect(activation ? "ESC while another app activates" : "ESC over remembered uppercase", "en", caps: false)
+    }
+    print("PROBE RESULT: \(passed)/\(total) ESC and Caps Lock cases")
+    guard passed == total else { throw failure(7, "ESC expectations failed.") }
+}
+
 func runUpdateInstallTests() throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent("gksdud-installer-test-\(UUID().uuidString)")
     let fm = FileManager.default

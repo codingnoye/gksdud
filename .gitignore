@@ -11,3 +11,4 @@ outputs/
 signing/local-certificate.pem
 *.app/
 AGENTS.md
+tests/*/build/

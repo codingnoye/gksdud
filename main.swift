@@ -1227,6 +1227,8 @@ if CommandLine.arguments.dropFirst().first == "--install-update" {
     do { try renderKeyboardUI(to: CommandLine.arguments[index + 1]) } catch { fputs("UI rendering failed: \(error)\n", stderr); exit(1) }
 } else if CommandLine.arguments.contains("--probe-option-input") {
     do { try probeOptionInput() } catch { fputs("Input probe failed: \(error)\n", stderr); exit(1) }
+} else if CommandLine.arguments.contains("--probe-escape") {
+    do { try probeEscape() } catch { fputs("ESC probe failed: \(error.localizedDescription)\n", stderr); exit(1) }
 } else if CommandLine.arguments.contains("--self-test") {
     setbuf(stdout, nil)
     do { try runSettingsReentrancyTests() } catch { fputs("Settings reentrancy tests failed: \(error)\n", stderr); exit(1) }
