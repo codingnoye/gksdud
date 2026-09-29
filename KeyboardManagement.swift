@@ -182,10 +182,10 @@ final class KeyboardManager {
     }
     func setSources(_ sources: [UInt64]?, for key: String) {
         guard known[key] != nil else { return }
-        known[key]?.sources = sources; saveKnown()
+        known[key]?.sources = sources.flatMap(selectable); saveKnown()
     }
     func sources(for device: KeyboardDevice, default fallback: [UInt64]) -> [UInt64] {
-        known[device.identity.key]?.sources ?? fallback
+        known[device.identity.key]?.sources.flatMap(selectable) ?? fallback
     }
     func isSelected(_ device: KeyboardDevice) -> Bool {
         (known[device.identity.key]?.mode ?? .default).applies(defaultEnabled: defaultEnabled)
@@ -214,43 +214,58 @@ final class KeyboardManager {
         mappings.map { row in row.keys.sorted().map { "\($0)=\(row[$0]!)" }.joined(separator: ",") }.sorted()
     }
     private func mappingEqual(_ lhs: [Mapping], _ rhs: [Mapping]) -> Bool { Self.canonical(lhs) == Self.canonical(rhs) }
+    private typealias Undo = (source: UInt64, original: UInt64?)
+    // Pairs keys and originals by position, so one unreadable entry cannot shift the rest.
+    private static func undo(_ record: [String: String]) -> [Undo] {
+        let originals = (record["original"] ?? "").split(separator: ",", omittingEmptySubsequences: false)
+        return (record["source"] ?? "").split(separator: ",", omittingEmptySubsequences: false).enumerated().compactMap { index, part in
+            UInt64(part).map { (source: $0, original: index < originals.count ? UInt64(originals[index]) : nil) }
+        }
+    }
+    private static func record(_ undo: [Undo], target: String) -> [String: String] {
+        ["source": encodeSources(undo.map(\.source)), "original": undo.map { $0.original.map(String.init) ?? "none" }.joined(separator: ","), "target": target]
+    }
+    // Gives each recorded key except `keeping` its original mapping back, if it still emits our target.
+    private static func restored(_ current: [Mapping], record: [String: String], keeping: [UInt64] = []) -> [Mapping] {
+        let owned = [record["target"], record["pendingTarget"]].compactMap { $0.flatMap { UInt64($0) } }
+        var desired = current
+        for (source, original) in undo(record) where !keeping.contains(source)
+        && current.contains(where: { $0[srcKey]?.uint64Value == source && $0[dstKey].map { owned.contains($0.uint64Value) } == true }) {
+            desired.removeAll { $0[srcKey]?.uint64Value == source }
+            if let original { desired.append([srcKey: NSNumber(value: source), dstKey: NSNumber(value: original)]) }
+        }
+        return desired
+    }
     private func restore(_ device: KeyboardDevice) throws {
         var saved = records
-        guard let old = saved[device.registryID], let target = UInt64(old["target"] ?? "") else { return }
+        guard let old = saved[device.registryID], UInt64(old["target"] ?? "") != nil else { return }
         let current = try device.readMappings()
-        let ownedTargets = [target, UInt64(old["pendingTarget"] ?? "")]
-        let originals = (old["original"] ?? "").split(separator: ",").map { UInt64($0) }
-        var desired = current
-        for (index, source) in decodeSources(old["source"]).enumerated()
-        where current.contains(where: { $0[srcKey]?.uint64Value == source && $0[dstKey].map { ownedTargets.contains($0.uint64Value) } == true }) {
-            desired.removeAll { $0[srcKey]?.uint64Value == source }
-            if index < originals.count, let original = originals[index] { desired.append([srcKey: NSNumber(value: source), dstKey: NSNumber(value: original)]) }
-        }
-        try setVerified(desired, current: current, device: device)
+        try setVerified(Self.restored(current, record: old), current: current, device: device)
         saved.removeValue(forKey: device.registryID); records = saved
     }
     private func apply(_ device: KeyboardDevice, sources: [UInt64], target: UInt64) throws {
-        // Complete the old keys' undo before starting a new ownership record.
-        if let old = records[device.registryID], old["source"] != encodeSources(sources) { try restore(device) }
         let current = try device.readMappings()
         var saved = records
-        guard !targetConflict(current, sources: sources, target: target, owned: saved[device.registryID]) else { throw KeyboardError.conflict }
-        let desired = sources.reduce(current) { merged($0, source: $1, previous: $1, original: nil, target: target) }
-        if let old = saved[device.registryID], old["target"] == String(target), old["pendingTarget"] == nil,
+        let old = saved[device.registryID]
+        // Check before any write, so a conflict leaves the working keys mapped.
+        guard !targetConflict(current, sources: sources, target: target, owned: old) else { throw KeyboardError.conflict }
+        // One write changes the key set: dropped keys get their originals back, kept keys keep their undo.
+        let desired = sources.reduce(old.map { Self.restored(current, record: $0, keeping: sources) } ?? current) {
+            merged($0, source: $1, previous: $1, original: nil, target: target)
+        }
+        if let old, old["source"] == encodeSources(sources), old["target"] == String(target), old["pendingTarget"] == nil,
            mappingEqual(current, desired) { return }
-        var record = saved[device.registryID] ?? [
-            "source": encodeSources(sources),
-            "original": sources.map { source in
-                current.first { $0[srcKey]?.uint64Value == source }?[dstKey].map { String($0.uint64Value) } ?? "none"
-            }.joined(separator: ","),
-            "target": String(target)
-        ]
+        let previous = old.map(Self.undo) ?? []
+        let kept: [Undo] = sources.map { source in
+            previous.first { $0.source == source } ?? (source, current.first { $0[srcKey]?.uint64Value == source }?[dstKey]?.uint64Value)
+        }
+        // Dropped keys stay in the undo until the write is verified, so a failed write can still restore them.
+        var pending = Self.record(kept + previous.filter { !sources.contains($0.source) }, target: old?["target"] ?? String(target))
         // Save undo before touching hardware; remember both outcomes of a failed readback.
-        record["pendingTarget"] = String(target)
-        saved[device.registryID] = record; records = saved
+        pending["pendingTarget"] = String(target)
+        saved[device.registryID] = pending; records = saved
         try setVerified(desired, current: current, device: device)
-        record["target"] = String(target); record.removeValue(forKey: "pendingTarget")
-        saved[device.registryID] = record; records = saved
+        saved[device.registryID] = Self.record(kept, target: String(target)); records = saved
     }
     @discardableResult func reconcile(sources fallback: [UInt64], target: UInt64, active: Bool) -> KeyboardReconcileResult {
         var next = KeyboardReconcileResult()

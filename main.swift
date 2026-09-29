@@ -17,11 +17,17 @@ let targets = zip(13...20, [105, 107, 113, 106, 64, 79, 80, 90]).map {
 }
 let sources: [UInt64] = [0x7000000e7, 0x7000000e6, 0x700000039, 0x7000000e4]
 let sourceNames = ["우측 Command ⌘", "우측 Option ⌥", "Caps Lock ⇪", "우측 Control ⌃"]
+func sourceName(_ key: UInt64) -> String { sources.firstIndex(of: key).map { sourceNames[$0] } ?? "알 수 없는 키" }
 typealias Mapping = [String: NSNumber]
 
 // Several keys are saved comma-separated, so a single key saved by an older version reads unchanged.
 func encodeSources(_ keys: [UInt64]) -> String { keys.map(String.init).joined(separator: ",") }
 func decodeSources(_ value: String?) -> [UInt64] { (value ?? "").split(separator: ",").compactMap { UInt64($0) } }
+// A saved choice keeps only keys the menu offers, in menu order; nothing left means no choice.
+func selectable(_ keys: [UInt64]) -> [UInt64]? {
+    let valid = sources.filter(keys.contains)
+    return valid.isEmpty ? nil : valid
+}
 
 func owns(_ record: [String: String]?, _ mapping: Mapping) -> Bool {
     guard let record, let source = mapping[srcKey]?.uint64Value else { return false }
@@ -90,7 +96,7 @@ final class Engine {
         keyboards = KeyboardManager(defaults: defaults, discover: discover)
     }
     var defaultSources: [UInt64] {
-        get { let saved = decodeSources(defaults.string(forKey: "source")); return saved.isEmpty ? [sources[0]] : saved }
+        get { selectable(decodeSources(defaults.string(forKey: "source"))) ?? [sources[0]] }
         set { defaults.set(encodeSources(newValue), forKey: "source") }
     }
     var active: Bool { defaults.object(forKey: "active") == nil || defaults.bool(forKey: "active") }
@@ -109,23 +115,22 @@ final class Engine {
     func services() -> [KeyboardDevice] { (try? keyboards.snapshot()) ?? [] }
     func mappings(_ service: KeyboardDevice) -> [Mapping] { (try? service.readMappings()) ?? [] }
     func id(_ service: KeyboardDevice) -> String { service.registryID }
-    // `keyboard` checks one keyboard with keys that are not saved yet; nil sources means Default.
-    private func selected(_ fallback: [UInt64], keyboard: (key: String, sources: [UInt64]?)?) -> [(KeyboardDevice, [UInt64])] {
-        services().filter { keyboards.isSelected($0) && (keyboard == nil || $0.identity.key == keyboard?.key) }.map { service in
-            (service, keyboard.map { $0.sources ?? fallback } ?? keyboards.sources(for: service, default: fallback))
-        }
+    // `only` limits the check to the keyboards a settings change affects.
+    private func selected(_ fallback: [UInt64], only: Set<String>?) -> [(KeyboardDevice, [UInt64])] {
+        services().filter { keyboards.isSelected($0) && only?.contains($0.identity.key) != false }
+            .map { ($0, keyboards.sources(for: $0, default: fallback)) }
     }
     // Returns the first key that another mapping already uses.
-    func conflict(_ fallback: [UInt64], target: TargetKey, keyboard: (key: String, sources: [UInt64]?)? = nil) -> UInt64? {
-        for (service, keys) in selected(fallback, keyboard: keyboard) {
+    func conflict(_ fallback: [UInt64], target: TargetKey, only: Set<String>? = nil) -> UInt64? {
+        for (service, keys) in selected(fallback, only: only) {
             let managed = records[id(service)]
             let used = mappings(service).filter { $0[dstKey]?.uint64Value != target.usage && !owns(managed, $0) }.compactMap { $0[srcKey]?.uint64Value }
             if let key = keys.first(where: used.contains) { return key }
         }
         return nil
     }
-    func targetInUse(_ fallback: [UInt64], target: TargetKey, keyboard: (key: String, sources: [UInt64]?)? = nil) -> Bool {
-        selected(fallback, keyboard: keyboard).contains { service, keys in
+    func targetInUse(_ fallback: [UInt64], target: TargetKey, only: Set<String>? = nil) -> Bool {
+        selected(fallback, only: only).contains { service, keys in
             targetConflict(mappings(service), sources: keys, target: target.usage, owned: records[id(service)])
         }
     }
@@ -783,9 +788,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         if keyboardSettings == nil {
             keyboardSettings = KeyboardSettingsController(engine: engine, sourcesChanged: { [weak self] keys in
                 self?.picker.show(keys); self?.selectionChanged()
-            }, confirmSources: { [weak self] key, keys in
+            }, confirm: { [weak self] keyboards in
                 guard let self, engine.active else { return true }
-                return confirmMapping(engine.defaultSources, target: engine.target, keyboard: (key, keys))
+                return confirmMapping(engine.defaultSources, target: engine.target, only: keyboards)
             }) { [weak self] in self?.repair() }
         }
         keyboardSettings?.show(on: window)
@@ -1000,14 +1005,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             engine.defaults.set(targets[targetPicker.indexOfSelectedItem].name, forKey: "target")
         }
     }
-    func confirmMapping(_ keys: [UInt64], target: TargetKey, keyboard: (key: String, sources: [UInt64]?)? = nil) -> Bool {
-        if engine.targetInUse(keys, target: target, keyboard: keyboard) {
+    func confirmMapping(_ keys: [UInt64], target: TargetKey, only keyboards: Set<String>? = nil) -> Bool {
+        if engine.targetInUse(keys, target: target, only: keyboards) {
             let alert = NSAlert(); alert.messageText = "\(target.name)은 다른 키 매핑에서 사용 중입니다."
             alert.informativeText = "다른 앱과 충돌할 수 있습니다. 대상 키를 바꿔주세요."
             alert.runModal(); return false
         }
-        if let key = engine.conflict(keys, target: target, keyboard: keyboard) {
-            let alert = NSAlert(); alert.messageText = "\(sourceNames[sources.firstIndex(of: key) ?? 0])에 다른 매핑이 있습니다."
+        if let key = engine.conflict(keys, target: target, only: keyboards) {
+            let alert = NSAlert(); alert.messageText = "\(sourceName(key))에 다른 매핑이 있습니다."
             alert.informativeText = "선택한 키를 한영 전환 전용으로 바꿉니다. 다른 앱에서도 이 키의 재매핑을 꺼주세요. 기존 매핑은 해제 시 복원됩니다."
             alert.addButton(withTitle: "변경"); alert.addButton(withTitle: "취소")
             return alert.runModal() == .alertFirstButtonReturn

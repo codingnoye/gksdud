@@ -29,10 +29,11 @@ final class SourcePicker: NSPopUpButton {
     }
     required init?(coder: NSCoder) { fatalError() }
     private static func title(_ keys: [UInt64]) -> String {
-        let first = sourceNames[sources.firstIndex(of: keys[0]) ?? 0]
-        return keys.count > 1 ? "\(first) +\(keys.count - 1)" : first
+        keys.count > 1 ? "\(sourceName(keys[0])) +\(keys.count - 1)" : sourceName(keys[0])
     }
     func show(_ keys: [UInt64]?, default defaultKeys: [UInt64]? = nil) {
+        // Saved data may hold no keys or unknown ones; those show as no choice.
+        let keys = keys.flatMap(selectable)
         selection = keys; self.defaultKeys = defaultKeys
         removeAllItems()
         if let defaultKeys { addItem(withTitle: "기본값 (\(Self.title(defaultKeys)))") }
@@ -55,8 +56,9 @@ final class SourcePicker: NSPopUpButton {
         show(selection, default: defaultKeys)
         guard let parent = window else { return }
         let sheet = MultiSourceSheet(checked: selection ?? defaultKeys ?? [])
-        parent.beginSheet(sheet.window) { [weak self] _ in
-            guard let self else { return }
+        // Keep the picker until the sheet ends: a table reload can drop its row meanwhile.
+        parent.beginSheet(sheet.window) { [self] response in
+            guard response == .OK else { return }
             // Checking nothing drops back to one key: a keyboard follows Default, the global key keeps its first key.
             let single = defaultKeys == nil ? selection.map { Array($0.prefix(1)) } : nil
             commit(sheet.checked.isEmpty ? single : sheet.checked)
@@ -88,19 +90,26 @@ final class MultiSourceSheet: NSObject {
         list.setCustomSpacing(12, after: title)
         let done = NSButton(title: "완료", target: self, action: #selector(finish))
         done.bezelStyle = .rounded; done.keyEquivalent = "\r"
+        let cancel = NSButton(title: "취소", target: self, action: #selector(discard))
+        cancel.bezelStyle = .rounded; cancel.keyEquivalent = "\u{1b}"
         let content = window.contentView!
-        for view in [list, done] { view.translatesAutoresizingMaskIntoConstraints = false; content.addSubview(view) }
+        for view in [list, cancel, done] { view.translatesAutoresizingMaskIntoConstraints = false; content.addSubview(view) }
         NSLayoutConstraint.activate([
             list.topAnchor.constraint(equalTo: content.topAnchor, constant: 20),
             list.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 24),
             done.topAnchor.constraint(equalTo: list.bottomAnchor, constant: 18),
             done.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -18),
             done.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -18),
-            done.widthAnchor.constraint(greaterThanOrEqualToConstant: 72)
+            done.widthAnchor.constraint(greaterThanOrEqualToConstant: 72),
+            cancel.centerYAnchor.constraint(equalTo: done.centerYAnchor),
+            cancel.trailingAnchor.constraint(equalTo: done.leadingAnchor, constant: -12),
+            cancel.widthAnchor.constraint(greaterThanOrEqualToConstant: 72)
         ])
         window.setContentSize(NSSize(width: 240, height: content.fittingSize.height))
     }
-    @objc private func finish() { window.sheetParent?.endSheet(window) }
+    @objc private func finish() { window.sheetParent?.endSheet(window, returnCode: .OK) }
+    // Cancel keeps the saved keys.
+    @objc private func discard() { window.sheetParent?.endSheet(window, returnCode: .cancel) }
 }
 
 private final class KeyboardModeControl: NSSegmentedControl {
@@ -110,7 +119,8 @@ final class KeyboardSettingsController: NSObject, NSTableViewDataSource, NSTable
     let engine: Engine
     private var manager: KeyboardManager { engine.keyboards }
     let sourcesChanged: ([UInt64]) -> Void
-    let confirmSources: (String, [UInt64]?) -> Bool
+    // Warns about the given keyboards under the saved settings; false means the user cancelled.
+    let confirm: (Set<String>) -> Bool
     let changed: () -> Void
     let window: NSWindow
     private let defaultControl = NSSegmentedControl(labels: ["Off", "On"], trackingMode: .selectOne, target: nil, action: nil)
@@ -124,10 +134,10 @@ final class KeyboardSettingsController: NSObject, NSTableViewDataSource, NSTable
     private var controls: [String: KeyboardModeControl] = [:]
     private var sourcePickers: [String: SourcePicker] = [:]
 
-    init(engine: Engine, sourcesChanged: @escaping ([UInt64]) -> Void, confirmSources: @escaping (String, [UInt64]?) -> Bool,
+    init(engine: Engine, sourcesChanged: @escaping ([UInt64]) -> Void, confirm: @escaping (Set<String>) -> Bool,
          changed: @escaping () -> Void) {
-        self.engine = engine; self.sourcesChanged = sourcesChanged; self.confirmSources = confirmSources; self.changed = changed
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 680, height: 436), styleMask: [.titled], backing: .buffered, defer: false)
+        self.engine = engine; self.sourcesChanged = sourcesChanged; self.confirm = confirm; self.changed = changed
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 680, height: 446), styleMask: [.titled], backing: .buffered, defer: false)
         super.init()
         window.title = "고급 설정"
         window.isReleasedWhenClosed = false
@@ -142,13 +152,19 @@ final class KeyboardSettingsController: NSObject, NSTableViewDataSource, NSTable
         defaultControl.segmentStyle = .rounded; defaultControl.controlSize = .small
         defaultControl.setWidth(66, forSegment: 0); defaultControl.setWidth(66, forSegment: 1)
         defaultControl.setAccessibilityLabel("기본값")
-        let defaultRow = NSStackView(views: [defaultTitle, NSView(), defaultControl])
+        let defaultLabels = NSStackView(views: [defaultTitle, defaultHint])
+        defaultLabels.orientation = .vertical; defaultLabels.alignment = .leading; defaultLabels.spacing = 2
+        let defaultRow = NSStackView(views: [defaultLabels, NSView(), defaultControl])
         defaultRow.alignment = .centerY
         defaultSourcePicker.onChange = { [weak self] keys in
             if let keys { self?.sourcesChanged(keys) }
             self?.refresh()
         }
         defaultSourcePicker.setAccessibilityLabel("기본 한영 키")
+        let sourceTitle = NSTextField(labelWithString: "기본 한영 키")
+        sourceTitle.font = .systemFont(ofSize: 13, weight: .medium)
+        let sourceRow = NSStackView(views: [sourceTitle, NSView(), defaultSourcePicker])
+        sourceRow.alignment = .centerY
         let listTitle = NSTextField(labelWithString: "키보드별 설정")
         listTitle.font = .systemFont(ofSize: 13, weight: .semibold)
 
@@ -192,7 +208,7 @@ final class KeyboardSettingsController: NSObject, NSTableViewDataSource, NSTable
         ])
         let done = NSButton(title: "완료", target: self, action: #selector(close))
         done.bezelStyle = .rounded; done.keyEquivalent = "\r"
-        for view in [title, defaultRow, defaultSourcePicker, defaultHint, listTitle, list, done] {
+        for view in [title, defaultRow, sourceRow, listTitle, list, done] {
             view.translatesAutoresizingMaskIntoConstraints = false; content.addSubview(view)
         }
         NSLayoutConstraint.activate([
@@ -201,14 +217,11 @@ final class KeyboardSettingsController: NSObject, NSTableViewDataSource, NSTable
             defaultRow.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 18),
             defaultRow.leadingAnchor.constraint(equalTo: title.leadingAnchor, constant: 22),
             defaultRow.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -48),
-            defaultRow.heightAnchor.constraint(equalToConstant: 28),
-            defaultSourcePicker.topAnchor.constraint(equalTo: defaultRow.bottomAnchor, constant: 6),
-            defaultSourcePicker.trailingAnchor.constraint(equalTo: defaultControl.trailingAnchor),
+            sourceRow.topAnchor.constraint(equalTo: defaultRow.bottomAnchor, constant: 12),
+            sourceRow.leadingAnchor.constraint(equalTo: defaultRow.leadingAnchor),
+            sourceRow.trailingAnchor.constraint(equalTo: defaultRow.trailingAnchor),
             defaultSourcePicker.widthAnchor.constraint(equalTo: defaultControl.widthAnchor),
-            defaultHint.centerYAnchor.constraint(equalTo: defaultSourcePicker.centerYAnchor),
-            defaultHint.leadingAnchor.constraint(equalTo: defaultRow.leadingAnchor),
-            defaultHint.trailingAnchor.constraint(lessThanOrEqualTo: defaultSourcePicker.leadingAnchor, constant: -12),
-            listTitle.topAnchor.constraint(equalTo: defaultSourcePicker.bottomAnchor, constant: 18),
+            listTitle.topAnchor.constraint(equalTo: sourceRow.bottomAnchor, constant: 18),
             listTitle.leadingAnchor.constraint(equalTo: list.leadingAnchor, constant: 2),
             list.topAnchor.constraint(equalTo: listTitle.bottomAnchor, constant: 8),
             list.leadingAnchor.constraint(equalTo: title.leadingAnchor),
@@ -218,13 +231,15 @@ final class KeyboardSettingsController: NSObject, NSTableViewDataSource, NSTable
             done.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -18),
             done.widthAnchor.constraint(greaterThanOrEqualToConstant: 72)
         ])
-        refresh()
+        reload()
     }
     func show(on parent: NSWindow) {
-        refresh()
+        reload()
         if window.sheetParent == nil { parent.beginSheet(window) }
     }
-    func refresh() {
+    // Repair calls this every second; a hidden window catches up when it is shown.
+    func refresh() { if window.isVisible { reload() } }
+    private func reload() {
         defaultControl.selectedSegment = manager.defaultEnabled ? 1 : 0
         defaultHint.stringValue = manager.defaultEnabled
             ? "기본적으로 모든 키보드에 적용됩니다."
@@ -273,9 +288,8 @@ final class KeyboardSettingsController: NSObject, NSTableViewDataSource, NSTable
         picker.show(keyboard.sources, default: engine.defaultSources)
         picker.onChange = { [weak self] keys in
             guard let self else { return }
-            // A cancelled warning redraws the saved keys.
-            guard confirmSources(keyboard.key, keys) else { refresh(); return }
-            manager.setSources(keys, for: keyboard.key); changed(); refresh()
+            let saved = manager.known[keyboard.key]?.sources
+            update([keyboard.key], change: { self.manager.setSources(keys, for: keyboard.key) }, undo: { self.manager.setSources(saved, for: keyboard.key) })
         }
         picker.setAccessibilityLabel("\(keyboard.name) 한영 키")
         picker.sizeToFit()
@@ -289,14 +303,23 @@ final class KeyboardSettingsController: NSObject, NSTableViewDataSource, NSTable
         cell.addSubview(name); cell.addSubview(picker); cell.addSubview(control)
         return cell
     }
+    // Saves first so the warning checks the new settings; a cancelled warning undoes the change.
+    private func update(_ affected: Set<String>, change: () -> Void, undo: () -> Void) {
+        change()
+        if confirm(affected) { changed() } else { undo() }
+        refresh()
+    }
     @objc private func defaultChanged() {
-        manager.defaultEnabled = defaultControl.selectedSegment == 1
-        changed(); refresh()
+        let enabled = defaultControl.selectedSegment == 1, saved = manager.defaultEnabled
+        // Turning Default on applies to every keyboard left on Default.
+        update(Set(manager.known.values.filter { $0.mode == .default }.map(\.key)),
+               change: { manager.defaultEnabled = enabled }, undo: { manager.defaultEnabled = saved })
     }
     @objc private func modeChanged(_ sender: KeyboardModeControl) {
-        guard modes.indices.contains(sender.selectedSegment) else { return }
-        manager.setMode(modes[sender.selectedSegment], for: sender.keyboardKey)
-        changed(); refresh()
+        let key = sender.keyboardKey
+        guard modes.indices.contains(sender.selectedSegment), let saved = manager.known[key]?.mode else { return }
+        let mode = modes[sender.selectedSegment]
+        update([key], change: { manager.setMode(mode, for: key) }, undo: { manager.setMode(saved, for: key) })
     }
     @objc private func close() { window.sheetParent?.endSheet(window); window.orderOut(nil) }
 }
