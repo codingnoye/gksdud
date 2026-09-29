@@ -58,10 +58,12 @@ final class SourcePicker: NSPopUpButton {
         let sheet = MultiSourceSheet(checked: selection ?? defaultKeys ?? [])
         // Keep the picker until the sheet ends: a table reload can drop its row meanwhile.
         parent.beginSheet(sheet.window) { [self] response in
-            guard response == .OK else { return }
+            let checked = sheet.checked
+            // The sheet opens with the Default keys checked; returning them unchanged keeps following Default.
+            guard response == .OK, selection != nil || checked != defaultKeys else { return }
             // Checking nothing drops back to one key: a keyboard follows Default, the global key keeps its first key.
             let single = defaultKeys == nil ? selection.map { Array($0.prefix(1)) } : nil
-            commit(sheet.checked.isEmpty ? single : sheet.checked)
+            commit(checked.isEmpty ? single : checked)
         }
     }
     private func commit(_ keys: [UInt64]?) {

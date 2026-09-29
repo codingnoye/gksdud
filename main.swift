@@ -29,9 +29,10 @@ func selectable(_ keys: [UInt64]) -> [UInt64]? {
     return valid.isEmpty ? nil : valid
 }
 
+// A failed readback may have written the pending target, so it is ours as well.
 func owns(_ record: [String: String]?, _ mapping: Mapping) -> Bool {
-    guard let record, let source = mapping[srcKey]?.uint64Value else { return false }
-    return decodeSources(record["source"]).contains(source) && record["target"] == mapping[dstKey].map { String($0.uint64Value) }
+    guard let record, let source = mapping[srcKey]?.uint64Value, let target = mapping[dstKey]?.uint64Value else { return false }
+    return decodeSources(record["source"]).contains(source) && [record["target"], record["pendingTarget"]].contains(String(target))
 }
 
 func targetConflict(_ mappings: [Mapping], sources: [UInt64], target: UInt64, owned: [String: String]?) -> Bool {

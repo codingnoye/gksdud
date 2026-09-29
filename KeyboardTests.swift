@@ -300,6 +300,15 @@ func runKeyboardTests() {
     precondition(growing.mappings == [mapping(option, leftOption)], "An unreadable undo entry must not shift the others")
     manager.setSources([], for: growing.identity.key)
     precondition(manager.known[growing.identity.key]?.sources == nil, "Saving no keys means Default")
+    let unverified = TestKeyboard("10", serial: "unverified")
+    devices = [unverified]; _ = repair()
+    manager.setSources([command, option], for: unverified.identity.key); _ = repair()
+    unverified.afterWrite = { unverified.failRead = true }
+    _ = repair(command, targets[7].usage)
+    unverified.afterWrite = nil; unverified.failRead = false
+    manager.setSources([command], for: unverified.identity.key)
+    precondition(repair(command, targets[7].usage).applied == 1 && unverified.mappings == [mapping(command, targets[7].usage)],
+        "A key dropped after a failed readback is ours, not a conflict")
     let savedSuite = "io.gksdud.saved-keys-tests.\(UUID().uuidString)"
     let savedDefaults = UserDefaults(suiteName: savedSuite)!
     defer { savedDefaults.removePersistentDomain(forName: savedSuite) }
@@ -561,6 +570,9 @@ func renderKeyboardUI(to directory: String) throws {
     precondition(engine.keyboards.known[disconnected.identity.key]?.sources == [sources[0], sources[2]], "Cancel keeps the saved keys")
     toggleMultiple(builtInPicker, [], press: "취소")
     precondition(engine.keyboards.known[builtIn.identity.key]?.sources == nil, "Cancel keeps a keyboard on Default")
+    toggleMultiple(builtInPicker, [])
+    precondition(engine.keyboards.known[builtIn.identity.key]?.sources == nil && builtInPicker.indexOfSelectedItem == 0,
+        "Done with the Default keys unchanged keeps a keyboard on Default")
     toggleMultiple(defaultPicker, [sourceNames[1]])
     precondition(engine.defaultSources == [sources[1], sources[3]] && defaultPicker.titleOfSelectedItem == "\(sourceNames[1]) +1"
         && delegate.picker.titleOfSelectedItem == "\(sourceNames[1]) +1" && builtInPicker.titleOfSelectedItem == "기본값 (\(sourceNames[1]) +1)",
