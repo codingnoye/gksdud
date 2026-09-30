@@ -250,9 +250,11 @@ extension AppDelegate {
             if let current = TISCopyCurrentASCIICapableKeyboardLayoutInputSource()?.takeRetainedValue(),
                let identity = Self.sourceIdentity(current), identity.language.hasPrefix("en") { return identity }
             return self?.availableSource("en").flatMap(Self.sourceIdentity)
-        }, select: { identity in
-            guard let source = Self.sourceForID(identity.id) else { return false }
-            return TISSelectInputSource(source) == noErr
+        }, select: { [weak self] identity in
+            guard let source = Self.sourceForID(identity.id), TISSelectInputSource(source) == noErr else { return false }
+            // A round trip that returns before its notifications are read still reorders the recent sources.
+            self?.sourceHistory.note(identity.id)
+            return true
         }, frontmost: { NSWorkspace.shared.frontmostApplication?.processIdentifier }, post: { event in
             event.post(tap: .cghidEventTap)
         }, later: { delay, action in

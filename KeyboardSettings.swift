@@ -159,10 +159,11 @@ final class KeyboardSettingsController: NSObject, NSTableViewDataSource, NSTable
     private var controls: [String: KeyboardModeControl] = [:]
     private var sourcePickers: [String: SourcePicker] = [:]
 
-    init(engine: Engine, sourcesChanged: @escaping ([UInt64]) -> Void, confirm: @escaping (Set<String>) -> Bool,
+    // The settings window owns `targetPicker` and its action; the sheet only shows it.
+    init(engine: Engine, targetPicker: NSPopUpButton, sourcesChanged: @escaping ([UInt64]) -> Void, confirm: @escaping (Set<String>) -> Bool,
          changed: @escaping () -> Void) {
         self.engine = engine; self.sourcesChanged = sourcesChanged; self.confirm = confirm; self.changed = changed
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 680, height: 446), styleMask: [.titled], backing: .buffered, defer: false)
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 680, height: 504), styleMask: [.titled], backing: .buffered, defer: false)
         super.init()
         window.title = "고급 설정"
         window.isReleasedWhenClosed = false
@@ -190,6 +191,17 @@ final class KeyboardSettingsController: NSObject, NSTableViewDataSource, NSTable
         sourceTitle.font = .systemFont(ofSize: 13, weight: .medium)
         let sourceRow = NSStackView(views: [sourceTitle, NSView(), defaultSourcePicker])
         sourceRow.alignment = .centerY
+        targetPicker.controlSize = .small; targetPicker.font = .systemFont(ofSize: NSFont.systemFontSize(for: .small))
+        targetPicker.setAccessibilityLabel("내부 전환 키")
+        let targetTitle = NSTextField(labelWithString: "내부 전환 키")
+        targetTitle.font = .systemFont(ofSize: 13, weight: .medium)
+        let targetHint = NSTextField(labelWithString: "시스템의 '이전 입력 소스 선택' 단축키의 값을 변경합니다.\n다른 앱과 겹치지 않는, 기능 없는 키를 골라주세요.")
+        targetHint.font = .systemFont(ofSize: 11)
+        targetHint.textColor = .secondaryLabelColor
+        let targetLabels = NSStackView(views: [targetTitle, targetHint])
+        targetLabels.orientation = .vertical; targetLabels.alignment = .leading; targetLabels.spacing = 2
+        let targetRow = NSStackView(views: [targetLabels, NSView(), targetPicker])
+        targetRow.alignment = .centerY
         let listTitle = NSTextField(labelWithString: "키보드별 설정")
         listTitle.font = .systemFont(ofSize: 13, weight: .semibold)
 
@@ -233,7 +245,7 @@ final class KeyboardSettingsController: NSObject, NSTableViewDataSource, NSTable
         ])
         let done = NSButton(title: "완료", target: self, action: #selector(close))
         done.bezelStyle = .rounded; done.keyEquivalent = "\r"
-        for view in [title, defaultRow, sourceRow, listTitle, list, done] {
+        for view in [title, defaultRow, sourceRow, targetRow, listTitle, list, done] {
             view.translatesAutoresizingMaskIntoConstraints = false; content.addSubview(view)
         }
         NSLayoutConstraint.activate([
@@ -246,7 +258,11 @@ final class KeyboardSettingsController: NSObject, NSTableViewDataSource, NSTable
             sourceRow.leadingAnchor.constraint(equalTo: defaultRow.leadingAnchor),
             sourceRow.trailingAnchor.constraint(equalTo: defaultRow.trailingAnchor),
             defaultSourcePicker.widthAnchor.constraint(equalTo: defaultControl.widthAnchor),
-            listTitle.topAnchor.constraint(equalTo: sourceRow.bottomAnchor, constant: 18),
+            targetRow.topAnchor.constraint(equalTo: sourceRow.bottomAnchor, constant: 12),
+            targetRow.leadingAnchor.constraint(equalTo: defaultRow.leadingAnchor),
+            targetRow.trailingAnchor.constraint(equalTo: defaultRow.trailingAnchor),
+            targetPicker.widthAnchor.constraint(equalTo: defaultControl.widthAnchor),
+            listTitle.topAnchor.constraint(equalTo: targetRow.bottomAnchor, constant: 18),
             listTitle.leadingAnchor.constraint(equalTo: list.leadingAnchor, constant: 2),
             list.topAnchor.constraint(equalTo: listTitle.bottomAnchor, constant: 8),
             list.leadingAnchor.constraint(equalTo: title.leadingAnchor),

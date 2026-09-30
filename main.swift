@@ -2,7 +2,6 @@ import AppKit
 import ServiceManagement
 import IOKit
 import Carbon
-import QuartzCore
 
 let srcKey = "HIDKeyboardModifierMappingSrc"
 let dstKey = "HIDKeyboardModifierMappingDst"
@@ -44,7 +43,8 @@ func spaceCombo(flags: CGEventFlags) -> UInt64? {
 // A failed readback may have written the pending target, so it is ours as well.
 func owns(_ record: [String: String]?, _ mapping: Mapping) -> Bool {
     guard let record, let source = mapping[srcKey]?.uint64Value, let target = mapping[dstKey]?.uint64Value else { return false }
-    return decodeSources(record["source"]).contains(source) && [record["target"], record["pendingTarget"]].contains(String(target))
+    return decodeSources(record["source"]).contains(source)
+        && [record["target"], record["pendingTarget"], record["extraTarget"], record["pendingExtraTarget"]].contains(String(target))
 }
 
 func targetConflict(_ mappings: [Mapping], sources: [UInt64], target: UInt64, owned: [String: String]?) -> Bool {
@@ -116,15 +116,77 @@ final class Engine {
     var mappedSources: [UInt64] { selectable(defaultSources) ?? [] }
     var chosenCombos: [UInt64] { active ? defaultSources.filter(spaceCombos.contains) : [] }
     var active: Bool { defaults.object(forKey: "active") == nil || defaults.bool(forKey: "active") }
-    var switchOnKeyDown: Bool { defaults.object(forKey: "switchOnKeyDown") == nil || defaults.bool(forKey: "switchOnKeyDown") }
     var longPressCapsLock: Bool { defaults.bool(forKey: "longPressCapsLock") }
     var preserveCapsLock: Bool { defaults.object(forKey: "preserveCapsLock") == nil || defaults.bool(forKey: "preserveCapsLock") }
     // The saved choice waits while Caps Lock is a Korean/English key, however that key was saved.
     var koreanCapsLock: Bool { defaults.bool(forKey: "koreanCapsLock") && !capsLockSwitches() }
     var escapeToEnglish: Bool { defaults.bool(forKey: "escapeToEnglish") }
-    // A Caps Lock chosen as a Korean/English key reaches macOS as the reserved F-key, never as Caps Lock.
+    // A Caps Lock chosen as a Korean/English key reaches macOS as the reserved F-key, never as Caps Lock; so does the separate key.
     // `fallback` checks default keys before they are saved.
-    func capsLockSwitches(_ fallback: [UInt64]? = nil) -> Bool { keyboards.maps(sources[2], default: fallback ?? defaultSources) }
+    func capsLockSwitches(_ fallback: [UInt64]? = nil) -> Bool {
+        keyboards.maps(sources[2], default: fallback ?? defaultSources) || usesSeparateKey && separateKey == sources[2]
+    }
+    // Input sources beside Korean and English: the Korean/English key goes round them (cycle), or a key of their own
+    // switches to one (separate). Off, nothing changes.
+    var addedSourcesEnabled: Bool { defaults.bool(forKey: "addedSources") }
+    var addedSourceMode: AddedSourceMode { AddedSourceMode(rawValue: defaults.integer(forKey: "addedSourceMode")) ?? .cycle }
+    var usesSeparateKey: Bool { addedSourcesEnabled && addedSourceMode == .separate }
+    // Saved once edited; until then every input source macOS offers.
+    var cycleSources: [String]? {
+        get { defaults.stringArray(forKey: "cycleSources") }
+        set { defaults.set(newValue, forKey: "cycleSources") }
+    }
+    var separateSource: String? {
+        get { defaults.string(forKey: "separateSource") }
+        set { defaults.set(newValue, forKey: "separateSource") }
+    }
+    var separateKey: UInt64? {
+        get { (defaults.object(forKey: "separateKey") as? NSNumber).map(\.uint64Value).flatMap { hangulKeys.contains($0) ? $0 : nil } }
+        set { defaults.set(newValue.map { NSNumber(value: $0) }, forKey: "separateKey") }
+    }
+    // The separate key's own F-key, so the tap tells it from the Korean/English key. The tap takes every press of it,
+    // so it is one no system shortcut uses on its own.
+    var separateTarget: TargetKey {
+        let order = [18, 17, 16, 20, 19, 15, 14, 13].map { targets[$0 - 13] }.filter { $0.name != target.name }
+        return order.first { !systemFKeys.contains($0.keyCode) } ?? order[0]
+    }
+    // Read when settings change, not on every key.
+    private(set) var systemFKeys: Set<Int> = []
+    func refreshSystemFKeys() {
+        systemFKeys = Set(systemShortcutKeys().filter { [0, Int(CGEventFlags.maskSecondaryFn.rawValue)].contains($0.modifiers) }.map(\.keyCode))
+    }
+    // Keys of the enabled system shortcuts, except the one this app manages.
+    func systemShortcutKeys() -> [(keyCode: Int, modifiers: Int)] {
+        shortcutPreferences.read().compactMap { id, raw in
+            guard id != "60", let entry = raw as? [String: Any], (entry["enabled"] as? NSNumber)?.boolValue == true,
+                  let value = entry["value"] as? [String: Any], let parameters = value["parameters"] as? [NSNumber], parameters.count == 3 else { return nil }
+            return (parameters[1].intValue, parameters[2].intValue)
+        }
+    }
+    // Whether a system shortcut is the same Space combination, such as Spotlight's ⌘ + Space.
+    func systemShortcutUses(_ key: UInt64) -> Bool {
+        guard let index = spaceCombos.firstIndex(of: key) else { return false }
+        let modifiers: CGEventFlags = [.maskShift, .maskControl, .maskAlternate, .maskCommand]
+        let flag = [CGEventFlags.maskControl, .maskCommand, .maskAlternate][index]
+        return systemShortcutKeys().contains { $0.keyCode == kVK_Space && CGEventFlags(rawValue: UInt64($0.modifiers)).intersection(modifiers) == flag }
+    }
+    var accessibilityTrusted: () -> Bool = { AXIsProcessTrusted() }
+    // Mapped like a Korean/English key, but only while the tap can act on it. A Space combination stays in the tap.
+    var separateMapping: ExtraKey? {
+        guard active, usesSeparateKey, separateSource != nil, let key = separateKey, sources.contains(key), accessibilityTrusted() else { return nil }
+        return ExtraKey(source: key, target: separateTarget.usage)
+    }
+    // Whether another mapping already changes `key` on a keyboard the separate key would apply to.
+    func separateKeyConflict(_ key: UInt64) -> Bool {
+        services().filter { keyboards.isSelected($0) }.contains { service in
+            mappings(service).contains { $0[srcKey]?.uint64Value == key && $0[dstKey]?.uint64Value != separateTarget.usage && !owns(records[id(service)], $0) }
+        }
+    }
+    // A key that is both stays a Korean/English key.
+    func separateKeyIsHangulKey(_ fallback: [UInt64]? = nil) -> Bool {
+        guard let key = separateKey else { return false }
+        return (fallback ?? defaultSources).contains(key) || keyboards.maps(key, default: fallback ?? defaultSources)
+    }
     var testInputText: String {
         get { defaults.string(forKey: "testInputText") ?? "한dud한dud한dud한dud" }
         set { defaults.set(newValue, forKey: "testInputText") }
@@ -201,6 +263,7 @@ final class Engine {
         settingsUpdateDepth += 1
         defer { settingsUpdateDepth -= 1 }
         try shortcut(target: target)
+        refreshSystemFKeys()
         defaultSources = sources
         defaults.set(target.name, forKey: "target")
         defaults.set(true, forKey: "active")
@@ -246,7 +309,7 @@ final class Engine {
         defaults.removeObject(forKey: "inputMenuBackedUp")
     }
     func reconcile() throws -> Int {
-        keyboards.reconcile(sources: defaultSources, target: target.usage, active: active).applied
+        keyboards.reconcile(sources: defaultSources, target: target.usage, active: active, extra: separateMapping).applied
     }
     func restore() throws {
         settingsUpdateDepth += 1
@@ -330,23 +393,21 @@ struct LongPressState {
     static let delay: TimeInterval = 0.5
     var key: Int64?
     var started: TimeInterval = 0
-    var eager = false
     var fired = false
     var cancelled = false
-    mutating func begin(key: Int64, now: TimeInterval, eager: Bool) {
-        self.key = key; started = now; self.eager = eager; fired = false; cancelled = false
+    mutating func begin(key: Int64, now: TimeInterval) {
+        self.key = key; started = now; fired = false; cancelled = false
     }
     mutating func claimLong(now: TimeInterval) -> Bool {
         guard key != nil, !cancelled, !fired, now - started >= Self.delay else { return false }
         fired = true
         return true
     }
-    mutating func release(key: Int64, now: TimeInterval) -> (owned: Bool, short: Bool, long: Bool) {
-        guard self.key == key else { return (false, false, false) }
+    mutating func release(key: Int64, now: TimeInterval) -> (owned: Bool, long: Bool) {
+        guard self.key == key else { return (false, false) }
         let long = claimLong(now: now)
-        let short = !cancelled && !fired && !eager
         self.key = nil
-        return (true, short, long)
+        return (true, long)
     }
     mutating func cancel() { cancelled = true }
 }
@@ -445,14 +506,6 @@ func englishRoute(from language: String, switching: Bool) -> EnglishRoute {
     language.hasPrefix("en") ? (switching ? .sendSwitch : .now) : (switching ? .awaitSwitch : .sendSwitch)
 }
 
-// Whether a Korean/English key event starts a switch, and whether that switch is already on its way:
-// switching on press posts a pulse, and the native shortcut acts on this press's release.
-// A hold switches only on a short release, so its press has sent nothing yet.
-func switchKeyEvent(down: Bool, repeated: Bool, onPress: Bool, longPress: Bool) -> (begins: Bool, sent: Bool) {
-    let begins = down && !repeated || !down && !onPress && !longPress
-    return (begins, begins && (onPress || !longPress))
-}
-
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDelegate, NSTextFieldDelegate {
     let engine: Engine
     init(engine: Engine = Engine()) { self.engine = engine; super.init() }
@@ -503,6 +556,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     var keyTapSource: CFRunLoopSource?
     var pressGate = PressGate()
     var spaceGate = SpaceComboGate()
+    // The separate key's F-key.
+    var separateGate = PressGate()
+    var sourceHistory = SourceHistory()
+    var landingGeneration = 0
+    var setupGeneration = 0
+    // The source a switch is on its way to, and one that waits for it to land.
+    var switchLanding: String?
+    var queuedSwitch: (target: InputSourceIdentity, pulse: (CGEvent, CGEvent))?
+    // Keys typed while such a switch is on its way.
+    var holdKeys = false
+    var heldKeys: [CGEvent] = []
+    var sourceCache: (list: [InputSourceIdentity], layouts: Set<String>)?
+    // With added sources, selections that end where they started notify too; they change nothing to restore.
+    var notifiedSource: String?
+    // A switch on its way when ESC or a hold wanted English; with added sources it can land elsewhere.
+    var englishAfterLanding = false
+    lazy var addedSources = AddedSourcesSettings(owner: self)
     var longPress = LongPressState()
     var longPressTimer: DispatchWorkItem?
     var longPressEvent: CGEvent?
@@ -521,12 +591,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     var capsRestoreTasks: [DispatchWorkItem] = []
     let nativePulseMarker = Int64.random(in: 1...Int64.max)
     let pressAccess = NSButton(title: "접근성 권한 허용", target: nil, action: nil)
-    let pressSwitch = NSButton(checkboxWithTitle: "누를 때 전환", target: nil, action: nil)
+    let pressAccessRequired = NSTextField(labelWithString: "필수")
+    let advancedButton = NSButton(title: "고급 설정", target: nil, action: nil)
+    // Titles and hints of the settings tabs, with their colors, dimmed along with the controls.
+    var settingLabels: [(label: NSTextField, color: NSColor)] = []
     let longPressSwitch = NSButton(checkboxWithTitle: "길게 눌러 대소문자 전환", target: nil, action: nil)
     let preserveCapsSwitch = NSButton(checkboxWithTitle: "한영 전환시 대소문자 보존", target: nil, action: nil)
     let koreanCapsSwitch = NSButton(checkboxWithTitle: "한글 상태에서도 Caps Lock으로 대소문자 전환", target: nil, action: nil)
     let escapeSwitch = NSButton(checkboxWithTitle: "ESC 누를 시 영소문자로 변경", target: nil, action: nil)
-    var permissionHighlightGeneration = 0
     var returningFromPermissionSettings = false
     var permissionSettingsWasActive = false
     func finishPermissionVisit() {
@@ -541,38 +613,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         returningFromPermissionSettings = false
         permissionSettingsWasActive = false
     }
-    func highlightPressAccess() {
-        selectTab(0)
-        showSettings()
-        updatePressAccess()
-        guard !AXIsProcessTrusted() else { return }
-        permissionHighlightGeneration += 1
-        let generation = permissionHighlightGeneration
-        pressAccess.wantsLayer = true
-        guard let layer = pressAccess.layer else { return }
-        layer.cornerRadius = 6
-        layer.borderWidth = 2
-        layer.borderColor = NSColor.controlAccentColor.cgColor
-        let pulse = CABasicAnimation(keyPath: "borderColor")
-        pulse.fromValue = NSColor.controlAccentColor.withAlphaComponent(0.2).cgColor
-        pulse.toValue = NSColor.controlAccentColor.cgColor
-        pulse.duration = 0.35; pulse.autoreverses = true; pulse.repeatCount = 3
-        layer.add(pulse, forKey: "permissionHint")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) { [weak self] in
-            guard let self, self.permissionHighlightGeneration == generation else { return }
-            self.pressAccess.layer?.removeAnimation(forKey: "permissionHint")
-            self.pressAccess.layer?.borderWidth = 0
-        }
-    }
-    @objc func menuPressSwitch() {
-        guard AXIsProcessTrusted() else {
-            // Open after menu tracking has finished; don't toggle the saved preference.
-            DispatchQueue.main.async { [weak self] in self?.highlightPressAccess() }
-            return
-        }
-        pressSwitch.state = engine.switchOnKeyDown ? .off : .on
-        toggleFeature(pressSwitch)
-    }
     func stopKeyTap() {
         optionInput.cancel()
         cancelCapsRestore()
@@ -581,7 +621,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         longPress = LongPressState()
         if let source = keyTapSource { CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes) }
         if let tap = keyTap { CFMachPortInvalidate(tap) }
+        releaseHeldKeys()
         keyTapSource = nil; keyTap = nil; pressGate.held.removeAll(); spaceGate = SpaceComboGate()
+        separateGate.held.removeAll()
     }
     func ensureKeyTap() {
         guard AXIsProcessTrusted() else { stopKeyTap(); updatePressAccess(); return }
@@ -589,8 +631,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         syncCapsPreservation()
         // ESC shares the long-press transition, so it runs while either is on.
         if !engine.active || !engine.longPressCapsLock && !engine.escapeToEnglish { cancelLongPress() }
-        guard engine.active, engine.switchOnKeyDown || engine.longPressCapsLock || engine.preserveCapsLock || specialMode != .none || !engine.chosenCombos.isEmpty
-                || engine.escapeToEnglish, keyTap == nil else { updatePressAccess(); return }
+        guard engine.active, keyTap == nil else { updatePressAccess(); return }
         let mask = (CGEventMask(1) << CGEventType.keyDown.rawValue) | (CGEventMask(1) << CGEventType.keyUp.rawValue) | (CGEventMask(1) << CGEventType.flagsChanged.rawValue) | (CGEventMask(1) << CGEventType.leftMouseDown.rawValue) | (CGEventMask(1) << CGEventType.rightMouseDown.rawValue) | (CGEventMask(1) << CGEventType.otherMouseDown.rawValue)
         guard let tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .defaultTap,
             eventsOfInterest: mask, callback: { _, type, event, info in
@@ -603,14 +644,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                     if let tap = owner.keyTap { CGEvent.tapEnable(tap: tap, enable: true) }
                     return Unmanaged.passUnretained(event)
                 }
+                // Keys this app posts again, such as ones held while a switch landed, act only once.
+                let ours = event.getIntegerValueField(.eventSourceUserData) == owner.nativePulseMarker
                 // Before Option input, which would otherwise type Option+Space. While it replays
                 // queued strokes, a combination waits in its queue to keep the order.
-                if (type == .keyDown || type == .keyUp) && !owner.optionInput.busy && owner.handleSpaceCombo(event) { return nil }
+                if (type == .keyDown || type == .keyUp) && !ours && !owner.optionInput.busy && owner.handleSpaceCombo(event) { return nil }
                 if owner.optionInput.handle(event, mode: owner.specialMode, active: owner.engine.active) { return nil }
                 // Only the event is checked here. ESC goes on to the app, and the input source is read right after.
                 if plainEscape(type: type, code: event.getIntegerValueField(.keyboardEventKeycode), flags: event.flags,
                                repeated: event.getIntegerValueField(.keyboardEventAutorepeat) != 0)
-                    && owner.engine.active && owner.engine.escapeToEnglish {
+                    && !ours && owner.engine.active && owner.engine.escapeToEnglish {
                     let caps = event.flags.contains(.maskAlphaShift)
                     DispatchQueue.main.async { [weak owner] in owner?.switchToLowercaseEnglish(caps: caps) }
                 }
@@ -623,17 +666,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                     return Unmanaged.passUnretained(event)
                 }
                 guard type == .keyDown || type == .keyUp else { return Unmanaged.passUnretained(event) }
-                if event.getIntegerValueField(.eventSourceUserData) == owner.nativePulseMarker {
-                    return Unmanaged.passUnretained(event)
-                }
+                if ours { return Unmanaged.passUnretained(event) }
                 let code = event.getIntegerValueField(.keyboardEventKeycode)
                 let repeated = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
-                let switchKey = switchKeyEvent(down: type == .keyDown, repeated: repeated,
-                    onPress: owner.engine.switchOnKeyDown, longPress: owner.engine.longPressCapsLock)
-                if owner.engine.active && switchKey.begins && code == Int64(owner.engine.target.keyCode) {
+                // Keys typed before a switch with selections lands wait for it, so they reach the source it lands on.
+                if owner.holdKeys && code != Int64(owner.engine.target.keyCode) && code != Int64(owner.engine.separateTarget.keyCode)
+                    && !owner.pressGate.held.contains(code) && !owner.separateGate.held.contains(code) && owner.longPress.key != code {
+                    owner.holdKey(event)
+                    return nil
+                }
+                // The separate key's F-key only switches, on press like the Korean/English key.
+                if owner.separateGate.held.contains(code) || owner.separateKeyActive && owner.engine.separateKey.map(sources.contains) == true
+                    && code == Int64(owner.engine.separateTarget.keyCode) {
+                    let decision = owner.separateGate.handle(code: code, down: type == .keyDown, repeatKey: repeated, active: true, target: code)
+                    if decision.switchNow { _ = owner.switchSeparate() }
+                    return decision.consume ? nil : Unmanaged.passUnretained(event)
+                }
+                if owner.engine.active && type == .keyDown && !repeated && code == Int64(owner.engine.target.keyCode) {
                     owner.rememberCapsBeforeSwitch()
-                    // A pulse notes itself; the native shortcut posts none.
-                    if switchKey.sent && !owner.engine.switchOnKeyDown { owner.noteSwitchSent() }
                 }
                 if owner.longPress.key == code {
                     if type == .keyUp { owner.finishLongPress(code: code) }
@@ -644,7 +694,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                     if owner.startLongPress(event: event) { return nil }
                     return Unmanaged.passUnretained(event)
                 }
-                let active = owner.engine.active && owner.engine.switchOnKeyDown
+                let active = owner.engine.active
                 // Allocate before claiming the press, so failure falls back to the original shortcut.
                 var pulse: (CGEvent, CGEvent)?
                 if active && type == .keyDown && !repeated && !owner.pressGate.held.contains(code)
@@ -658,7 +708,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                     // Re-enter before system hotkey handling, not downstream of the session tap.
                     // The marker bypass above lets both pulses through without another switch.
                     // This switch path only posts the reserved F-key.
-                    owner.postSwitchPulse(pulse)
+                    owner.switchHangul(pulse)
                 }
                 return decision.consume ? nil : Unmanaged.passUnretained(event)
             }, userInfo: Unmanaged.passUnretained(self).toOpaque()) else { updatePressAccess(); return }
@@ -669,12 +719,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         updatePressAccess()
     }
     func updatePressAccess() {
-        let trusted = AXIsProcessTrusted()
+        addedSources.refresh()
+        let trusted = engine.accessibilityTrusted()
+        // Switching needs the tap, so without Accessibility only the permission button and the gksdud tab can be used.
+        for control: NSControl in [enabled, login, showInMenuBar, iconPicker, picker, advancedButton] + specialButtons { control.isEnabled = trusted }
+        for preview in [koreanPreview, englishPreview] { preview.contentTintColor = trusted ? .labelColor : .disabledControlTextColor }
+        for (label, color) in settingLabels { label.textColor = trusted ? color : .disabledControlTextColor }
         let ready = keyTap.map { CGEvent.tapIsEnabled(tap: $0) } ?? false
         pressAccess.title = trusted ? "권한 허용 완료" : "접근성 권한 허용"
         pressAccess.isEnabled = !trusted
-        pressSwitch.state = trusted && engine.switchOnKeyDown ? .on : .off
-        pressSwitch.isEnabled = trusted
+        pressAccessRequired.isHidden = trusted
         longPressSwitch.state = trusted && engine.longPressCapsLock ? .on : .off
         longPressSwitch.isEnabled = trusted
         preserveCapsSwitch.state = trusted && engine.preserveCapsLock ? .on : .off
@@ -691,23 +745,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         escapeSwitch.state = trusted && engine.escapeToEnglish ? .on : .off
         escapeSwitch.isEnabled = trusted
         escapeSwitch.toolTip = trusted ? switchErrors[escapeSwitch] : accessibilityHint
-        pressAccess.toolTip = "키를 누르는 순간 전환하려면 접근성 권한이 필요합니다."
-        pressSwitch.toolTip = !trusted ? "오른쪽 버튼으로 접근성 권한을 허용해주세요. 허용 전에는 기존 방식으로 동작합니다." :
-            !engine.switchOnKeyDown ? "기존 macOS 단축키 방식으로 전환합니다." :
-            !engine.active ? "활성화를 켜면 키를 누를 때 전환합니다." :
-            ready ? "키를 누르는 순간 전환 · 길게 눌러도 한 번만 전환" : "권한 반영을 기다리는 중입니다. 계속 전환되지 않으면 앱을 다시 실행하세요."
+        pressAccess.toolTip = trusted && engine.active && !ready ? "권한 반영을 기다리는 중입니다. 계속 전환되지 않으면 앱을 다시 실행하세요."
+            : "키를 누르는 순간 전환하려면 접근성 권한이 필요합니다."
     }
     // Each checkbox saves its own preference; the tap starts or stops with them.
     @objc func toggleFeature(_ sender: NSButton) {
-        let keys: [NSButton: String] = [pressSwitch: "switchOnKeyDown", longPressSwitch: "longPressCapsLock",
+        let keys: [NSButton: String] = [longPressSwitch: "longPressCapsLock",
             preserveCapsSwitch: "preserveCapsLock", koreanCapsSwitch: "koreanCapsLock", escapeSwitch: "escapeToEnglish"]
         guard let key = keys[sender] else { return }
         cancelLongPress()
         switchErrors[sender] = nil
         let koreanCaps = koreanCapsActive
         engine.defaults.set(sender.state == .on, forKey: key)
+        if sender === preserveCapsSwitch { turnOffUnusedKoreanCaps() }
         ensureKeyTap()
         if koreanCaps { releaseKoreanCaps() }
+    }
+    // Caps Lock in Korean works only with preservation, so it goes off with it; left on, it would still warn when Caps Lock
+    // becomes a Korean/English or separate key.
+    func turnOffUnusedKoreanCaps() {
+        if !engine.preserveCapsLock { engine.defaults.set(false, forKey: "koreanCapsLock") }
     }
     var currentLanguage: String {
         TISCopyCurrentKeyboardInputSource().map { language($0.takeRetainedValue()) } ?? ""
@@ -738,13 +795,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     // True when the Space belongs to a chosen combination and must reach neither apps nor system shortcuts.
     func handleSpaceCombo(_ event: CGEvent) -> Bool {
         guard event.getIntegerValueField(.keyboardEventKeycode) == Int64(kVK_Space) else { return false }
+        let separate = separateCombo
         let decision = spaceGate.handle(down: event.type == .keyDown,
-            repeatKey: event.getIntegerValueField(.keyboardEventAutorepeat) != 0, flags: event.flags, chosen: engine.chosenCombos)
-        if decision.switchNow {
+            repeatKey: event.getIntegerValueField(.keyboardEventAutorepeat) != 0, flags: event.flags, chosen: engine.chosenCombos + (separate.map { [$0] } ?? []))
+        if decision.switchNow, let separate, spaceCombo(flags: event.flags) == separate {
+            guard switchSeparate() else { spaceGate.held = false; return false }
+        } else if decision.switchNow {
             // Without a pulse, give the Space back instead of swallowing it.
             guard let pulse = nativeSwitchPulse(keyCode: engine.target.keyCode, marker: nativePulseMarker) else { spaceGate.held = false; return false }
             rememberCapsBeforeSwitch()
-            postSwitchPulse(pulse)
+            switchHangul(pulse)
         }
         return decision.consume
     }
@@ -789,6 +849,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         longPressTimer?.cancel(); longPressTimer = nil
         capsConfirmationTimer?.cancel(); capsConfirmationTimer = nil
         pendingCapsState = nil
+        englishAfterLanding = false
         longPress.cancel()
         longPressEvent = nil
         longPressOwner = nil
@@ -799,8 +860,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         longPressEvent = copy
         longPressOwner = NSWorkspace.shared.frontmostApplication?.processIdentifier
         longPressInitialCaps = englishCaps.beforeLongPress(actual: actualCaps, preserving: capsPreservationActive)
-        longPress.begin(key: event.getIntegerValueField(.keyboardEventKeycode), now: ProcessInfo.processInfo.systemUptime, eager: engine.switchOnKeyDown)
-        if engine.switchOnKeyDown { postSwitchPulse(pulse) }
+        longPress.begin(key: event.getIntegerValueField(.keyboardEventKeycode), now: ProcessInfo.processInfo.systemUptime)
+        switchHangul(pulse)
         let generation = longPressGeneration
         let task = DispatchWorkItem { [weak self] in
             guard let self, self.longPressGeneration == generation else { return }
@@ -812,13 +873,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
     func finishLongPress(code: Int64) {
         longPressTimer?.cancel(); longPressTimer = nil
-        let result = longPress.release(key: code, now: ProcessInfo.processInfo.systemUptime)
-        if result.long { performLongPress() }
-        else if result.short, let event = longPressEvent, engine.active, engine.longPressCapsLock,
-                longPressOwner == NSWorkspace.shared.frontmostApplication?.processIdentifier,
-                let pulse = nativeSwitchPulse(from: event, marker: nativePulseMarker) {
-            postSwitchPulse(pulse)
-        }
+        if longPress.release(key: code, now: ProcessInfo.processInfo.systemUptime).long { performLongPress() }
         longPressEvent = nil
         if pendingCapsState == nil { longPressOwner = nil }
     }
@@ -849,18 +904,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         pendingCapsState = desired
         capsTransitionFeature = feature
         let from = language(current), switching = switchInFlight(from: from), route = englishRoute(from: from, switching: switching)
-        switch route {
-        case .now: completeCapsTransition(); return
-        case .awaitSwitch: break
-        case .sendSwitch:
-            // Keep composition on the native shortcut path; no text replay or direct TIS selection.
-            guard let pulse else { cancelLongPress(); return }
-            postSwitchPulse(pulse)
-            // Two are on their way back here, so neither is in flight from this source.
-            if switching { sentSwitch = nil }
+        if addedSourcesActive {
+            // A switch on its way can land on any source, so English follows from there. Otherwise it goes straight to English.
+            if switching { englishAfterLanding = true }
+            else if from.hasPrefix("en") { completeCapsTransition(); return }
+            else { guard let pulse, switchToEnglish(pulse) else { cancelLongPress(); return } }
+        } else {
+            switch route {
+            case .now: completeCapsTransition(); return
+            case .awaitSwitch: break
+            case .sendSwitch:
+                // Keep composition on the native shortcut path; no text replay or direct TIS selection.
+                guard let pulse else { cancelLongPress(); return }
+                postSwitchPulse(pulse)
+                // Two are on their way back here, so neither is in flight from this source.
+                if switching { sentSwitch = nil }
+            }
         }
         // ESC switches only to reach English, so its own switch that went to another source goes back.
-        let start = Self.sourceIdentity(current)?.id, revert = feature === escapeSwitch && route == .sendSwitch
+        let start = Self.sourceIdentity(current)?.id, revert = feature === escapeSwitch && route == .sendSwitch && !addedSourcesActive
         let generation = longPressGeneration
         let timeout = DispatchWorkItem { [weak self] in
             guard let self, self.longPressGeneration == generation, self.pendingCapsState != nil else { return }
@@ -878,7 +940,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     func completeCapsTransition() {
         guard let desired = pendingCapsState else { return }
         guard engine.active, longPressOwner == nil || longPressOwner == NSWorkspace.shared.frontmostApplication?.processIdentifier else { cancelLongPress(); return }
-        guard let current = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue(), language(current).hasPrefix("en") else { return }
+        guard let current = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue(), language(current).hasPrefix("en") else {
+            if englishAfterLanding, let current = currentSource, !switchInFlight(from: current.language) {
+                englishAfterLanding = false
+                if let pulse = nativeSwitchPulse(keyCode: engine.target.keyCode, marker: nativePulseMarker), switchToEnglish(pulse) { return }
+            }
+            return
+        }
+        englishAfterLanding = false
         pendingCapsState = nil
         capsConfirmationTimer?.cancel(); capsConfirmationTimer = nil
         do {
@@ -931,6 +1000,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         updateTimer = Timer.scheduledTimer(withTimeInterval: 900, repeats: true) { [weak self] _ in self?.updates.check() }
         updateTimer?.tolerance = 60
         DistributedNotificationCenter.default().addObserver(self, selector: #selector(inputSourceChanged), name: Notification.Name(kTISNotifySelectedKeyboardInputSourceChanged as String), object: nil)
+        DistributedNotificationCenter.default().addObserver(self, selector: #selector(enabledSourcesChanged), name: Notification.Name(kTISNotifyEnabledKeyboardInputSourcesChanged as String), object: nil)
         let center = NSWorkspace.shared.notificationCenter
         observers.append(center.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] notice in
             guard let self, let owner = self.longPressOwner,
@@ -957,7 +1027,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         // Low-cost service enumeration also covers Bluetooth/USB reconnects and delayed wake.
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.repair() }
         timer?.tolerance = 0.2
-        if engine.active { do { try engine.shortcut(target: engine.target); try engine.hideSystemInputMenu() } catch { report(error) } }
+        if engine.active && engine.accessibilityTrusted() {
+            do { try engine.shortcut(target: engine.target); try engine.hideSystemInputMenu() } catch { report(error) }
+        }
+        seedSourceHistory(); engine.refreshSystemFKeys(); turnOffUnusedKoreanCaps()
         repair()
         if showInMenuBar.state == .off || CommandLine.arguments.contains("--settings") { showSettings() }
         UpdateInstaller.acknowledgeLaunch()
@@ -970,7 +1043,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     @objc func showKeyboardSettings() {
         repair()
         if keyboardSettings == nil {
-            keyboardSettings = KeyboardSettingsController(engine: engine, sourcesChanged: { [weak self] keys in
+            keyboardSettings = KeyboardSettingsController(engine: engine, targetPicker: targetPicker, sourcesChanged: { [weak self] keys in
                 self?.picker.show(keys); self?.selectionChanged()
             }, confirm: { [weak self] keyboards in self?.confirmKeyboardChange(keyboards) ?? true }) { [weak self] in self?.repair() }
         }
@@ -978,9 +1051,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
     // The keyboard sheet saves a change before this check and undoes it on false.
     func confirmKeyboardChange(_ keyboards: Set<String>) -> Bool {
-        guard confirmCapsLockKey(engine.capsLockSwitches()),
+        guard confirmCapsLockKey(engine.capsLockSwitches()), confirmSeparateKey(),
               !engine.active || confirmMapping(engine.defaultSources, target: engine.target, only: keyboards) else { return false }
-        releaseKoreanCapsLock()
+        releaseKoreanCapsLock(); releaseSeparateKey()
         return true
     }
     func refreshKeyboardState() {
@@ -1031,7 +1104,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         englishEntry.target = self; englishEntry.image = sourceMenuIcon(korean: false)
         menu.addItem(NSMenuItem.separator())
         menu.addItem(withTitle: "활성화", action: #selector(menuEnabled), keyEquivalent: "").target = self
-        menu.addItem(withTitle: "누를 때 전환", action: #selector(menuPressSwitch), keyEquivalent: "").target = self
         menu.addItem(withTitle: "로그인 시 시작", action: #selector(menuLogin), keyEquivalent: "").target = self
         menu.addItem(withTitle: "메뉴바에 표시", action: #selector(menuHidden), keyEquivalent: "").target = self
         menu.addItem(NSMenuItem.separator())
@@ -1090,8 +1162,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     @objc func inputSourceChanged() {
         RunLoop.main.perform(inModes: [.common]) { [weak self] in
             guard let self else { return }
-            // The switch on its way has landed, so the next ESC needs its own.
-            self.sentSwitch = nil
+            let id = self.currentSource?.id
+            if let id { self.sourceHistory.note(id) }
+            if id == self.switchLanding {
+                self.switchLanding = nil
+                // After this notification is handled, like a key pressed now.
+                DispatchQueue.main.async { [weak self] in self?.runQueuedSwitch() }
+            }
+            if self.addedSourcesActive {
+                defer { self.notifiedSource = id }
+                guard id != self.notifiedSource else { return }
+                self.scheduleNextSetup()
+            }
+            // The switch on its way has landed, so the next ESC needs its own. With added sources the selections before a
+            // switch notify too, while the source is still the one the switch leaves.
+            if !self.addedSourcesActive || self.sentSwitch.map({ self.currentLanguage != $0.from }) != false { self.sentSwitch = nil }
             guard !self.optionInput.busy else { return }
             self.completeCapsTransition()
             self.scheduleCapsRestore()
@@ -1099,13 +1184,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             self.updateInputIndicator()
         }
     }
+    @objc func enabledSourcesChanged() {
+        RunLoop.main.perform(inModes: [.common]) { [weak self] in self?.sourceCache = nil; self?.addedSources.refresh(force: true) }
+    }
     func updateInputIndicator() {
         // The Option-character round trip selects English for a moment; didFinish refreshes afterwards.
-        guard !optionInput.busy else { return }
+        guard !optionInput.busy, switchLanding == nil else { return }
         guard let current = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue() else { return }
         let lang = language(current)
         updateInputMenuState(language: lang)
-        let label = lang.hasPrefix("ko") ? iconLabel(korean: true) : lang.hasPrefix("en") ? iconLabel(korean: false) : (lang.isEmpty ? "?" : String(lang.prefix(3)))
+        // Added sources show their language code; without them other sources keep the old label.
+        let other = engine.addedSourcesEnabled ? sourceBadgeLabel(lang) : lang.isEmpty ? "?" : String(lang.prefix(3))
+        let label = lang.hasPrefix("ko") ? iconLabel(korean: true) : lang.hasPrefix("en") ? iconLabel(korean: false) : other
         let korean = lang.hasPrefix("ko")
         // Let the status bar resolve contrast, including its initial appearance and highlighting.
         let badge = (lang.hasPrefix("ko") || lang.hasPrefix("en"))
@@ -1121,6 +1211,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         button.setAccessibilityLabel("gksdud, 현재 입력 \(korean ? "한국어" : lang.hasPrefix("en") ? "영어" : label)\(warning)")
     }
     func menuWillOpen(_ menu: NSMenu) {
+        refreshAddedMenuItems(menu)
         updateInputIndicator()
         // Menu tracking can delay input-source notifications. Keep the open menu
         // and settings badge current without running hardware repair in this mode.
@@ -1133,13 +1224,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         login.state = SMAppService.mainApp.status == .enabled ? .on : .off
         for entry in menu.items {
             switch entry.action {
-            case #selector(menuEnabled): entry.state = engine.active ? .on : .off
-            case #selector(menuPressSwitch):
-                entry.state = AXIsProcessTrusted() && engine.switchOnKeyDown ? .on : .off
-                entry.isEnabled = true
-                entry.toolTip = AXIsProcessTrusted() ? "키를 누르는 순간 전환합니다." : "설정을 열어 접근성 권한 허용 버튼을 표시합니다."
-            case #selector(menuLogin): entry.state = login.state
-            case #selector(menuHidden): entry.state = showInMenuBar.state
+            case #selector(menuEnabled): entry.state = engine.active ? .on : .off; entry.isEnabled = engine.accessibilityTrusted()
+            case #selector(menuLogin): entry.state = login.state; entry.isEnabled = engine.accessibilityTrusted()
+            case #selector(menuHidden): entry.state = showInMenuBar.state; entry.isEnabled = engine.accessibilityTrusted()
             case #selector(selectKorean): entry.isEnabled = availableSource("ko") != nil
             case #selector(selectEnglish): entry.isEnabled = availableSource("en") != nil
             default: break
@@ -1155,6 +1242,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         for entry in item?.menu?.items ?? [] {
             if entry.action == #selector(selectKorean) { entry.state = language.hasPrefix("ko") ? .on : .off }
             if entry.action == #selector(selectEnglish) { entry.state = language.hasPrefix("en") ? .on : .off }
+            if entry.action == #selector(selectAddedSource(_:)) { entry.state = entry.representedObject as? String == currentSource?.id ? .on : .off }
         }
     }
     func selectLanguage(_ prefix: String) { if let source = availableSource(prefix) { rememberCapsBeforeSwitch(); _ = TISSelectInputSource(source) }; updateInputIndicator() }
@@ -1189,19 +1277,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     @objc func selectionChanged() {
         guard !engine.isUpdatingSettings else { resetSelection(); return }
         cancelLongPress()
-        guard confirmCapsLockKey(engine.capsLockSwitches(picker.selection)) else { resetSelection(); return }
+        guard confirmCapsLockKey(engine.capsLockSwitches(picker.selection)), confirmSeparateKey(picker.selection) else { resetSelection(); return }
         if enabled.state == .on { applyNow() }
         else {
             if let keys = picker.selection { engine.defaultSources = keys }
             engine.defaults.set(targets[targetPicker.indexOfSelectedItem].name, forKey: "target")
         }
-        releaseKoreanCapsLock()
+        releaseKoreanCapsLock(); releaseSeparateKey()
     }
     // False keeps the old keys.
-    func confirmCapsLockKey(_ taken: Bool) -> Bool {
+    func confirmCapsLockKey(_ taken: Bool, as role: String = "한영 키") -> Bool {
         // The saved choice: the keyboard sheet asks after saving the new keys, which already pause it.
         guard taken, engine.defaults.bool(forKey: "koreanCapsLock") else { return true }
-        let alert = NSAlert(); alert.messageText = "Caps Lock을 한영 키로 사용합니다."
+        let alert = NSAlert(); alert.messageText = "Caps Lock을 \(role)로 사용합니다."
         alert.informativeText = "'\(koreanCapsSwitch.title)' 기능이 꺼집니다."
         alert.addButton(withTitle: "변경"); alert.addButton(withTitle: "취소")
         return runAlert(alert) == .alertFirstButtonReturn
@@ -1244,9 +1332,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         do { try engine.restore(); lastError = ""; stickyError = ""; repairFailed = false; refreshStatus() } catch { report(error) }
         resetSelection(); syncCapsPreservation(); updatePressAccess(); refreshKeyboardState()
     }
-    func recover() { optionInput.cancel(); cancelCapsRestore(); englishCaps.switching = false; cancelLongPress(); longPress = LongPressState(); pressGate.held.removeAll(); spaceGate = SpaceComboGate(); for delay in [0.5, 2.0, 5.0] { DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.repair() } } }
+    func recover() { sourceCache = nil; queuedSwitch = nil; releaseHeldKeys(); optionInput.cancel(); cancelCapsRestore(); englishCaps.switching = false; cancelLongPress(); longPress = LongPressState(); pressGate.held.removeAll(); spaceGate = SpaceComboGate(); separateGate.held.removeAll(); for delay in [0.5, 2.0, 5.0] { DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.repair() } } }
     func repair() {
         guard !engine.isUpdatingSettings else { return }
+        // Without Accessibility there is no tap to switch with, so activation turns off and stays off until turned on again.
+        if engine.active && !engine.accessibilityTrusted() { restoreNow(); return }
         ensureKeyTap()
         do { try engine.repair(); if repairFailed { repairFailed = false; stickyError = "" } } catch { report(error); repairFailed = !(error is KeyboardError) }
         if engine.keyboards.result.pending == 0 { lastError = "" }

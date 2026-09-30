@@ -11,6 +11,8 @@ func runTestMode() -> Bool {
         do { try probeOptionInput() } catch { fputs("Input probe failed: \(error)\n", stderr); exit(1) }
     } else if arguments.contains("--probe-escape") {
         do { try probeEscape() } catch { fputs("ESC probe failed: \(error.localizedDescription)\n", stderr); exit(1) }
+    } else if arguments.contains("--probe-input-sources") {
+        do { try probeInputSources() } catch { fputs("Input source probe failed: \(error.localizedDescription)\n", stderr); exit(1) }
     } else if arguments.contains("--self-test") {
         runSelfTest()
     } else if arguments.contains("--integration-test") {
@@ -29,6 +31,10 @@ func runSelfTest() {
     runKeyboardTests()
     runRightControlTests()
     runCapsLockKeyTests()
+    runAddedSourceTests()
+    runSeparateKeyTests()
+    runSeparateKeyWarningTests()
+    runPermissionTests()
     for initial in [false, true] {
         for holdEnabled in [false, true] {
             var caps = EnglishCapsState()
@@ -62,28 +68,26 @@ func runSelfTest() {
         }
     }
     print("PASS: uppercase/lowercase round trips, physical Caps with hold on/off, next-hold baseline, transition reset suppression, reactivation")
-    for eager in [false, true] {
-        var hold = LongPressState()
-        hold.begin(key: 80, now: 10, eager: eager)
-        precondition(!hold.claimLong(now: 10.499))
-        let short = hold.release(key: 80, now: 10.499)
-        precondition(short.owned && short.short == !eager && !short.long)
-        hold.begin(key: 80, now: 20, eager: eager)
-        precondition(hold.claimLong(now: 20.5))
-        precondition(!hold.claimLong(now: 23), "Only one long action per hold")
-        let released = hold.release(key: 80, now: 24)
-        precondition(released.owned && !released.short && !released.long)
-        hold.begin(key: 80, now: 30, eager: eager)
-        precondition(!hold.release(key: 0, now: 30.2).owned, "Other key must not end hold")
-        let late = hold.release(key: 80, now: 30.5)
-        precondition(late.long && !late.short, "Release handles delayed timer exactly once")
-        hold.begin(key: 80, now: 40, eager: eager)
-        hold.cancel()
-        precondition(!hold.claimLong(now: 41))
-        let cancelled = hold.release(key: 80, now: 41)
-        precondition(cancelled.owned && !cancelled.long && !cancelled.short)
-    }
-    print("PASS: 0.5-second hold threshold, eager/release compatibility, one-shot hold, delayed timer, unrelated keys, cancellation")
+    var hold = LongPressState()
+    hold.begin(key: 80, now: 10)
+    precondition(!hold.claimLong(now: 10.499))
+    let short = hold.release(key: 80, now: 10.499)
+    precondition(short.owned && !short.long)
+    hold.begin(key: 80, now: 20)
+    precondition(hold.claimLong(now: 20.5))
+    precondition(!hold.claimLong(now: 23), "Only one long action per hold")
+    let released = hold.release(key: 80, now: 24)
+    precondition(released.owned && !released.long)
+    hold.begin(key: 80, now: 30)
+    precondition(!hold.release(key: 0, now: 30.2).owned, "Other key must not end hold")
+    let late = hold.release(key: 80, now: 30.5)
+    precondition(late.long, "Release handles delayed timer exactly once")
+    hold.begin(key: 80, now: 40)
+    hold.cancel()
+    precondition(!hold.claimLong(now: 41))
+    let cancelled = hold.release(key: 80, now: 41)
+    precondition(cancelled.owned && !cancelled.long)
+    print("PASS: 0.5-second hold threshold, one-shot hold, delayed timer, unrelated keys, cancellation")
     for target in targets {
         let original = CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(target.keyCode), keyDown: true)!
         original.flags = [.maskShift, .maskCommand, .maskSecondaryFn]
@@ -150,7 +154,6 @@ func runSelfTest() {
     precondition(Engine(defaults: UserDefaults(suiteName: suiteName)!).testInputText.isEmpty, "Empty input must not reset to default")
     print("PASS: test input default, edited text persistence, empty text persistence")
     precondition(preferences.active, "First launch defaults to active")
-    precondition(preferences.switchOnKeyDown, "Key-down switching defaults to checked")
     precondition(!preferences.longPressCapsLock, "Long press is opt-in")
     precondition(preferences.preserveCapsLock, "Case preservation defaults to on")
     for holdEnabled in [false, true] {
@@ -170,10 +173,6 @@ func runSelfTest() {
         }
     }
     print("PASS: four independent hold/preservation combinations, restart persistence, current versus remembered case")
-    suite.set(false, forKey: "switchOnKeyDown")
-    precondition(!Engine(defaults: suite).switchOnKeyDown, "Explicit unchecked preference survives restart")
-    suite.set(true, forKey: "switchOnKeyDown")
-    precondition(preferences.switchOnKeyDown)
     suite.set(false, forKey: "active")
     precondition(!preferences.active, "Explicitly disabled preference is preserved")
     suite.set(true, forKey: "active")

@@ -26,7 +26,7 @@ mkdir -p "$stage/gksdud.app/Contents/MacOS" "$stage/gksdud.app/Contents/Resource
 swiftc -parse-as-library -D ICON_GENERATOR -module-cache-path "$stage/module-cache" DudIcon.swift -o "$stage/icon-generator"
 "$stage/icon-generator" "$stage/AppIcon.iconset"
 iconutil -c icns "$stage/AppIcon.iconset" -o "$stage/gksdud.app/Contents/Resources/AppIcon.icns"
-sources=(main.swift DudIcon.swift KeyboardManagement.swift KeyboardSettings.swift SettingsWindow.swift UpdateChecking.swift UpdateInstaller.swift SpecialCharacters.swift KeyboardTests.swift FeatureTests.swift SelfTest.swift)
+sources=(main.swift DudIcon.swift KeyboardManagement.swift KeyboardSettings.swift SettingsWindow.swift InputSources.swift UpdateChecking.swift UpdateInstaller.swift SpecialCharacters.swift KeyboardTests.swift FeatureTests.swift SelfTest.swift)
 compile() { swiftc -swift-version 5 -O -module-cache-path "$stage/module-cache" -import-objc-header Bridge.h "${sources[@]}" -framework AppKit -framework IOKit -framework ServiceManagement "$@"; }
 for arch in arm64 x86_64; do
   compile -target "$arch-apple-macos13.0" -o "$stage/gksdud-$arch"

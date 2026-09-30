@@ -120,6 +120,14 @@ struct KeyboardReconcileResult {
     var applied = 0
     var selected = 0
     var pending = 0
+    // Keyboards where another mapping already emits the extra key's target, so only the Korean/English keys apply.
+    var extraBlocked = 0
+}
+
+// One more key with a target of its own, beside the Korean/English keys.
+struct ExtraKey: Equatable {
+    let source: UInt64
+    let target: UInt64
 }
 
 final class KeyboardManager {
@@ -233,7 +241,7 @@ final class KeyboardManager {
     }
     // Gives each recorded key except `keeping` its original mapping back, if it still emits our target.
     private static func restored(_ current: [Mapping], record: [String: String], keeping: [UInt64] = []) -> [Mapping] {
-        let owned = [record["target"], record["pendingTarget"]].compactMap { $0.flatMap { UInt64($0) } }
+        let owned = [record["target"], record["pendingTarget"], record["extraTarget"], record["pendingExtraTarget"]].compactMap { $0.flatMap { UInt64($0) } }
         var desired = current
         for (source, original) in undo(record) where !keeping.contains(source)
         && current.contains(where: { $0[srcKey]?.uint64Value == source && $0[dstKey].map { owned.contains($0.uint64Value) } == true }) {
@@ -249,31 +257,38 @@ final class KeyboardManager {
         try setVerified(Self.restored(current, record: old), current: current, device: device)
         saved.removeValue(forKey: device.registryID); records = saved
     }
-    private func apply(_ device: KeyboardDevice, sources: [UInt64], target: UInt64) throws {
+    private func apply(_ device: KeyboardDevice, sources: [UInt64], target: UInt64, extra: ExtraKey? = nil) throws {
         let current = try device.readMappings()
         var saved = records
         let old = saved[device.registryID]
+        let all = sources + (extra.map { [$0.source] } ?? [])
         // Check before any write, so a conflict leaves the working keys mapped.
-        guard !targetConflict(current, sources: sources, target: target, owned: old) else { throw KeyboardError.conflict }
+        guard !targetConflict(current, sources: all, target: target, owned: old) else { throw KeyboardError.conflict }
         // One write changes the key set: dropped keys get their originals back, kept keys keep their undo.
-        let desired = sources.reduce(old.map { Self.restored(current, record: $0, keeping: sources) } ?? current) {
-            merged($0, source: $1, previous: $1, original: nil, target: target)
+        let pairs = sources.map { ExtraKey(source: $0, target: target) } + (extra.map { [$0] } ?? [])
+        let desired = pairs.reduce(old.map { Self.restored(current, record: $0, keeping: all) } ?? current) {
+            merged($0, source: $1.source, previous: $1.source, original: nil, target: $1.target)
         }
-        if let old, old["source"] == encodeSources(sources), old["target"] == String(target), old["pendingTarget"] == nil,
-           mappingEqual(current, desired) { return }
+        let extraTarget = extra.map { String($0.target) }
+        if let old, old["source"] == encodeSources(all), old["target"] == String(target), old["extraTarget"] == extraTarget,
+           old["pendingTarget"] == nil, old["pendingExtraTarget"] == nil, mappingEqual(current, desired) { return }
         let previous = old.map(Self.undo) ?? []
-        let kept: [Undo] = sources.map { source in
+        let kept: [Undo] = all.map { source in
             previous.first { $0.source == source } ?? (source, current.first { $0[srcKey]?.uint64Value == source }?[dstKey]?.uint64Value)
         }
         // Dropped keys stay in the undo until the write is verified, so a failed write can still restore them.
-        var pending = Self.record(kept + previous.filter { !sources.contains($0.source) }, target: old?["target"] ?? String(target))
+        var pending = Self.record(kept + previous.filter { !all.contains($0.source) }, target: old?["target"] ?? String(target))
         // Save undo before touching hardware; remember both outcomes of a failed readback.
         pending["pendingTarget"] = String(target)
+        pending["extraTarget"] = old?["extraTarget"]; pending["pendingExtraTarget"] = extraTarget
         saved[device.registryID] = pending; records = saved
         try setVerified(desired, current: current, device: device)
-        saved[device.registryID] = Self.record(kept, target: String(target)); records = saved
+        var record = Self.record(kept, target: String(target))
+        record["extraTarget"] = extraTarget
+        saved[device.registryID] = record; records = saved
     }
-    @discardableResult func reconcile(sources fallback: [UInt64], target: UInt64, active: Bool) -> KeyboardReconcileResult {
+    // `extra` goes on every selected keyboard where it is not a Korean/English key already.
+    @discardableResult func reconcile(sources fallback: [UInt64], target: UInt64, active: Bool, extra: ExtraKey? = nil) -> KeyboardReconcileResult {
         var next = KeyboardReconcileResult()
         let devices: [KeyboardDevice]
         do { devices = try snapshot(); failures.removeValue(forKey: "enumeration") }
@@ -286,8 +301,14 @@ final class KeyboardManager {
             if selected { next.selected += 1 }
             // With only Space combinations chosen, a keyboard has nothing to map.
             let keys = selected ? sources(for: device, default: fallback) : []
+            var own = selected ? extra.flatMap { keys.contains($0.source) ? nil : $0 } : nil
             do {
-                if !keys.isEmpty { try apply(device, sources: keys, target: target); next.applied += 1 }
+                // The extra key never costs the Korean/English keys: if its target is taken, it waits.
+                if let key = own, let mappings = try? device.readMappings(),
+                   targetConflict(mappings, sources: keys + [key.source], target: key.target, owned: records[device.registryID]) {
+                    own = nil; next.extraBlocked += 1
+                }
+                if !keys.isEmpty || own != nil { try apply(device, sources: keys, target: target, extra: own); next.applied += 1 }
                 else { try restore(device) }
                 failures.removeValue(forKey: device.registryID)
             } catch {

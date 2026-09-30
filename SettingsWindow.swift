@@ -26,6 +26,8 @@ extension AppDelegate {
         testInput.cell?.isScrollable = true; testInput.cell?.wraps = false
         testInput.usesSingleLineMode = true; testInput.lineBreakMode = .byClipping
         testInput.heightAnchor.constraint(equalToConstant: 34).isActive = true
+        // Otherwise AppKit may focus a selectable hint label first.
+        window.initialFirstResponder = testInput
         let inputRow = NSStackView(views: [inputBadge, testInput]); inputRow.spacing = 12; inputRow.alignment = .centerY
         full(inputRow, in: root)
         testInput.widthAnchor.constraint(equalTo: root.widthAnchor, constant: -48).isActive = true
@@ -69,7 +71,7 @@ extension AppDelegate {
         ])
         func hint(_ text: String, in panel: NSStackView, indent: CGFloat = 20) {
             let label = NSTextField(wrappingLabelWithString: text)
-            label.font = .systemFont(ofSize: 11); label.textColor = .secondaryLabelColor
+            label.font = .systemFont(ofSize: 11); label.textColor = .secondaryLabelColor; settingLabels.append((label, .secondaryLabelColor))
             label.translatesAutoresizingMaskIntoConstraints = false
             let container = NSView(); container.addSubview(label)
             if let last = panel.arrangedSubviews.last { panel.setCustomSpacing(6, after: last) }
@@ -79,14 +81,20 @@ extension AppDelegate {
         func separator(in panel: NSStackView) { let line = NSBox(); line.boxType = .separator; full(line, in: panel) }
         func heading(_ text: String, in panel: NSStackView) {
             let label = NSTextField(labelWithString: text); label.font = .systemFont(ofSize: 13, weight: .semibold)
-            panel.addArrangedSubview(label)
+            panel.addArrangedSubview(label); settingLabels.append((label, .labelColor))
         }
         func row(_ title: String, _ views: [NSView], in panel: NSStackView) {
             let label = NSTextField(labelWithString: title); label.widthAnchor.constraint(equalToConstant: 95).isActive = true
+            settingLabels.append((label, .labelColor))
             let row = NSStackView(views: [label] + views); row.spacing = 16; row.alignment = .centerY
             panel.addArrangedSubview(row)
         }
-        let general = tabPanels[0]
+        // Fewer rows than the other tabs, so they spread out: activation, then login and the menu bar, then the keys.
+        let general = tabPanels[0]; general.spacing = 20
+        pressAccess.target = self; pressAccess.action = #selector(requestPressAccess); pressAccess.bezelStyle = .rounded
+        pressAccessRequired.font = .systemFont(ofSize: 11); pressAccessRequired.textColor = .systemOrange
+        let accessRow = NSStackView(views: [pressAccess, pressAccessRequired]); accessRow.spacing = 8; accessRow.alignment = .centerY
+        general.addArrangedSubview(accessRow)
         enabled.target = self; enabled.action = #selector(toggleEnabled); enabled.state = engine.active ? .on : .off
         keyboardWarning.font = .systemFont(ofSize: 11); keyboardWarning.textColor = .systemOrange
         let warningIcon = NSImageView(image: NSImage(systemSymbolName: "exclamationmark.circle.fill", accessibilityDescription: "경고")!)
@@ -97,23 +105,7 @@ extension AppDelegate {
         let activation = NSStackView(views: [enabled, keyboardWarningRow])
         activation.orientation = .vertical; activation.alignment = .leading; activation.spacing = 6
         full(activation, in: general); keyboardWarningRow.isHidden = true
-        pressSwitch.target = self; pressSwitch.action = #selector(toggleFeature(_:))
-        pressAccess.target = self; pressAccess.action = #selector(requestPressAccess); pressAccess.bezelStyle = .rounded
-        let pressRow = NSStackView(views: [pressSwitch, pressAccess]); pressRow.spacing = 16; pressRow.alignment = .centerY
-        general.addArrangedSubview(pressRow)
-        hint("버튼을 뗄 때가 아닌 누를 때 전환하도록 해 더 빠르게 전환합니다.\n글자 씹힘도 더 개선됩니다.", in: general)
-        separator(in: general)
-        picker.show(engine.defaultSources)
-        picker.onChange = { [weak self] _ in self?.selectionChanged() }
-        row("한영 키", [picker], in: general)
-        let keyboards = NSButton(title: "고급 설정", target: self, action: #selector(showKeyboardSettings)); keyboards.bezelStyle = .rounded
-        general.setCustomSpacing(8, after: general.arrangedSubviews.last!)
-        row("", [keyboards], in: general)
-        targetPicker.addItems(withTitles: targets.map(\.name)); targetPicker.selectItem(withTitle: engine.target.name)
-        targetPicker.target = self; targetPicker.action = #selector(selectionChanged)
-        row("내부 전환 키", [targetPicker], in: general)
-        hint("시스템의 '이전 입력 소스 선택' 단축키의 값을 변경합니다.\n다른 앱과 겹치지 않는, 기능 없는 키를 골라주세요.", in: general)
-        separator(in: general)
+        general.setCustomSpacing(28, after: activation)
         login.target = self; login.action = #selector(toggleLogin)
         login.state = SMAppService.mainApp.status == .enabled ? .on : .off
         showInMenuBar.target = self; showInMenuBar.action = #selector(toggleHidden)
@@ -130,7 +122,20 @@ extension AppDelegate {
         koreanPreview.setAccessibilityLabel("한국어 아이콘 미리보기")
         englishPreview.setAccessibilityLabel("영어 아이콘 미리보기")
         row("메뉴바 아이콘", [iconPicker, koreanPreview, englishPreview], in: general)
+        general.setCustomSpacing(32, after: general.arrangedSubviews.last!)
+        separator(in: general)
+        general.setCustomSpacing(32, after: general.arrangedSubviews.last!)
+        picker.show(engine.defaultSources)
+        picker.onChange = { [weak self] _ in self?.selectionChanged() }
+        row("한영 키", [picker], in: general)
+        let keyboards = advancedButton; keyboards.target = self; keyboards.action = #selector(showKeyboardSettings); keyboards.bezelStyle = .rounded
+        general.setCustomSpacing(8, after: general.arrangedSubviews.last!)
+        row("", [keyboards], in: general)
+        // Shown in the advanced settings sheet.
+        targetPicker.addItems(withTitles: targets.map(\.name)); targetPicker.selectItem(withTitle: engine.target.name)
+        targetPicker.target = self; targetPicker.action = #selector(selectionChanged)
         let caps = tabPanels[1]
+        heading("대소문자", in: caps)
         longPressSwitch.target = self; longPressSwitch.action = #selector(toggleFeature(_:))
         preserveCapsSwitch.target = self; preserveCapsSwitch.action = #selector(toggleFeature(_:))
         caps.addArrangedSubview(longPressSwitch)
@@ -146,8 +151,11 @@ extension AppDelegate {
             hint(index == 0 ? "한글 상태에서도 ⌥8 → • 처럼 입력합니다." : "⌥+문자를 일반 문자로 입력합니다.", in: extras)
         }
         specialStatus.font = .systemFont(ofSize: 11); specialStatus.textColor = .secondaryLabelColor
-        extras.setCustomSpacing(28, after: extras.arrangedSubviews.last!)
-        full(specialStatus, in: extras); extras.setCustomSpacing(28, after: specialStatus)
+        full(specialStatus, in: extras)
+        separator(in: extras)
+        heading("입력 소스 추가 (beta)", in: extras)
+        addedSources.install(in: extras)
+        separator(in: extras)
         heading("기타", in: extras)
         escapeSwitch.target = self; escapeSwitch.action = #selector(toggleFeature(_:))
         extras.addArrangedSubview(escapeSwitch)
