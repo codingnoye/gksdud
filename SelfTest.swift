@@ -33,6 +33,7 @@ func runSelfTest() {
     runCapsLockKeyTests()
     runAddedSourceTests()
     runSeparateKeyTests()
+    runSeparateKeyTapTests()
     runSeparateKeyWarningTests()
     runPermissionTests()
     for initial in [false, true] {

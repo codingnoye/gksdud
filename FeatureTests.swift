@@ -844,6 +844,15 @@ func runAddedSourceTests() {
     featureCheck(plan(ko, zh, next: "ko2", previous: "abc") == SwitchPlan(selections: ["zh", "ko2"], risky: false))
     featureCheck(plan(ko, abc, next: "ja", previous: "ja") == SwitchPlan(selections: ["abc", "ko2"], risky: true)
         && plan(ko, abc, next: nil, previous: nil).risky, "Only a lost setup leaves Korean's syllable at risk")
+    featureCheck(reselectsTarget(landed: false, current: "ja", origin: "ja", targetIsLayout: true), "A switch that did not land ends on its layout")
+    featureCheck(!reselectsTarget(landed: true, current: "ja", origin: "ja", targetIsLayout: true), "Back where it started after it landed stays there")
+    featureCheck(!reselectsTarget(landed: false, current: "abc", origin: "ja", targetIsLayout: true)
+        && !reselectsTarget(landed: false, current: "ja", origin: "ja", targetIsLayout: false), "Elsewhere, or toward an input method, nothing is selected")
+    // Notifications for a source already handled.
+    var notifications = SourceNotifications()
+    featureCheck(notifications.handles("abc", addedSources: true) && !notifications.handles("abc", addedSources: true), "With added sources a repeat is skipped")
+    featureCheck(notifications.handles("ko2", addedSources: false) && notifications.handles("ko2", addedSources: false), "Without them none is")
+    featureCheck(notifications.handles("abc", addedSources: true), "Sources noted while they were off count, so turning them on skips nothing new")
     // The recent sources macOS keeps.
     let infos = [SourceInfo(id: "com.apple.keylayout.US", mode: nil, bundle: "com.apple.keyboardlayout.all", layout: true),
                  SourceInfo(id: "com.apple.inputmethod.Korean.2SetKorean", mode: "com.apple.inputmethod.Korean.2SetKorean", bundle: "com.apple.inputmethod.Korean", layout: false),
@@ -855,7 +864,7 @@ func runAddedSourceTests() {
                                     ["KeyboardLayout Name": "ABC – AZERTY"], ["KeyboardLayout Name": "Removed"], ["KeyboardLayout Name": "U.S."]]
     featureCheck(systemHistory(entries, sources: infos) == ["com.apple.inputmethod.Korean.2SetKorean", "com.apple.keylayout.US",
         "com.apple.inputmethod.Kotoeri.RomajiTyping.Japanese", "com.apple.keylayout.ABC-AZERTY"], "Entries map to sources until one does not")
-    print("PASS: added input sources: cycle order, other layouts, outside the list, missing sources, separate key and back, history, badges, switch plans, system history")
+    print("PASS: added input sources: cycle order, other layouts, outside the list, missing sources, separate key and back, history, badges, switch plans, landing, notifications, system history")
 }
 // Drives the running gksdud with its switch keys, then reads the input source and what this probe's text view receives.
 // Launch the test app from build.sh, signed like the installed one, so it has gksdud's Accessibility permission:

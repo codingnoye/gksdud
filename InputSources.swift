@@ -24,6 +24,16 @@ struct SourceHistory {
     }
 }
 
+// With added sources, this app's own selections notify too, so a notification for the source already handled is skipped.
+// Sources are noted while they are off as well: the first notification after they turn on is not taken for a repeat.
+struct SourceNotifications {
+    private(set) var last: String?
+    mutating func handles(_ id: String?, addedSources: Bool) -> Bool {
+        defer { last = id }
+        return !addedSources || id != last
+    }
+}
+
 // macOS keeps its recent sources in its preferences, naming an input mode, an input method or a keyboard layout.
 // An entry that matches no enabled source ends the list, since the entries after it would be out of place.
 struct SourceInfo { let id: String; let mode: String?; let bundle: String?; let layout: Bool }
@@ -59,6 +69,11 @@ func switchPlan(current: InputSourceIdentity, target: InputSourceIdentity, next:
     // Korean keeps its syllable; the layout after the target waits.
     if risky(selections) && isKorean(current) { selections = plan(current.id) }
     return SwitchPlan(selections: selections, risky: risky(selections))
+}
+// When a switch is due and macOS still shows where it started, its target layout is selected again. Once it has landed,
+// a return there is chosen afterwards and stays.
+func reselectsTarget(landed: Bool, current: String?, origin: String, targetIsLayout: Bool) -> Bool {
+    !landed && current == origin && targetIsLayout
 }
 
 // The badge of an input source other than Korean or English: its language code of up to three letters, or without one
@@ -101,11 +116,14 @@ func addedSourceTarget(separateKey: Bool, current: InputSourceIdentity, mode: Ad
 }
 
 extension AppDelegate {
-    var addedSourcesActive: Bool { engine.active && engine.addedSourcesEnabled && AXIsProcessTrusted() }
+    var addedSourcesActive: Bool { engine.active && engine.addedSourcesEnabled && engine.accessibilityTrusted() }
     var separateKeyActive: Bool { addedSourcesActive && engine.addedSourceMode == .separate }
-    // The separate key mapped to its F-key. When another mapping already sends that F-key, it is not applied.
-    var separateKeyMapped: Bool {
-        separateKeyActive && engine.separateKey.map(sources.contains) == true && engine.keyboards.result.extraBlocked == 0
+    // The tap takes the separate key's F-key only while the separate key is mapped to it. When another mapping already
+    // sends that F-key, the separate key is not applied and its presses stay that mapping's.
+    func takesSeparateKey(_ code: Int64) -> Bool {
+        if separateGate.held.contains(code) { return true }
+        guard code == Int64(engine.separateTarget.keyCode), separateKeyActive, let key = engine.separateKey, sources.contains(key) else { return false }
+        return engine.keyboards.result.extraBlocked == 0
     }
     // The separate key when it is a Space combination. A Korean/English combination wins over it.
     var separateCombo: UInt64? {
@@ -211,10 +229,10 @@ extension AppDelegate {
         let generation = landingGeneration
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             guard let self, self.landingGeneration == generation else { return }
-            // Once it has landed, a return to the origin is chosen afterwards and stays.
             let landed = self.switchLanding == nil
             self.switchLanding = nil
-            if !landed, self.currentSource?.id == origin, self.isLayout(target.id), let source = Self.sourceForID(target.id) { _ = TISSelectInputSource(source) }
+            if reselectsTarget(landed: landed, current: self.currentSource?.id, origin: origin, targetIsLayout: self.isLayout(target.id)),
+               let source = Self.sourceForID(target.id) { _ = TISSelectInputSource(source) }
             self.updateInputIndicator()
             self.runQueuedSwitch()
         }

@@ -573,7 +573,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     var heldKeys: [CGEvent] = []
     var sourceCache: (list: [InputSourceIdentity], layouts: Set<String>)?
     // With added sources, selections that end where they started notify too; they change nothing to restore.
-    var notifiedSource: String?
+    var sourceNotifications = SourceNotifications()
     // A switch on its way when ESC or a hold wanted English; with added sources it can land elsewhere.
     var englishAfterLanding = false
     lazy var addedSources = AddedSourcesSettings(owner: self)
@@ -680,7 +680,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                     return nil
                 }
                 // The separate key's F-key only switches, on press like the Korean/English key.
-                if owner.separateGate.held.contains(code) || code == Int64(owner.engine.separateTarget.keyCode) && owner.separateKeyMapped {
+                if owner.takesSeparateKey(code) {
                     let decision = owner.separateGate.handle(code: code, down: type == .keyDown, repeatKey: repeated, active: true, target: code)
                     if decision.switchNow { _ = owner.switchSeparate() }
                     return decision.consume ? nil : Unmanaged.passUnretained(event)
@@ -1175,16 +1175,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 // After this notification is handled, like a key pressed now.
                 DispatchQueue.main.async { [weak self] in self?.runQueuedSwitch() }
             }
-            // Kept while added sources are off too, so the first notification after they turn on is not taken for a repeat.
-            let repeated = id == self.notifiedSource
-            self.notifiedSource = id
-            if self.addedSourcesActive {
-                guard !repeated else { return }
-                self.scheduleNextSetup()
-            }
+            let added = self.addedSourcesActive
+            guard self.sourceNotifications.handles(id, addedSources: added) else { return }
+            if added { self.scheduleNextSetup() }
             // The switch on its way has landed, so the next ESC needs its own. With added sources the selections before a
             // switch notify too, while the source is still the one the switch leaves.
-            if !self.addedSourcesActive || self.sentSwitch.map({ self.currentLanguage != $0.from }) != false { self.sentSwitch = nil }
+            if !added || self.sentSwitch.map({ self.currentLanguage != $0.from }) != false { self.sentSwitch = nil }
             guard !self.optionInput.busy else { return }
             self.completeCapsTransition()
             self.scheduleCapsRestore()

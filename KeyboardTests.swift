@@ -832,6 +832,36 @@ func runSeparateKeyTests() {
     print("PASS: separate key on its own F-key, undo, failed readback, Korean/English keys first, taken F-key, settings")
 }
 
+// The tap takes the separate key's F-key only while the separate key is mapped to it.
+func runSeparateKeyTapTests() {
+    let suite = "io.gksdud.separate-tap-tests.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let keyboard = TestKeyboard("st-1", name: "Keyboard", serial: "separate-tap")
+    let untouched = ShortcutPreferences(read: { [:] }, write: { _ in }, activate: {})
+    let engine = Engine(defaults: defaults, discover: { [keyboard] }, shortcutPreferences: untouched)
+    var trusted = true
+    engine.accessibilityTrusted = { trusted }
+    defaults.set(true, forKey: "active")
+    defaults.set(true, forKey: "addedSources"); defaults.set(AddedSourceMode.separate.rawValue, forKey: "addedSourceMode")
+    engine.separateKey = sources[1]; engine.separateSource = "com.apple.inputmethod.SCIM.ITABC"
+    let delegate = AppDelegate(engine: engine)
+    let target = engine.separateTarget, code = Int64(target.keyCode)
+    func reconcile() { engine.keyboards.reconcile(sources: [sources[0]], target: f19, active: true, extra: engine.separateMapping) }
+    reconcile()
+    precondition(delegate.takesSeparateKey(code) && !delegate.takesSeparateKey(Int64(engine.target.keyCode)), "The mapped separate key's F-key is taken")
+    // Caps Lock already sends that F-key for another app.
+    keyboard.mappings.append([srcKey: NSNumber(value: sources[2]), dstKey: NSNumber(value: target.usage)])
+    reconcile()
+    precondition(engine.keyboards.result.extraBlocked == 1 && !delegate.takesSeparateKey(code), "A taken F-key stays the other mapping's")
+    keyboard.mappings.removeAll { $0[srcKey]?.uint64Value == sources[2] }
+    reconcile()
+    precondition(delegate.takesSeparateKey(code), "Freed again, it is taken again")
+    trusted = false
+    precondition(!delegate.takesSeparateKey(code), "Without Accessibility nothing is taken")
+    print("PASS: separate key's F-key taken only while mapped, left to another mapping that sends it")
+}
+
 // Warnings when the separate key and a Korean/English key meet, from either side.
 func runSeparateKeyWarningTests() {
     _ = NSApplication.shared
@@ -945,6 +975,11 @@ func runPermissionTests() {
                                  delegate.advancedButton, delegate.longPressSwitch, delegate.escapeSwitch, delegate.addedSources.enable] + delegate.specialButtons
     precondition(settings.allSatisfy { !$0.isEnabled } && delegate.pressAccess.isEnabled, "Only the permission button is left")
     precondition(delegate.settingLabels.allSatisfy { $0.label.textColor == .disabledControlTextColor }, "Titles and hints dim too")
+    delegate.picker.show([sources[0], sources[1]])
+    delegate.picker.mouseDown(with: NSEvent.mouseEvent(with: .leftMouseDown, location: .zero, modifierFlags: [], timestamp: 0,
+        windowNumber: delegate.window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!)
+    precondition(delegate.window.attachedSheet == nil, "Holding several keys, the picker does not open their sheet either")
+    delegate.resetSelection()
     delegate.repair()
     precondition(!engine.active && delegate.enabled.state == .off, "Activation turns off")
     trusted = true
