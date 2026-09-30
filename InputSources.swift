@@ -403,9 +403,12 @@ final class AddedSourcesSettings: NSObject {
         guard force || owner.window?.isVisible == true else { return }
         let trusted = engine.accessibilityTrusted(), on = engine.addedSourcesEnabled, enabled = owner.enabledSources()
         let cycle = owner.cycleOrder
-        let state = [String(trusted), String(on), String(engine.addedSourceMode.rawValue), cycle.joined(separator: ","),
-                     engine.separateSource ?? "", engine.separateKey.map(String.init) ?? "", enabled.map(\.id).joined(separator: ","),
-                     String(engine.separateKeyIsHangulKey()), String(engine.keyboards.result.extraBlocked), String(owner.iconStyle), error ?? ""].joined(separator: "|")
+        // Built in steps: as one literal it exceeds the type-checker time limit on older Swift (macos-15 CI).
+        var parts: [String] = [String(trusted), String(on), String(engine.addedSourceMode.rawValue), cycle.joined(separator: ",")]
+        let separateKey: String = engine.separateKey.map { String($0) } ?? ""
+        parts += [engine.separateSource ?? "", separateKey, enabled.map(\.id).joined(separator: ",")]
+        parts += [String(engine.separateKeyIsHangulKey()), String(engine.keyboards.result.extraBlocked), String(owner.iconStyle), error ?? ""]
+        let state = parts.joined(separator: "|")
         guard force || state != signature else { return }
         signature = state
         enable.state = on ? .on : .off
