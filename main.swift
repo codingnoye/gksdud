@@ -680,8 +680,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                     return nil
                 }
                 // The separate key's F-key only switches, on press like the Korean/English key.
-                if owner.separateGate.held.contains(code) || owner.separateKeyActive && owner.engine.separateKey.map(sources.contains) == true
-                    && code == Int64(owner.engine.separateTarget.keyCode) {
+                if owner.separateGate.held.contains(code) || code == Int64(owner.engine.separateTarget.keyCode) && owner.separateKeyMapped {
                     let decision = owner.separateGate.handle(code: code, down: type == .keyDown, repeatKey: repeated, active: true, target: code)
                     if decision.switchNow { _ = owner.switchSeparate() }
                     return decision.consume ? nil : Unmanaged.passUnretained(event)
@@ -1176,9 +1175,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 // After this notification is handled, like a key pressed now.
                 DispatchQueue.main.async { [weak self] in self?.runQueuedSwitch() }
             }
+            // Kept while added sources are off too, so the first notification after they turn on is not taken for a repeat.
+            let repeated = id == self.notifiedSource
+            self.notifiedSource = id
             if self.addedSourcesActive {
-                defer { self.notifiedSource = id }
-                guard id != self.notifiedSource else { return }
+                guard !repeated else { return }
                 self.scheduleNextSetup()
             }
             // The switch on its way has landed, so the next ESC needs its own. With added sources the selections before a

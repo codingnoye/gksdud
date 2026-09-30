@@ -62,7 +62,7 @@ final class SourcePicker: NSPopUpButton, NSMenuDelegate {
         }
     }
     override func mouseDown(with event: NSEvent) {
-        if (selection?.count ?? 0) > 1 { editMultiple() } else { super.mouseDown(with: event) }
+        if isEnabled && (selection?.count ?? 0) > 1 { editMultiple() } else { super.mouseDown(with: event) }
     }
     @objc private func choose() {
         if indexOfSelectedItem == numberOfItems - 1 { editMultiple(); return }

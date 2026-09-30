@@ -103,6 +103,10 @@ func addedSourceTarget(separateKey: Bool, current: InputSourceIdentity, mode: Ad
 extension AppDelegate {
     var addedSourcesActive: Bool { engine.active && engine.addedSourcesEnabled && AXIsProcessTrusted() }
     var separateKeyActive: Bool { addedSourcesActive && engine.addedSourceMode == .separate }
+    // The separate key mapped to its F-key. When another mapping already sends that F-key, it is not applied.
+    var separateKeyMapped: Bool {
+        separateKeyActive && engine.separateKey.map(sources.contains) == true && engine.keyboards.result.extraBlocked == 0
+    }
     // The separate key when it is a Space combination. A Korean/English combination wins over it.
     var separateCombo: UInt64? {
         guard separateKeyActive, let key = engine.separateKey, spaceCombos.contains(key), !engine.chosenCombos.contains(key) else { return nil }
@@ -207,8 +211,10 @@ extension AppDelegate {
         let generation = landingGeneration
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             guard let self, self.landingGeneration == generation else { return }
+            // Once it has landed, a return to the origin is chosen afterwards and stays.
+            let landed = self.switchLanding == nil
             self.switchLanding = nil
-            if self.currentSource?.id == origin, self.isLayout(target.id), let source = Self.sourceForID(target.id) { _ = TISSelectInputSource(source) }
+            if !landed, self.currentSource?.id == origin, self.isLayout(target.id), let source = Self.sourceForID(target.id) { _ = TISSelectInputSource(source) }
             self.updateInputIndicator()
             self.runQueuedSwitch()
         }
