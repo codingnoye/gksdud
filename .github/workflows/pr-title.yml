@@ -1,0 +1,25 @@
+name: PR title
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+jobs:
+  title:
+    name: PR title
+    # A required check needs a result on each new commit, so new commits check the title too. Edits check only a changed title.
+    if: >-
+      !github.event.pull_request.draft &&
+      (github.event.action != 'edited' || github.event.changes.title)
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Check PR title prefix
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          python3 -c 'import os,re,sys; sys.exit(0 if re.fullmatch(r"\[(FEAT|FIX|CHORE|DOCS|REFACTOR|TEST|CI|PERF|BUILD|REVERT)\] \S.*", os.environ["PR_TITLE"]) else "Use a title such as [FEAT] Description or [FIX] Description")'

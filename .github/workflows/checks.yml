@@ -1,9 +1,10 @@
 name: Checks
 
 on:
+  # Edits do not trigger this: a skipped job on the same commit would count as passing. The title has its own workflow.
   pull_request:
     branches: [main]
-    types: [opened, synchronize, reopened, edited, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches: [main]
 
@@ -15,19 +16,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  title:
-    name: PR title
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    timeout-minutes: 2
-    steps:
-      - name: Check PR title prefix
-        env:
-          PR_TITLE: ${{ github.event.pull_request.title }}
-        run: |
-          python3 -c 'import os,re,sys; sys.exit(0 if re.fullmatch(r"\[(FEAT|FIX|CHORE|DOCS|REFACTOR|TEST|CI|PERF|BUILD|REVERT)\] \S.*", os.environ["PR_TITLE"]) else "Use a title such as [FEAT] Description or [FIX] Description")'
   build:
     name: Build and self-test
+    # A draft cannot be merged; ready_for_review runs it.
+    if: github.event_name == 'push' || !github.event.pull_request.draft
     runs-on: macos-15
     timeout-minutes: 10
     steps:
