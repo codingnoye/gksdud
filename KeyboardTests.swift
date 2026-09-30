@@ -164,7 +164,8 @@ func runExitTests() throws {
     // The launch steps that touch macOS, as AppDelegate runs them.
     func launch() throws -> Engine {
         let engine = Engine(defaults: defaults, discover: { [keyboard] }, shortcutPreferences: shortcuts, inputMenu: inputMenu)
-        if engine.active { try engine.shortcut(target: engine.target); try engine.updateSystemInputMenu() }
+        engine.accessibilityTrusted = { true }
+        try engine.resume()
         try engine.repair()
         return engine
     }
@@ -189,6 +190,14 @@ func runExitTests() throws {
     precondition(saved() && !engine.isUpdatingSettings)
     engine = try launch()
     precondition(applied(), "A quit cut short leaves activation to resume")
+    // A quit cancelled by a failed cleanup, or an update whose installer did not start, keeps running.
+    for fails in [true, false] {
+        failActivation = fails
+        do { try engine.restoreSystem(); precondition(!fails) } catch { precondition(fails) }
+        failActivation = false
+        try engine.resume(); try engine.repair()
+        precondition(applied(), "Staying after cleanup applies the shortcut and input menu again, not only the mappings")
+    }
 
     try engine.restore()
     precondition(!saved() && restored(), "Turning off is saved at once")
@@ -267,7 +276,8 @@ func runKeyboardTests() {
         if enumerationFails { throw KeyboardError.enumeration }
         return devices
     }
-    let manager = KeyboardManager(defaults: defaults, discover: discover)
+    var invalidations = 0
+    let manager = KeyboardManager(defaults: defaults, discover: discover, invalidate: { invalidations += 1 })
     func repair(_ source: UInt64 = command, _ target: UInt64 = f19, active: Bool = true) -> KeyboardReconcileResult {
         manager.reconcile(sources: [source], target: target, active: active)
     }
@@ -303,8 +313,10 @@ func runKeyboardTests() {
     precondition(newOff.writes == 0, "New keyboards inherit default Off")
     manager.defaultEnabled = true
     virtual.failWrite = true
+    invalidations = 0
     let partial = repair()
     precondition(partial.applied == 2 && partial.pending == 1, "One failure must not stop later devices")
+    precondition(invalidations == 1, "A failed write lists keyboards on a new HID client")
     precondition(manager.warning == nil)
     _ = repair(); precondition(manager.warning == nil)
     _ = repair(); precondition(manager.warning != nil, "Warn after three consecutive failures")
@@ -313,15 +325,19 @@ func runKeyboardTests() {
 
     // A failed readback can mean the write succeeded. Off must still undo it.
     virtual.afterWrite = { virtual.failRead = true }
+    invalidations = 0
     _ = repair(command, targets[7].usage)
     virtual.afterWrite = nil; virtual.failRead = false
+    precondition(invalidations == 1, "So does a failed read")
     manager.setMode(.off, for: virtual.identity.key)
     _ = repair(command, targets[7].usage)
     precondition(virtual.mappings.isEmpty, "Undo the pending destination after a failed verification")
     manager.setMode(.on, for: virtual.identity.key)
     virtual.ignoreWrite = true
+    invalidations = 0
     _ = repair(); _ = repair(); _ = repair()
     precondition(manager.warning != nil, "Successful setter with wrong readback is still a failure")
+    precondition(invalidations == 3, "And a readback that does not match")
     devices.removeAll { $0.registryID == virtual.registryID }
     _ = repair(); precondition(manager.warning == nil, "Disconnected devices must not leave warnings")
     virtual.ignoreWrite = false
@@ -424,8 +440,10 @@ func runKeyboardTests() {
     precondition(v1.key == v2.key, "Virtual keyboard version changes preserve preference")
     let conflicting = TestKeyboard("6", serial: "conflict", mappings: [mapping(option, f19)])
     devices = [conflicting]
+    invalidations = 0
     _ = repair(); _ = repair(); _ = repair()
     precondition(manager.warning != nil && conflicting.writes == 0, "Do not claim a destination used by another mapping")
+    precondition(invalidations == 0, "A conflict keeps the HID client")
     conflicting.mappings = []
     _ = repair(); precondition(manager.warning == nil)
     manager.setMode(.off, for: conflicting.identity.key)

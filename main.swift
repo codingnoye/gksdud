@@ -343,6 +343,13 @@ final class Engine {
         try restoreSystemInputMenu()
         try restoreShortcut()
     }
+    // Applies again what restoreSystem undoes besides the mappings, which repair keeps: at launch,
+    // and when a quit or an update stops partway while activation stays on.
+    func resume() throws {
+        guard !isUpdatingSettings, active, accessibilityTrusted() else { return }
+        try shortcut(target: target)
+        try updateSystemInputMenu()
+    }
     func restoreShortcut() throws {
         settingsUpdateDepth += 1
         defer { settingsUpdateDepth -= 1 }
@@ -1046,9 +1053,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         // Low-cost service enumeration also covers Bluetooth/USB reconnects and delayed wake.
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.repair() }
         timer?.tolerance = 0.2
-        if engine.active && engine.accessibilityTrusted() {
-            do { try engine.shortcut(target: engine.target); try engine.updateSystemInputMenu() } catch { report(error) }
-        }
+        do { try engine.resume() } catch { report(error) }
         seedSourceHistory(); engine.refreshSystemFKeys(); turnOffUnusedKoreanCaps()
         repair()
         if showInMenuBar.state == .off || CommandLine.arguments.contains("--settings") { showSettings() }
@@ -1403,6 +1408,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             return .terminateNow
         } catch {
             report(error)
+            do { try engine.resume() } catch { report(error) }
             return .terminateCancel
         }
     }

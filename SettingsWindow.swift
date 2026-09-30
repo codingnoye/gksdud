@@ -252,7 +252,9 @@ extension AppDelegate {
             NSApp.terminate(nil)
         } catch {
             try? FileManager.default.removeItem(at: prepared.directory)
-            installer.fail(error); repair()
+            installer.fail(error)
+            do { try engine.resume() } catch { report(error) }
+            repair()
         }
     }
     @objc func openSupport() { NSWorkspace.shared.open(URL(string: "https://fairy.hada.io/@gksdud")!) }

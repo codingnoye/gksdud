@@ -100,31 +100,31 @@ final class HIDKeyboardDevice: KeyboardDevice {
         return mappings
     }
     func writeMappings(_ mappings: [Mapping]) throws {
-        guard IOHIDServiceClientSetProperty(service, "UserKeyMapping" as CFString, mappings as CFArray) else {
-            // The client may have lost the HID system; list keyboards on a new one next time.
-            Self.cache = nil
-            throw KeyboardError.write
-        }
+        guard IOHIDServiceClientSetProperty(service, "UserKeyMapping" as CFString, mappings as CFArray) else { throw KeyboardError.write }
     }
     // Creating a client takes about a millisecond, and discovery runs every second. A client lists its services only
     // when it is created, so it is kept only while its keyboards are the ones the kernel has now, which is cheap to read.
-    private static var cache: (keyboards: Set<UInt64>, devices: [KeyboardDevice])?
+    // Names and identifiers are read again each time; they can arrive or change after the keyboard does.
+    private static var cache: (keyboards: Set<UInt64>, client: IOHIDEventSystemClient, services: [IOHIDServiceClient])?
+    // A client that lost the HID system can still list the same keyboards; after a failure, list them on a new one.
+    static func invalidate() { cache = nil }
     static func discover() throws -> [KeyboardDevice] {
-        let present = try kernelKeyboards()
-        if let cache, cache.keyboards == present { return cache.devices }
-        let client = IOHIDEventSystemClientCreateSimpleClient(kCFAllocatorDefault)
-        guard let services = IOHIDEventSystemClientCopyServices(client) as? [IOHIDServiceClient] else { throw KeyboardError.enumeration }
-        let keyboards = services.filter { IOHIDServiceClientConformsTo($0, 1, 6) != 0 }
-        // A keyboard the HID system has not added or removed yet leaves the sets different, so the next call looks again.
-        cache = (Set(keyboards.compactMap { (IOHIDServiceClientGetRegistryID($0) as? NSNumber)?.uint64Value }),
-                 keyboards.map { HIDKeyboardDevice(client: client, service: $0) })
-        return cache!.devices
+        if cache == nil || cache?.keyboards != kernelKeyboards() {
+            let client = IOHIDEventSystemClientCreateSimpleClient(kCFAllocatorDefault)
+            guard let services = IOHIDEventSystemClientCopyServices(client) as? [IOHIDServiceClient] else { cache = nil; throw KeyboardError.enumeration }
+            let keyboards = services.filter { IOHIDServiceClientConformsTo($0, 1, 6) != 0 }
+            // A keyboard the HID system has not added or removed yet leaves the sets different, so the next call looks again.
+            cache = (Set(keyboards.compactMap { (IOHIDServiceClientGetRegistryID($0) as? NSNumber)?.uint64Value }), client, keyboards)
+        }
+        let current = cache!
+        return current.services.map { HIDKeyboardDevice(client: current.client, service: $0) }
     }
-    private static func kernelKeyboards() throws -> Set<UInt64> {
+    // Nil when the kernel cannot be asked; then the cached client is not trusted either.
+    private static func kernelKeyboards() -> Set<UInt64>? {
         let matching = IOServiceMatching("IOHIDEventService") as NSMutableDictionary
         matching["DeviceUsagePairs"] = [["DeviceUsagePage": 1, "DeviceUsage": 6]]
         var iterator: io_iterator_t = 0
-        guard IOServiceGetMatchingServices(kIOMainPortDefault, matching as CFDictionary, &iterator) == KERN_SUCCESS else { throw KeyboardError.enumeration }
+        guard IOServiceGetMatchingServices(kIOMainPortDefault, matching as CFDictionary, &iterator) == KERN_SUCCESS else { return nil }
         defer { IOObjectRelease(iterator) }
         var keyboards: Set<UInt64> = []
         while case let service = IOIteratorNext(iterator), service != 0 {
@@ -159,6 +159,7 @@ struct ExtraKey: Equatable {
 final class KeyboardManager {
     let defaults: UserDefaults
     let discover: () throws -> [KeyboardDevice]
+    let invalidate: () -> Void
     private(set) var known: [String: SavedKeyboard]
     private(set) var connected: Set<String> = []
     private(set) var failures: [String: KeyboardFailure] = [:]
@@ -198,8 +199,9 @@ final class KeyboardManager {
         guard sysctlbyname("kern.bootsessionuuid", &value, &size, nil, 0) == 0 else { return nil }
         return String(cString: value)
     }
-    init(defaults: UserDefaults, discover: @escaping () throws -> [KeyboardDevice] = HIDKeyboardDevice.discover, bootSession: String? = KeyboardManager.bootSession) {
-        self.defaults = defaults; self.discover = discover
+    init(defaults: UserDefaults, discover: @escaping () throws -> [KeyboardDevice] = HIDKeyboardDevice.discover,
+         invalidate: @escaping () -> Void = HIDKeyboardDevice.invalidate, bootSession: String? = KeyboardManager.bootSession) {
+        self.defaults = defaults; self.discover = discover; self.invalidate = invalidate
         known = defaults.data(forKey: "knownKeyboards").flatMap { try? JSONDecoder().decode([String: SavedKeyboard].self, from: $0) } ?? [:]
         if let bootSession {
             if let previousBoot = defaults.string(forKey: "keyboardRecordsBoot"), previousBoot != bootSession {
@@ -322,6 +324,7 @@ final class KeyboardManager {
         let present = Set(devices.map(\.registryID))
         failures = failures.filter { present.contains($0.key) }
         var failedIDs: Set<String> = []
+        var stale = false
         for device in devices {
             let selected = active && isSelected(device)
             if selected { next.selected += 1 }
@@ -340,8 +343,11 @@ final class KeyboardManager {
             } catch {
                 failedIDs.insert(device.registryID)
                 failed(device.registryID, name: device.name, error: error)
+                // A conflict is the mappings' state; anything else may be the HID client.
+                if error as? KeyboardError != .conflict { stale = true }
             }
         }
+        if stale { invalidate() }
         if !failedIDs.isEmpty {
             // A removal between enumeration and write is expected; do not warn about it.
             if let latest = try? snapshot() {
