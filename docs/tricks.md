@@ -22,7 +22,7 @@
   - 1초마다 매핑을 확인해 재연결, Karabiner 가상 키보드 재생성, 잠자기 복귀 후 다시 적용
   - 재부팅하면 HID 매핑이 사라지고 레지스트리 ID가 다른 장치에 재사용되므로, `kern.bootsessionuuid`가 바뀌면 기록 삭제
   - 레지스트리 ID는 연결마다 바뀌므로 키보드별 설정은 Vendor/Product/시리얼 등의 해시로 저장
-  - 기본 입력기 메뉴바 아이콘은 `com.apple.TextInputMenu`의 `visible`을 끄고 `TextInputMenuAgent`를 재시작해 숨김
+  - 기본 입력기 메뉴바 아이콘은 `com.apple.TextInputMenu`의 `visible`을 끄고 `TextInputMenuAgent`를 재시작해 숨김. 메뉴바에 표시가 꺼져 있거나 'Mac 입력기 아이콘 대체'를 끄면 숨기지 않음
 - **관계**
   - 대상 F-키를 다른 시스템 단축키나 다른 매핑이 쓰고 있으면 적용하지 않음
   - Caps Lock을 한영 키로 쓰면 macOS에는 F-키로만 전달되어 Caps Lock 기능이 사라짐. 대문자는 길게 누르기로
@@ -110,7 +110,7 @@
   - 최근 입력 소스 순서는 입력 소스 알림과 자체 선택으로 추적. 시작할 때는 `com.apple.HIToolbox`의 `AppleInputSourceHistory`로 채움
   - 0.5초 안에 전환되지 않고 목표가 레이아웃이면 목표를 다시 선택해 앞 앱과 표시를 맞춤
   - 분리 키는 한영 키처럼 HID로 매핑하되 대상 F-키를 따로 씀(F18부터, 한영 키의 F-키와 수정키 없는 시스템 단축키가 쓰는 F-키는 건너뜀). 시스템 단축키 없이 이벤트 탭에서만 처리. Space 조합은 탭에서 처리
-  - `CFBundleAllowMixedLocalizations`로 시스템 언어의 입력 소스 이름을 받음. 아이콘은 언어 코드 두 글자, 없으면 3
+  - `CFBundleAllowMixedLocalizations`로 시스템 언어의 입력 소스 이름을 받음. 아이콘은 세 글자까지의 언어 코드, 없으면 순회 순서 번호(10까지, 이후는 빈 칸). 기능이 꺼져 있어도 메뉴바 아이콘은 같은 규칙
 - **관계**
   - 끄면 기존과 동일
   - 켜면 길게 누르기·ESC도 최근 입력 소스와 관계없이 영어로 전환

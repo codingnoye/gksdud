@@ -819,8 +819,12 @@ func runAddedSourceTests() {
     capped.note("s19"); capped.note("s18")
     featureCheck(capped.ids.count == 16 && capped.ids.prefix(2) == ["s18", "s19"], "History keeps the latest, once each")
     featureCheck(defaultCycle(enabled + [us]) == ["ko2", "abc", "us", "ja", "zh"], "Korean, English, then the rest as macOS lists them")
-    featureCheck(sourceBadgeLabel("zh-Hans") == "ZH" && sourceBadgeLabel("ja") == "JA" && sourceBadgeLabel("fr") == "FR" && sourceBadgeLabel("en_GB") == "EN")
-    featureCheck(sourceBadgeLabel("ain") == "3" && sourceBadgeLabel("yue-Hant") == "3" && sourceBadgeLabel("") == "3", "Without a two-letter code, 3")
+    featureCheck(sourceBadgeLabel("zh-Hans", position: 5) == "ZH" && sourceBadgeLabel("ja", position: nil) == "JA"
+        && sourceBadgeLabel("fr", position: 3) == "FR" && sourceBadgeLabel("en_GB", position: 3) == "EN")
+    featureCheck(sourceBadgeLabel("ain", position: 3) == "AIN" && sourceBadgeLabel("yue-Hant", position: 4) == "YUE", "Three-letter codes too")
+    featureCheck(sourceBadgeLabel("", position: 3) == "3" && sourceBadgeLabel("tlh-Latn", position: 10) == "TLH" && sourceBadgeLabel("x1", position: 10) == "10",
+        "Without a code of up to three letters, its place")
+    featureCheck(sourceBadgeLabel("", position: 11) == "" && sourceBadgeLabel("", position: nil) == "", "Past 10, or out of the list, no number")
     featureCheck(recent.previous(of: "zh") == "us" && recent.previous(of: "ko2") == nil, "The previous source is known only from the current one")
     // Plans: a layout selected from the background while an input method is current may drop its syllable in progress.
     let layouts: Set<String> = ["abc", "us"]

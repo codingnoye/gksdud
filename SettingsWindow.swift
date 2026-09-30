@@ -111,7 +111,14 @@ extension AppDelegate {
         showInMenuBar.target = self; showInMenuBar.action = #selector(toggleHidden)
         showInMenuBar.state = engine.defaults.bool(forKey: "hidden") ? .off : .on
         general.addArrangedSubview(login); general.addArrangedSubview(showInMenuBar)
-        hint("기존 메뉴바 입력기를 대체합니다.\n⌘+드래그로 위치를 옮길 수 있어요.", in: general)
+        // Under 메뉴바에 표시, and only with it.
+        replaceInputMenu.target = self; replaceInputMenu.action = #selector(toggleReplaceInputMenu)
+        replaceInputMenu.translatesAutoresizingMaskIntoConstraints = false
+        let replaceRow = NSView(); replaceRow.addSubview(replaceInputMenu)
+        NSLayoutConstraint.activate([replaceInputMenu.leadingAnchor.constraint(equalTo: replaceRow.leadingAnchor, constant: 20),
+            replaceInputMenu.topAnchor.constraint(equalTo: replaceRow.topAnchor), replaceInputMenu.bottomAnchor.constraint(equalTo: replaceRow.bottomAnchor)])
+        hint("⌘+드래그로 위치를 옮길 수 있어요.", in: general)
+        general.setCustomSpacing(12, after: general.arrangedSubviews.last!); full(replaceRow, in: general)
         iconPicker.addItems(withTitles: ["한 / dud", "한 / A", "KO / EN", "ㅎuㅎ / dud"])
         iconPicker.selectItem(at: iconStyle); iconPicker.target = self; iconPicker.action = #selector(changeIconStyle)
         iconPicker.setAccessibilityLabel("메뉴바 아이콘 조합")

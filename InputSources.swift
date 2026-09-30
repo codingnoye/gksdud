@@ -61,10 +61,12 @@ func switchPlan(current: InputSourceIdentity, target: InputSourceIdentity, next:
     return SwitchPlan(selections: selections, risky: risky(selections))
 }
 
-// The badge of an input source other than Korean or English: its two-letter language code, or 3 without one.
-func sourceBadgeLabel(_ language: String) -> String {
+// The badge of an input source other than Korean or English: its language code of up to three letters, or without one
+// its place among the sources, up to 10. Past that the badge stays empty.
+func sourceBadgeLabel(_ language: String, position: Int?) -> String {
     let code = language.prefix { $0 != "-" && $0 != "_" }
-    return code.count == 2 && code.allSatisfy { $0.isASCII && $0.isLetter } ? code.uppercased() : "3"
+    if (2...3).contains(code.count) && code.allSatisfy({ $0.isASCII && $0.isLetter }) { return code.uppercased() }
+    return position.flatMap { (1...10).contains($0) ? String($0) : nil } ?? ""
 }
 
 // Korean first, then English, then the rest in the order macOS lists them.
@@ -271,7 +273,14 @@ extension AppDelegate {
         sourceHistory = SourceHistory(ids.first == current ? ids : current.map { [$0] } ?? [])
     }
     func sourceIcon(_ source: InputSourceIdentity) -> NSImage {
-        isKorean(source) || isEnglish(source) ? sourceMenuIcon(korean: isKorean(source)) : badgeImage(label: sourceBadgeLabel(source.language), filled: false)
+        isKorean(source) || isEnglish(source) ? sourceMenuIcon(korean: isKorean(source))
+            : badgeImage(label: sourceBadgeLabel(source.language, position: sourcePosition(source.id)), filled: false)
+    }
+    // Counted in the cycle's order, which starts as Korean, English, then the rest; a source outside it follows that
+    // default order.
+    func sourcePosition(_ id: String) -> Int? {
+        if let index = cycleOrder.firstIndex(of: id) { return index + 1 }
+        return defaultCycle(enabledSources()).firstIndex(of: id).map { $0 + 1 }
     }
     static func sourceTitle(_ id: String) -> String {
         let list = TISCreateInputSourceList([kTISPropertyInputSourceID as String: id] as CFDictionary, true)?.takeRetainedValue() as? [TISInputSource]
@@ -451,7 +460,7 @@ final class AddedSourcesSettings: NSObject {
         warning.isHidden = warning.stringValue.isEmpty
     }
     private func cycleRow(_ id: String, source: InputSourceIdentity?, index: Int, count: Int, usable: Bool) -> NSView {
-        let icon = NSImageView(image: source.map(owner.sourceIcon) ?? owner.badgeImage(label: "3", filled: false))
+        let icon = NSImageView(image: source.map(owner.sourceIcon) ?? owner.badgeImage(label: sourceBadgeLabel("", position: index + 1), filled: false))
         icon.contentTintColor = source == nil || !usable ? .disabledControlTextColor : .labelColor
         icon.widthAnchor.constraint(equalToConstant: 22).isActive = true; icon.heightAnchor.constraint(equalToConstant: 20).isActive = true
         let name = NSTextField(labelWithString: AppDelegate.sourceTitle(id))

@@ -953,6 +953,16 @@ func runPermissionTests() {
     precondition(settings.allSatisfy { $0.isEnabled } && !delegate.pressAccess.isEnabled)
     precondition(delegate.settingLabels.allSatisfy { $0.label.textColor == $0.color })
     precondition(!engine.active && delegate.enabled.state == .off, "It stays off until turned on again")
-    print("PASS: without Accessibility, settings disabled and activation off; granted again, settings back and activation still off")
+    // Replacing the Mac input menu is on by default and works only while this app's icon shows.
+    precondition(delegate.replaceInputMenu.state == .on && delegate.replaceInputMenu.isEnabled && !engine.showsSystemInputMenu)
+    delegate.replaceInputMenu.state = .off; delegate.toggleReplaceInputMenu()
+    precondition(!engine.replacesInputMenu && engine.showsSystemInputMenu, "Unchecked, both menus show")
+    delegate.replaceInputMenu.state = .on; delegate.toggleReplaceInputMenu()
+    delegate.showInMenuBar.state = .off; delegate.toggleHidden()
+    precondition(!delegate.replaceInputMenu.isEnabled && delegate.replaceInputMenu.state == .on && engine.showsSystemInputMenu,
+        "Without this app's icon the Mac input menu shows, and the choice waits")
+    delegate.showInMenuBar.state = .on; delegate.toggleHidden()
+    precondition(delegate.replaceInputMenu.isEnabled && !engine.showsSystemInputMenu)
+    print("PASS: without Accessibility, settings disabled and activation off; granted again, settings back and activation still off; replacing the Mac input menu")
 }
 #endif

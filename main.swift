@@ -289,6 +289,9 @@ final class Engine {
             throw NSError(domain: "gksdud", code: 11, userInfo: [NSLocalizedDescriptionKey: "기본 입력기 메뉴를 새로 고치지 못했습니다."])
         }
     }
+    // The Mac input menu stays when this app's icon is off, or when the icon does not replace it.
+    var replacesInputMenu: Bool { defaults.object(forKey: "replaceInputMenu") == nil || defaults.bool(forKey: "replaceInputMenu") }
+    var showsSystemInputMenu: Bool { defaults.bool(forKey: "hidden") || !replacesInputMenu }
     func hideSystemInputMenu() throws {
         let domain = "com.apple.TextInputMenu" as CFString
         CFPreferencesAppSynchronize(domain)
@@ -297,7 +300,7 @@ final class Engine {
             if let current { defaults.set(current, forKey: "originalInputMenu") }
             defaults.set(true, forKey: "inputMenuBackedUp")
         }
-        let showNativeMenu = defaults.bool(forKey: "hidden")
+        let showNativeMenu = showsSystemInputMenu
         if (current as? NSNumber)?.boolValue != showNativeMenu {
             try setSystemInputMenu(showNativeMenu ? kCFBooleanTrue : kCFBooleanFalse)
         }
@@ -548,6 +551,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     let enabled = NSButton(checkboxWithTitle: "활성화", target: nil, action: nil)
     let login = NSButton(checkboxWithTitle: "로그인 시 시작", target: nil, action: nil)
     let showInMenuBar = NSButton(checkboxWithTitle: "메뉴바에 표시", target: nil, action: nil)
+    let replaceInputMenu = NSButton(checkboxWithTitle: "Mac 입력기 아이콘 대체", target: nil, action: nil)
     let status = NSTextField(wrappingLabelWithString: "")
     var timer: Timer?
     var menuInputTimer: Timer?
@@ -723,6 +727,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let trusted = engine.accessibilityTrusted()
         // Switching needs the tap, so without Accessibility only the permission button and the gksdud tab can be used.
         for control: NSControl in [enabled, login, showInMenuBar, iconPicker, picker, advancedButton] + specialButtons { control.isEnabled = trusted }
+        // Only this app's icon can replace the Mac input menu.
+        replaceInputMenu.state = engine.replacesInputMenu ? .on : .off
+        replaceInputMenu.isEnabled = trusted && showInMenuBar.state == .on
         for preview in [koreanPreview, englishPreview] { preview.contentTintColor = trusted ? .labelColor : .disabledControlTextColor }
         for (label, color) in settingLabels { label.textColor = trusted ? color : .disabledControlTextColor }
         let ready = keyTap.map { CGEvent.tapIsEnabled(tap: $0) } ?? false
@@ -1193,8 +1200,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         guard let current = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue() else { return }
         let lang = language(current)
         updateInputMenuState(language: lang)
-        // Added sources show their language code; without them other sources keep the old label.
-        let other = engine.addedSourcesEnabled ? sourceBadgeLabel(lang) : lang.isEmpty ? "?" : String(lang.prefix(3))
+        let other = sourceBadgeLabel(lang, position: currentSource.flatMap { sourcePosition($0.id) })
         let label = lang.hasPrefix("ko") ? iconLabel(korean: true) : lang.hasPrefix("en") ? iconLabel(korean: false) : other
         let korean = lang.hasPrefix("ko")
         // Let the status bar resolve contrast, including its initial appearance and highlighting.
@@ -1255,7 +1261,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { if showInMenuBar.state == .off { showSettings() }; return true }
     @objc func toggleHidden() {
         engine.defaults.set(showInMenuBar.state == .off, forKey: "hidden")
-        updateMenu()
+        updateMenu(); updatePressAccess()
+        if engine.active { do { try engine.hideSystemInputMenu() } catch { report(error) } }
+    }
+    @objc func toggleReplaceInputMenu() {
+        engine.defaults.set(replaceInputMenu.state == .on, forKey: "replaceInputMenu")
         if engine.active { do { try engine.hideSystemInputMenu() } catch { report(error) } }
     }
     @objc func toggleLogin() {
