@@ -27,6 +27,7 @@ func runSelfTest() {
     setbuf(stdout, nil)
     do { try runSettingsReentrancyTests() } catch { fputs("Settings reentrancy tests failed: \(error)\n", stderr); exit(1) }
     do { try runShortcutRestoreTests() } catch { fputs("Shortcut tests failed: \(error)\n", stderr); exit(1) }
+    do { try runExitTests() } catch { fputs("Exit tests failed: \(error)\n", stderr); exit(1) }
     runFeatureTests()
     runKeyboardTests()
     runRightControlTests()
@@ -208,19 +209,20 @@ func runIntegrationTest() {
     let engine = Engine(defaults: suite)
     defer { try? engine.restore(); suite.removePersistentDomain(forName: suiteName) }
     do {
-        let count = try engine.apply(sources: [sources[0]], target: targets[6])
-        guard count > 0 else { throw NSError(domain: "asd", code: 7, userInfo: [NSLocalizedDescriptionKey: "No real keyboard services visible"]) }
         let menuDomain = "com.apple.TextInputMenu" as CFString
         func nativeMenuVisible() -> Bool? {
             CFPreferencesAppSynchronize(menuDomain)
             return (CFPreferencesCopyAppValue("visible" as CFString, menuDomain) as? NSNumber)?.boolValue
         }
+        let userMenu = nativeMenuVisible()
+        let count = try engine.apply(sources: [sources[0]], target: targets[6])
+        guard count > 0 else { throw NSError(domain: "asd", code: 7, userInfo: [NSLocalizedDescriptionKey: "No real keyboard services visible"]) }
         precondition(nativeMenuVisible() == false)
         suite.set(true, forKey: "hidden")
-        try engine.hideSystemInputMenu()
-        precondition(nativeMenuVisible() == true, "Hidden gksdud must show native input menu")
+        try engine.updateSystemInputMenu()
+        precondition(nativeMenuVisible() == userMenu, "Hidden gksdud must leave the native input menu as the user had it")
         suite.set(false, forKey: "hidden")
-        try engine.hideSystemInputMenu()
+        try engine.updateSystemInputMenu()
         precondition(nativeMenuVisible() == false)
         for service in engine.services() {
             var map = engine.mappings(service)
@@ -235,13 +237,13 @@ func runIntegrationTest() {
         for service in engine.services() {
             precondition(engine.mappings(service).contains { $0[srcKey]?.uint64Value == sources[0] && $0[dstKey]?.uint64Value == targets[7].usage })
         }
-        try engine.prepareForExit()
+        try engine.restoreSystem()
         precondition(engine.active, "Normal quit must remember activation")
         let restarted = Engine(defaults: suite)
         precondition(restarted.active && restarted.target.name == "F20")
         _ = try restarted.apply(sources: restarted.defaultSources, target: restarted.target)
         try restarted.restore()
-        try restarted.prepareForExit()
+        try restarted.restoreSystem()
         precondition(!restarted.active, "Explicitly disabled must stay disabled")
         print("PASS: \(count) real keyboards; recovery, target switch, quit cleanup, active/inactive launch preference, restoration")
     } catch { fputs("Integration test failed: \(error)\n", stderr); exit(1) }

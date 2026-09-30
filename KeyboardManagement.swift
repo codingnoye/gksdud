@@ -100,13 +100,39 @@ final class HIDKeyboardDevice: KeyboardDevice {
         return mappings
     }
     func writeMappings(_ mappings: [Mapping]) throws {
-        guard IOHIDServiceClientSetProperty(service, "UserKeyMapping" as CFString, mappings as CFArray) else { throw KeyboardError.write }
+        guard IOHIDServiceClientSetProperty(service, "UserKeyMapping" as CFString, mappings as CFArray) else {
+            // The client may have lost the HID system; list keyboards on a new one next time.
+            Self.cache = nil
+            throw KeyboardError.write
+        }
     }
+    // Creating a client takes about a millisecond, and discovery runs every second. A client lists its services only
+    // when it is created, so it is kept only while its keyboards are the ones the kernel has now, which is cheap to read.
+    private static var cache: (keyboards: Set<UInt64>, devices: [KeyboardDevice])?
     static func discover() throws -> [KeyboardDevice] {
+        let present = try kernelKeyboards()
+        if let cache, cache.keyboards == present { return cache.devices }
         let client = IOHIDEventSystemClientCreateSimpleClient(kCFAllocatorDefault)
         guard let services = IOHIDEventSystemClientCopyServices(client) as? [IOHIDServiceClient] else { throw KeyboardError.enumeration }
-        return services.filter { IOHIDServiceClientConformsTo($0, 1, 6) != 0 }
-            .map { HIDKeyboardDevice(client: client, service: $0) }
+        let keyboards = services.filter { IOHIDServiceClientConformsTo($0, 1, 6) != 0 }
+        // A keyboard the HID system has not added or removed yet leaves the sets different, so the next call looks again.
+        cache = (Set(keyboards.compactMap { (IOHIDServiceClientGetRegistryID($0) as? NSNumber)?.uint64Value }),
+                 keyboards.map { HIDKeyboardDevice(client: client, service: $0) })
+        return cache!.devices
+    }
+    private static func kernelKeyboards() throws -> Set<UInt64> {
+        let matching = IOServiceMatching("IOHIDEventService") as NSMutableDictionary
+        matching["DeviceUsagePairs"] = [["DeviceUsagePage": 1, "DeviceUsage": 6]]
+        var iterator: io_iterator_t = 0
+        guard IOServiceGetMatchingServices(kIOMainPortDefault, matching as CFDictionary, &iterator) == KERN_SUCCESS else { throw KeyboardError.enumeration }
+        defer { IOObjectRelease(iterator) }
+        var keyboards: Set<UInt64> = []
+        while case let service = IOIteratorNext(iterator), service != 0 {
+            var id: UInt64 = 0
+            if IORegistryEntryGetRegistryEntryID(service, &id) == KERN_SUCCESS { keyboards.insert(id) }
+            IOObjectRelease(service)
+        }
+        return keyboards
     }
 }
 

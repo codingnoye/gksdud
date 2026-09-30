@@ -96,16 +96,45 @@ struct ShortcutPreferences {
     })
 }
 
+// Whether the Mac input menu shows in the menu bar; nil is macOS's default.
+struct InputMenuPreference {
+    var read: () -> CFPropertyList?
+    var write: (CFPropertyList?) throws -> Void
+
+    static let system = InputMenuPreference(read: {
+        let domain = "com.apple.TextInputMenu" as CFString
+        CFPreferencesAppSynchronize(domain)
+        return CFPreferencesCopyAppValue("visible" as CFString, domain)
+    }, write: { value in
+        let domain = "com.apple.TextInputMenu" as CFString
+        CFPreferencesSetAppValue("visible" as CFString, value, domain)
+        guard CFPreferencesAppSynchronize(domain) else {
+            throw NSError(domain: "gksdud", code: 10, userInfo: [NSLocalizedDescriptionKey: "기본 입력기 메뉴 표시 설정을 저장하지 못했습니다."])
+        }
+        // This system agent is KeepAlive-managed by launchd; restart only it to reload preferences.
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/killall")
+        process.arguments = ["TextInputMenuAgent"]
+        process.standardError = FileHandle.nullDevice
+        try process.run(); process.waitUntilExit()
+        guard process.terminationStatus == 0 || process.terminationStatus == 1 else {
+            throw NSError(domain: "gksdud", code: 11, userInfo: [NSLocalizedDescriptionKey: "기본 입력기 메뉴를 새로 고치지 못했습니다."])
+        }
+    })
+}
+
 final class Engine {
     let defaults: UserDefaults
     let keyboards: KeyboardManager
     let shortcutPreferences: ShortcutPreferences
+    let inputMenu: InputMenuPreference
     private var settingsUpdateDepth = 0
     var isUpdatingSettings: Bool { settingsUpdateDepth > 0 }
     init(defaults: UserDefaults = .standard, discover: @escaping () throws -> [KeyboardDevice] = HIDKeyboardDevice.discover,
-         shortcutPreferences: ShortcutPreferences = .system) {
+         shortcutPreferences: ShortcutPreferences = .system, inputMenu: InputMenuPreference = .system) {
         self.defaults = defaults
         self.shortcutPreferences = shortcutPreferences
+        self.inputMenu = inputMenu
         keyboards = KeyboardManager(defaults: defaults, discover: discover)
     }
     var defaultSources: [UInt64] {
@@ -268,42 +297,27 @@ final class Engine {
         defaults.set(target.name, forKey: "target")
         defaults.set(true, forKey: "active")
         let count = try reconcile()
-        try hideSystemInputMenu()
+        try updateSystemInputMenu()
         return count
     }
     func setSystemInputMenu(_ value: CFPropertyList?) throws {
         settingsUpdateDepth += 1
         defer { settingsUpdateDepth -= 1 }
-        let domain = "com.apple.TextInputMenu" as CFString
-        CFPreferencesSetAppValue("visible" as CFString, value, domain)
-        guard CFPreferencesAppSynchronize(domain) else {
-            throw NSError(domain: "gksdud", code: 10, userInfo: [NSLocalizedDescriptionKey: "기본 입력기 메뉴 표시 설정을 저장하지 못했습니다."])
-        }
-        // This system agent is KeepAlive-managed by launchd; restart only it to reload preferences.
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/killall")
-        process.arguments = ["TextInputMenuAgent"]
-        process.standardError = FileHandle.nullDevice
-        try process.run(); process.waitUntilExit()
-        guard process.terminationStatus == 0 || process.terminationStatus == 1 else {
-            throw NSError(domain: "gksdud", code: 11, userInfo: [NSLocalizedDescriptionKey: "기본 입력기 메뉴를 새로 고치지 못했습니다."])
-        }
+        try inputMenu.write(value)
     }
     // The Mac input menu stays when this app's icon is off, or when the icon does not replace it.
     var replacesInputMenu: Bool { defaults.object(forKey: "replaceInputMenu") == nil || defaults.bool(forKey: "replaceInputMenu") }
     var showsSystemInputMenu: Bool { defaults.bool(forKey: "hidden") || !replacesInputMenu }
-    func hideSystemInputMenu() throws {
-        let domain = "com.apple.TextInputMenu" as CFString
-        CFPreferencesAppSynchronize(domain)
-        let current = CFPreferencesCopyAppValue("visible" as CFString, domain)
+    // Hides the Mac input menu only while this app's icon replaces it. Otherwise the menu is the user's own setting:
+    // the one from before this app hid it, and later whatever they choose in System Settings.
+    func updateSystemInputMenu() throws {
+        guard !showsSystemInputMenu else { try restoreSystemInputMenu(); return }
+        let current = inputMenu.read()
         if !defaults.bool(forKey: "inputMenuBackedUp") {
             if let current { defaults.set(current, forKey: "originalInputMenu") }
             defaults.set(true, forKey: "inputMenuBackedUp")
         }
-        let showNativeMenu = showsSystemInputMenu
-        if (current as? NSNumber)?.boolValue != showNativeMenu {
-            try setSystemInputMenu(showNativeMenu ? kCFBooleanTrue : kCFBooleanFalse)
-        }
+        if (current as? NSNumber)?.boolValue != false { try setSystemInputMenu(kCFBooleanFalse) }
     }
     func restoreSystemInputMenu() throws {
         guard defaults.bool(forKey: "inputMenuBackedUp") else { return }
@@ -314,13 +328,18 @@ final class Engine {
     func reconcile() throws -> Int {
         keyboards.reconcile(sources: defaultSources, target: target.usage, active: active, extra: separateMapping).applied
     }
+    // Turning off is saved before anything is undone, so a later failure retries the undo instead of reapplying.
     func restore() throws {
+        defaults.set(false, forKey: "active")
+        try restoreSystem()
+    }
+    // Undoes this app's changes to macOS, leaving the saved activation choice alone. Quitting uses it too: logout or
+    // restart can end the app with SIGTERM partway through, and the next launch applies again whatever was undone.
+    func restoreSystem() throws {
         settingsUpdateDepth += 1
         defer { settingsUpdateDepth -= 1 }
-        defaults.set(false, forKey: "active")
-        let mappingResult = keyboards.reconcile(sources: defaultSources, target: target.usage, active: false)
-        // A failed quit must not restore the shortcut while some keys still emit our target.
-        if mappingResult.pending > 0 { throw KeyboardError.verification }
+        // The shortcut must not be restored while some keys still emit our target.
+        try restoreMappings()
         try restoreSystemInputMenu()
         try restoreShortcut()
     }
@@ -351,12 +370,6 @@ final class Engine {
         guard !isUpdatingSettings else { return }
         if active { _ = try reconcile() }
         else { try restore() }
-    }
-    func prepareForExit() throws {
-        let resumeOnLaunch = active
-        // Cleanup affects macOS, not the user's saved activation choice, even if quit is cancelled.
-        defer { defaults.set(resumeOnLaunch, forKey: "active"); defaults.synchronize() }
-        try restore()
     }
     func restoreMappings() throws {
         let result = keyboards.reconcile(sources: defaultSources, target: target.usage, active: false)
@@ -1034,7 +1047,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.repair() }
         timer?.tolerance = 0.2
         if engine.active && engine.accessibilityTrusted() {
-            do { try engine.shortcut(target: engine.target); try engine.hideSystemInputMenu() } catch { report(error) }
+            do { try engine.shortcut(target: engine.target); try engine.updateSystemInputMenu() } catch { report(error) }
         }
         seedSourceHistory(); engine.refreshSystemFKeys(); turnOffUnusedKoreanCaps()
         repair()
@@ -1200,19 +1213,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let other = sourceBadgeLabel(lang, position: currentSource.flatMap { sourcePosition($0.id) })
         let label = lang.hasPrefix("ko") ? iconLabel(korean: true) : lang.hasPrefix("en") ? iconLabel(korean: false) : other
         let korean = lang.hasPrefix("ko")
-        // Let the status bar resolve contrast, including its initial appearance and highlighting.
-        let badge = (lang.hasPrefix("ko") || lang.hasPrefix("en"))
-            ? sourceMenuIcon(korean: korean) : badgeImage(label: label, filled: false)
-        inputBadge.image = badge
-        tabButtons.first?.image = badge
-        inputBadge.setAccessibilityLabel("현재 입력: \(korean ? "한국어" : lang.hasPrefix("en") ? "영어" : label)")
+        // This runs every second, and setting an image redraws it; keep the one showing while the source and style stay.
+        let key = "\(iconStyle)|\(lang)|\(label)"
+        let badge: NSImage
+        if let shown = shownBadge, shown.key == key { badge = shown.image } else {
+            // Let the status bar resolve contrast, including its initial appearance and highlighting.
+            badge = korean || lang.hasPrefix("en") ? sourceMenuIcon(korean: korean) : badgeImage(label: label, filled: false)
+            shownBadge = (key, badge)
+        }
+        if inputBadge.image !== badge {
+            inputBadge.image = badge
+            inputBadge.setAccessibilityLabel("현재 입력: \(korean ? "한국어" : lang.hasPrefix("en") ? "영어" : label)")
+        }
+        if tabButtons.first?.image !== badge { tabButtons.first?.image = badge }
         guard let button = item?.button else { return }
-        button.title = ""; button.image = badge
-        button.imagePosition = .imageOnly
+        if button.image !== badge { button.title = ""; button.image = badge; button.imagePosition = .imageOnly }
         let warning = engine.keyboards.warning.map { "\n\($0)" } ?? ""
-        button.toolTip = "gksdud · 현재 입력 소스: \(lang)\(warning)"
-        button.setAccessibilityLabel("gksdud, 현재 입력 \(korean ? "한국어" : lang.hasPrefix("en") ? "영어" : label)\(warning)")
+        let tip = "gksdud · 현재 입력 소스: \(lang)\(warning)"
+        let spoken = "gksdud, 현재 입력 \(korean ? "한국어" : lang.hasPrefix("en") ? "영어" : label)\(warning)"
+        if button.toolTip != tip { button.toolTip = tip }
+        if button.accessibilityLabel() != spoken { button.setAccessibilityLabel(spoken) }
     }
+    private var shownBadge: (key: String, image: NSImage)?
     func menuWillOpen(_ menu: NSMenu) {
         refreshAddedMenuItems(menu)
         updateInputIndicator()
@@ -1259,11 +1281,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     @objc func toggleHidden() {
         engine.defaults.set(showInMenuBar.state == .off, forKey: "hidden")
         updateMenu(); updatePressAccess()
-        if engine.active { do { try engine.hideSystemInputMenu() } catch { report(error) } }
+        if engine.active { do { try engine.updateSystemInputMenu() } catch { report(error) } }
     }
     @objc func toggleReplaceInputMenu() {
         engine.defaults.set(replaceInputMenu.state == .on, forKey: "replaceInputMenu")
-        if engine.active { do { try engine.hideSystemInputMenu() } catch { report(error) } }
+        if engine.active { do { try engine.updateSystemInputMenu() } catch { report(error) } }
     }
     @objc func toggleLogin() {
         do {
@@ -1374,7 +1396,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         if preparedToRelaunch { return .terminateNow }
         guard !engine.isUpdatingSettings else { return .terminateCancel }
         do {
-            try engine.prepareForExit()
+            try engine.restoreSystem()
             stopKeyTap()
             timer?.invalidate()
             enabled.state = .off

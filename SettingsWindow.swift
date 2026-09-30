@@ -246,7 +246,7 @@ extension AppDelegate {
         do {
             guard !engine.isUpdatingSettings else { throw UpdateFailure("설정을 적용하고 있습니다. 잠시 후 다시 시도해주세요.") }
             optionInput.cancel()
-            try engine.prepareForExit()
+            try engine.restoreSystem()
             try UpdateInstaller.launchHelper(prepared)
             preparedToRelaunch = true; stopKeyTap(); timer?.invalidate(); updateTimer?.invalidate()
             NSApp.terminate(nil)
