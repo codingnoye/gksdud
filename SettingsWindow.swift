@@ -32,20 +32,20 @@ extension AppDelegate {
         full(inputRow, in: root)
         testInput.widthAnchor.constraint(equalTo: root.widthAnchor, constant: -48).isActive = true
         let host = NSView(); full(host, in: root)
-        for _ in 0..<4 {
+        for _ in 0..<5 {
             let panel = column(); host.addSubview(panel)
             NSLayoutConstraint.activate([panel.leadingAnchor.constraint(equalTo: host.leadingAnchor), panel.trailingAnchor.constraint(equalTo: host.trailingAnchor), panel.bottomAnchor.constraint(lessThanOrEqualTo: host.bottomAnchor),
-                tabPanels.count == 3 ? panel.centerYAnchor.constraint(equalTo: host.centerYAnchor) : panel.topAnchor.constraint(equalTo: host.topAnchor)])
+                tabPanels.count == 4 ? panel.centerYAnchor.constraint(equalTo: host.centerYAnchor) : panel.topAnchor.constraint(equalTo: host.topAnchor)])
             tabPanels.append(panel)
         }
         let tabs = NSStackView(); tabs.distribution = .fillEqually; tabs.spacing = 8
         tabs.translatesAutoresizingMaskIntoConstraints = false; content.addSubview(tabs)
-        for (index, title) in ["일반", "대소문자", "추가기능", "gksdud"].enumerated() {
+        for (index, title) in ["일반", "대소문자", "특수문자", "추가기능", "gksdud"].enumerated() {
             let button = NSButton(title: title, target: self, action: #selector(changeTab(_:)))
             button.tag = index; button.setButtonType(.toggle); button.bezelStyle = .regularSquare
             button.isBordered = false; button.imagePosition = .imageAbove; button.imageScaling = .scaleProportionallyDown
             button.font = .systemFont(ofSize: 10)
-            button.image = index == 0 ? sourceMenuIcon(korean: true) : tabGlyph(["", "Aa", "+", "?"][index])
+            button.image = index == 0 ? sourceMenuIcon(korean: true) : tabGlyph(["", "Aa", "⌥", "+", "?"][index])
             button.setAccessibilityLabel(title + " 탭")
             tabs.addArrangedSubview(button); tabButtons.append(button)
         }
@@ -150,23 +150,23 @@ extension AppDelegate {
         caps.addArrangedSubview(preserveCapsSwitch)
         koreanCapsSwitch.target = self; koreanCapsSwitch.action = #selector(toggleFeature(_:))
         caps.addArrangedSubview(koreanCapsSwitch)
-        let extras = tabPanels[2]
-        heading("특수문자", in: extras)
+        let symbols = tabPanels[2]
+        heading("특수문자", in: symbols)
         for (index, title) in ["영어처럼 특수문자 입력", "Option 문자 입력 차단"].enumerated() {
             let button = NSButton(checkboxWithTitle: title, target: self, action: #selector(changeSpecialMode(_:)))
-            button.tag = index + 1; specialButtons.append(button); extras.addArrangedSubview(button)
-            hint(index == 0 ? "한글 상태에서도 ⌥8 → • 처럼 입력합니다." : "⌥+문자를 일반 문자로 입력합니다.", in: extras)
+            button.tag = index + 1; specialButtons.append(button); symbols.addArrangedSubview(button)
+            hint(index == 0 ? "한글 상태에서도 ⌥8 → • 처럼 입력합니다." : "⌥+문자를 일반 문자로 입력합니다.", in: symbols)
         }
         specialStatus.font = .systemFont(ofSize: 11); specialStatus.textColor = .secondaryLabelColor
-        full(specialStatus, in: extras)
-        separator(in: extras)
+        full(specialStatus, in: symbols)
+        let extras = tabPanels[3]
         heading("입력 소스 추가 (beta)", in: extras)
         addedSources.install(in: extras)
         separator(in: extras)
         heading("기타", in: extras)
         escapeSwitch.target = self; escapeSwitch.action = #selector(toggleFeature(_:))
         extras.addArrangedSubview(escapeSwitch)
-        let about = tabPanels[3]; about.alignment = .centerX; about.spacing = 18
+        let about = tabPanels[4]; about.alignment = .centerX; about.spacing = 18
         let appIcon = NSImageView(image: NSApp.applicationIconImage)
         appIcon.widthAnchor.constraint(equalToConstant: 72).isActive = true
         appIcon.heightAnchor.constraint(equalToConstant: 72).isActive = true
@@ -236,10 +236,10 @@ extension AppDelegate {
         selectedTab = index
         for (i, panel) in tabPanels.enumerated() {
             panel.isHidden = i != index; tabButtons[i].state = i == index ? .on : .off
-            tabButtons[i].contentTintColor = i == index || (i == 3 && updates.available != nil) ? .controlAccentColor : .secondaryLabelColor
+            tabButtons[i].contentTintColor = i == index || (i == tabPanels.count - 1 && updates.available != nil) ? .controlAccentColor : .secondaryLabelColor
         }
     }
-    @objc func showAbout() { showSettings(); selectTab(3) }
+    @objc func showAbout() { showSettings(); selectTab(tabPanels.count - 1) }
     @objc func checkForUpdates() { installer.clearStatus(); updates.check(force: true) }
     @objc func performUpdate() { if let release = updates.available { installer.start(release) } }
     func installPreparedUpdate(_ prepared: PreparedUpdate) {
