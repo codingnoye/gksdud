@@ -149,6 +149,21 @@ func runSelfTest() {
         precondition(release.consume && !release.switchNow, "The Shift+Space release stays claimed after disabling")
         precondition(!spaceKey(true, flags, chosen: []).consume && !spaceKey(false, flags, chosen: []).consume, "Inactive Shift+Space passes")
     }
+    let shiftOnly = [spaceCombos[3]]
+    func shiftSpace() -> Bool {
+        let press = spaceKey(true, .maskShift, chosen: shiftOnly), release = spaceKey(false, .maskShift, chosen: shiftOnly)
+        precondition(press.consume == press.switchNow && release.consume == press.consume, "A Space is claimed with its release or not at all")
+        return press.switchNow
+    }
+    space.note(type: .flagsChanged, code: Int64(kVK_Shift), flags: .maskShift)
+    precondition(shiftSpace() && shiftSpace(), "Space first under Shift switches, again for each Space")
+    space.note(type: .keyDown, code: Int64(kVK_ANSI_A), flags: .maskShift)
+    precondition(!shiftSpace() && !shiftSpace(), "A Space after capitals typed under the same Shift is typed")
+    space.note(type: .flagsChanged, code: Int64(kVK_Shift), flags: [])
+    space.note(type: .flagsChanged, code: Int64(kVK_Shift), flags: .maskShift)
+    precondition(shiftSpace(), "A new Shift switches again")
+    space.note(type: .keyDown, code: Int64(kVK_ANSI_A), flags: .maskShift)
+    precondition(spaceKey(true, .maskControl).switchNow && spaceKey(false, .maskControl).consume, "Other combinations ignore what Shift typed")
     let comboSuiteName = "io.gksdud.space-combo-test.\(UUID().uuidString)"
     let comboSuite = UserDefaults(suiteName: comboSuiteName)!
     let comboEngine = Engine(defaults: comboSuite)
@@ -162,7 +177,7 @@ func runSelfTest() {
     comboSuite.set(false, forKey: "active")
     precondition(comboEngine.chosenCombos.isEmpty, "Combinations stop with activation")
     comboSuite.removePersistentDomain(forName: comboSuiteName)
-    print("PASS: Space combinations with one exact modifier, claimed repeats and release, unchosen and inactive pass-through, missed release")
+    print("PASS: Space combinations with one exact modifier, claimed repeats and release, unchosen and inactive pass-through, missed release, Space after capitals under Shift")
     let suiteName = "io.gksdud.inputswitch.defaults-test.\(UUID().uuidString)"
     let suite = UserDefaults(suiteName: suiteName)!
     let preferences = Engine(defaults: suite)

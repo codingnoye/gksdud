@@ -37,8 +37,7 @@ func selectable(_ keys: [UInt64], from options: [UInt64] = sources) -> [UInt64]?
 }
 // Space with exactly one modifier, from either side of the keyboard.
 func spaceCombo(flags: CGEventFlags) -> UInt64? {
-    let modifiers = flags.intersection([.maskShift, .maskControl, .maskAlternate, .maskCommand])
-    return spaceComboModifiers.firstIndex(of: modifiers).map { spaceCombos[$0] }
+    spaceComboModifiers.firstIndex(of: flags.intersection(CGEventFlags(spaceComboModifiers))).map { spaceCombos[$0] }
 }
 
 // A failed readback may have written the pending target, so it is ours as well.
@@ -196,10 +195,8 @@ final class Engine {
     }
     // Whether a system shortcut is the same Space combination, such as Spotlight's ⌘ + Space.
     func systemShortcutUses(_ key: UInt64) -> Bool {
-        guard let index = spaceCombos.firstIndex(of: key) else { return false }
-        let modifiers: CGEventFlags = [.maskShift, .maskControl, .maskAlternate, .maskCommand]
-        let flag = spaceComboModifiers[index]
-        return systemShortcutKeys().contains { $0.keyCode == kVK_Space && CGEventFlags(rawValue: UInt64($0.modifiers)).intersection(modifiers) == flag }
+        spaceCombos.contains(key)
+            && systemShortcutKeys().contains { $0.keyCode == kVK_Space && spaceCombo(flags: CGEventFlags(rawValue: UInt64($0.modifiers))) == key }
     }
     var accessibilityTrusted: () -> Bool = { AXIsProcessTrusted() }
     // Mapped like a Korean/English key, but only while the tap can act on it. A Space combination stays in the tap.
@@ -404,11 +401,17 @@ struct PressGate {
 // even if the modifier is let go first. Never reads or stores typed text.
 struct SpaceComboGate {
     var held = false
+    // Shift also types capitals, so a Space after other keys under the same Shift is typed, not a combination.
+    var typedWithShift = false
+    mutating func note(type: CGEventType, code: Int64, flags: CGEventFlags) {
+        if !flags.contains(.maskShift) { typedWithShift = false }
+        else if type == .keyDown && code != Int64(kVK_Space) { typedWithShift = true }
+    }
     mutating func handle(down: Bool, repeatKey: Bool, flags: CGEventFlags, chosen: [UInt64]) -> (consume: Bool, switchNow: Bool) {
         if repeatKey { return (down && held, false) }
         if !down { defer { held = false }; return (held, false) }
         // A fresh press, even after a release missed while the tap was disabled.
-        held = spaceCombo(flags: flags).map(chosen.contains) ?? false
+        held = (spaceCombo(flags: flags).map(chosen.contains) ?? false) && !(typedWithShift && flags.contains(.maskShift))
         return (held, held)
     }
 }
@@ -671,6 +674,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 }
                 // Keys this app posts again, such as ones held while a switch landed, act only once.
                 let ours = event.getIntegerValueField(.eventSourceUserData) == owner.nativePulseMarker
+                if !ours && (type == .keyDown || type == .flagsChanged) {
+                    owner.spaceGate.note(type: type, code: event.getIntegerValueField(.keyboardEventKeycode), flags: event.flags)
+                }
                 // Before Option input, which would otherwise type Option+Space. While it replays
                 // queued strokes, a combination waits in its queue to keep the order.
                 if (type == .keyDown || type == .keyUp) && !ours && !owner.optionInput.busy && owner.handleSpaceCombo(event) { return nil }
