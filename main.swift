@@ -18,8 +18,9 @@ let sources: [UInt64] = [0x7000000e7, 0x7000000e6, 0x700000039, 0x7000000e4]
 let sourceNames = ["우측 Command ⌘", "우측 Option ⌥", "Caps Lock ⇪", "우측 Control ⌃"]
 // Space combinations are caught by the event tap, not mapped in HID, so they apply to every keyboard.
 // Their IDs only name them in saved settings and are never written to HID.
-let spaceCombos: [UInt64] = [0xffff00000001, 0xffff00000002, 0xffff00000003]
-let spaceComboNames = ["Ctrl ⌃ + Space ␣", "Cmd ⌘ + Space ␣", "Opt ⌥ + Space ␣"]
+let spaceCombos: [UInt64] = [0xffff00000001, 0xffff00000002, 0xffff00000003, 0xffff00000004]
+let spaceComboNames = ["Ctrl ⌃ + Space ␣", "Cmd ⌘ + Space ␣", "Opt ⌥ + Space ␣", "Shift ⇧ + Space ␣"]
+let spaceComboModifiers: [CGEventFlags] = [.maskControl, .maskCommand, .maskAlternate, .maskShift]
 // Every key the global choice offers, in menu order.
 let hangulKeys = sources + spaceCombos, hangulKeyNames = sourceNames + spaceComboNames
 func sourceName(_ key: UInt64) -> String { hangulKeys.firstIndex(of: key).map { hangulKeyNames[$0] } ?? "알 수 없는 키" }
@@ -37,7 +38,7 @@ func selectable(_ keys: [UInt64], from options: [UInt64] = sources) -> [UInt64]?
 // Space with exactly one modifier, from either side of the keyboard.
 func spaceCombo(flags: CGEventFlags) -> UInt64? {
     let modifiers = flags.intersection([.maskShift, .maskControl, .maskAlternate, .maskCommand])
-    return [CGEventFlags.maskControl, .maskCommand, .maskAlternate].firstIndex(of: modifiers).map { spaceCombos[$0] }
+    return spaceComboModifiers.firstIndex(of: modifiers).map { spaceCombos[$0] }
 }
 
 // A failed readback may have written the pending target, so it is ours as well.
@@ -197,7 +198,7 @@ final class Engine {
     func systemShortcutUses(_ key: UInt64) -> Bool {
         guard let index = spaceCombos.firstIndex(of: key) else { return false }
         let modifiers: CGEventFlags = [.maskShift, .maskControl, .maskAlternate, .maskCommand]
-        let flag = [CGEventFlags.maskControl, .maskCommand, .maskAlternate][index]
+        let flag = spaceComboModifiers[index]
         return systemShortcutKeys().contains { $0.keyCode == kVK_Space && CGEventFlags(rawValue: UInt64($0.modifiers)).intersection(modifiers) == flag }
     }
     var accessibilityTrusted: () -> Bool = { AXIsProcessTrusted() }

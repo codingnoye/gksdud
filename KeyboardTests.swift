@@ -577,6 +577,7 @@ func renderKeyboardUI(to directory: String) throws {
     let disconnected = TestKeyboard("preview-3", name: "SP109 Wireless Keyboard", serial: "external")
     var devices: [KeyboardDevice] = [builtIn, virtual, disconnected]
     let engine = Engine(defaults: defaults, discover: { devices })
+    engine.accessibilityTrusted = { true }
     _ = engine.keyboards.reconcile(sources: [sources[0]], target: f19, active: true)
     engine.keyboards.setMode(.on, for: virtual.identity.key)
     engine.keyboards.setMode(.off, for: disconnected.identity.key)
@@ -652,7 +653,7 @@ func renderKeyboardUI(to directory: String) throws {
     defaults.set(false, forKey: "active")
     delegate.resetSelection()
     // Right Control goes last: the screenshots and later checks start from it.
-    for (title, usage): (String, UInt64) in [("Ctrl ⌃ + Space ␣", spaceCombos[0]), ("Cmd ⌘ + Space ␣", spaceCombos[1]), ("Opt ⌥ + Space ␣", spaceCombos[2]),
+    for (title, usage): (String, UInt64) in [("Ctrl ⌃ + Space ␣", spaceCombos[0]), ("Cmd ⌘ + Space ␣", spaceCombos[1]), ("Opt ⌥ + Space ␣", spaceCombos[2]), ("Shift ⇧ + Space ␣", spaceCombos[3]),
                                           ("우측 Command ⌘", 0x7000000e7), ("우측 Option ⌥", 0x7000000e6),
                                           ("Caps Lock ⇪", 0x700000039), ("우측 Control ⌃", 0x7000000e4)] {
         delegate.picker.selectItem(withTitle: title)
@@ -819,9 +820,13 @@ func renderKeyboardUI(to directory: String) throws {
     precondition(engine.defaultSources == [sources[1], sources[2], spaceCombos[0]] && defaultPicker.titleOfSelectedItem == "\(sourceNames[1]) +2"
         && builtInPicker.titleOfSelectedItem == "기본값 (\(sourceNames[1]) +1)" && !builtIn.mappings.contains { $0[srcKey]?.uint64Value == spaceCombos[0] },
         "Default rows follow only the single global keys")
+    toggleMultiple(defaultPicker, [spaceComboNames[3]])
+    precondition(engine.defaultSources == [sources[1], sources[2], spaceCombos[0], spaceCombos[3]] && defaultPicker.selection == engine.defaultSources
+        && !builtIn.mappings.contains { spaceCombos.contains($0[srcKey]?.uint64Value ?? 0) }, "The sheet saves Shift+Space with other keys without mapping combinations in HID")
     choose(defaultPicker, defaultPicker.numberOfItems - 1)
     try save(settings.window.attachedSheet!.contentView!, "keyboards-combos-sheet.png")
     descendants(settings.window.attachedSheet!.contentView!).compactMap { $0 as? NSButton }.first { $0.title == "취소" }!.performClick(nil)
+    toggleMultiple(defaultPicker, [spaceComboNames[3]])
     toggleMultiple(defaultPicker, [sourceNames[1], sourceNames[2]])
     settings.changed()
     precondition(engine.defaultSources == [spaceCombos[0]] && builtInPicker.titleOfSelectedItem == "기본값"
@@ -975,6 +980,7 @@ func runSeparateKeyWarningTests() {
     let keyboard = TestKeyboard("sw-1", name: "Keyboard", serial: "separate-warning")
     // Spotlight on ⌘ + Space, and a shortcut on F18 alone.
     let systemShortcuts: [String: Any] = ["64": ["enabled": true, "value": ["type": "standard", "parameters": [32, 49, 1048576]]],
+                                          "902": ["enabled": true, "value": ["type": "standard", "parameters": [32, 49, 131072]]],
                                           "900": ["enabled": true, "value": ["type": "standard", "parameters": [65535, 79, 0]]],
                                           "901": ["enabled": false, "value": ["type": "standard", "parameters": [32, 49, 262144]]]]
     let untouched = ShortcutPreferences(read: { systemShortcuts }, write: { _ in }, activate: {})
@@ -1043,6 +1049,10 @@ func runSeparateKeyWarningTests() {
     precondition(engine.separateKey == spaceCombos[1])
     chooseSeparate(spaceComboNames[0])
     precondition(warnings.isEmpty && engine.separateKey == spaceCombos[0], "Only enabled shortcuts count")
+    chooseSeparate(spaceComboNames[3])
+    precondition(warnings == ["\(spaceComboNames[3])은 시스템 단축키에서 사용 중입니다."] && engine.separateKey == spaceCombos[0], "Cancel keeps the key when Shift+Space is already used")
+    chooseSeparate(spaceComboNames[3], [.alertFirstButtonReturn])
+    precondition(engine.separateKey == spaceCombos[3], "Confirming allows Shift+Space as the separate key")
     // Preservation off turns Caps Lock in Korean off with it, so Caps Lock as a separate key no longer warns about it.
     defaults.set(true, forKey: "preserveCapsLock"); defaults.set(true, forKey: "koreanCapsLock")
     delegate.preserveCapsSwitch.state = .off; delegate.toggleFeature(delegate.preserveCapsSwitch)

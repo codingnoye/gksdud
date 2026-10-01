@@ -120,9 +120,13 @@ func runSelfTest() {
     precondition(gate.handle(code: 90, down: false, repeatKey: false, active: true, target: 90).consume)
     print("PASS: key-down switch, repeat suppression, release consumption, inactive pass-through, target change")
     let rightOption = CGEventFlags(rawValue: CGEventFlags.maskAlternate.rawValue | UInt64(NX_DEVICERALTKEYMASK))
+    let shiftFlags: [CGEventFlags] = [.maskShift, [.maskShift, .maskAlphaShift],
+        CGEventFlags(rawValue: CGEventFlags.maskShift.rawValue | UInt64(NX_DEVICELSHIFTKEYMASK)),
+        CGEventFlags(rawValue: CGEventFlags.maskShift.rawValue | UInt64(NX_DEVICERSHIFTKEYMASK))]
     precondition(spaceCombo(flags: .maskControl) == spaceCombos[0] && spaceCombo(flags: [.maskCommand, .maskAlphaShift]) == spaceCombos[1]
-        && spaceCombo(flags: rightOption) == spaceCombos[2], "Each combination is Space with one modifier on either side, whatever Caps Lock is")
-    precondition([[], .maskShift, [.maskControl, .maskAlternate], [.maskCommand, .maskAlternate], [.maskCommand, .maskShift]]
+        && spaceCombo(flags: rightOption) == spaceCombos[2] && shiftFlags.allSatisfy { spaceCombo(flags: $0) == spaceCombos[3] },
+        "Each combination is Space with one modifier on either side, whatever Caps Lock is")
+    precondition([[], [.maskControl, .maskAlternate], [.maskCommand, .maskAlternate], [.maskCommand, .maskShift], [.maskControl, .maskShift], [.maskAlternate, .maskShift]]
         .allSatisfy { spaceCombo(flags: $0) == nil }, "Other modifier sets keep their meaning")
     var space = SpaceComboGate()
     func spaceKey(_ down: Bool, _ flags: CGEventFlags, repeatKey: Bool = false, chosen: [UInt64] = [spaceCombos[0], spaceCombos[2]]) -> (consume: Bool, switchNow: Bool) {
@@ -136,12 +140,25 @@ func runSelfTest() {
     precondition(!spaceKey(true, .maskControl, chosen: []).consume && !spaceKey(false, .maskControl, chosen: []).consume, "Inactive passes")
     precondition(spaceKey(true, .maskAlternate).switchNow && !spaceKey(true, [], chosen: []).consume && !spaceKey(false, []).consume,
         "A press after a release missed by a disabled tap starts fresh")
+    for flags in shiftFlags {
+        precondition(!spaceKey(true, flags).consume && !spaceKey(false, flags).consume, "Unchosen Shift+Space passes")
+        let press = spaceKey(true, flags, chosen: [spaceCombos[3]])
+        let repeated = spaceKey(true, [], repeatKey: true, chosen: [spaceCombos[3]])
+        precondition(press.consume && press.switchNow && repeated.consume && !repeated.switchNow, "Shift+Space switches once even if Shift is released during repeat")
+        let release = spaceKey(false, [], chosen: [])
+        precondition(release.consume && !release.switchNow, "The Shift+Space release stays claimed after disabling")
+        precondition(!spaceKey(true, flags, chosen: []).consume && !spaceKey(false, flags, chosen: []).consume, "Inactive Shift+Space passes")
+    }
     let comboSuiteName = "io.gksdud.space-combo-test.\(UUID().uuidString)"
     let comboSuite = UserDefaults(suiteName: comboSuiteName)!
     let comboEngine = Engine(defaults: comboSuite)
     comboEngine.defaultSources = [spaceCombos[1], 1, sources[2]]
     precondition(comboEngine.defaultSources == [sources[2], spaceCombos[1]] && comboEngine.mappedSources == [sources[2]]
         && comboEngine.chosenCombos == [spaceCombos[1]], "Global keys hold both kinds; only single keys are mapped")
+    comboEngine.defaultSources = [spaceCombos[3], sources[2], spaceCombos[1]]
+    let comboReloaded = Engine(defaults: UserDefaults(suiteName: comboSuiteName)!)
+    precondition(comboReloaded.defaultSources == [sources[2], spaceCombos[1], spaceCombos[3]] && comboReloaded.mappedSources == [sources[2]]
+        && comboReloaded.chosenCombos == [spaceCombos[1], spaceCombos[3]], "Shift+Space survives restart with existing keys and never reaches HID")
     comboSuite.set(false, forKey: "active")
     precondition(comboEngine.chosenCombos.isEmpty, "Combinations stop with activation")
     comboSuite.removePersistentDomain(forName: comboSuiteName)
