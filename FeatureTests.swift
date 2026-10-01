@@ -61,6 +61,7 @@ func runFeatureTests() {
     runOptionRepeatTests()
     runNativeOptionSymbolTests()
     runEnglishSwitchTests()
+    runManualCorrectionTests()
 }
 
 func runEnglishSwitchTests() {

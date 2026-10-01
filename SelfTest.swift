@@ -13,6 +13,12 @@ func runTestMode() -> Bool {
         do { try probeEscape() } catch { fputs("ESC probe failed: \(error.localizedDescription)\n", stderr); exit(1) }
     } else if arguments.contains("--probe-input-sources") {
         do { try probeInputSources() } catch { fputs("Input source probe failed: \(error.localizedDescription)\n", stderr); exit(1) }
+    } else if arguments.contains("--self-test-manual-correction") {
+        setbuf(stdout, nil)
+        runManualCorrectionTests()
+    } else if arguments.contains("--self-test-correction-editors") {
+        setbuf(stdout, nil)
+        runCorrectionEditorTests()
     } else if arguments.contains("--self-test") {
         runSelfTest()
     } else if arguments.contains("--integration-test") {

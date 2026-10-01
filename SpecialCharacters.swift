@@ -276,7 +276,7 @@ extension AppDelegate {
             return result == noErr ? (length == 0 ? next : 0) : nil
         }), marker: nativePulseMarker)
         controller.report = { [weak self] text in self?.showSpecialStatus(text) }
-        controller.willBegin = { [weak self] in self?.cancelLongPress(); self?.cancelCapsRestore(); self?.refreshSpecialMode() }
+        controller.willBegin = { [weak self] in self?.terminalCorrection.reset(); self?.manualCorrection.reset(); self?.cancelLongPress(); self?.cancelCapsRestore(); self?.refreshSpecialMode() }
         controller.didFinish = { [weak self] in
             DispatchQueue.main.async { self?.updateInputIndicator(); self?.scheduleCapsRestore() }
         }

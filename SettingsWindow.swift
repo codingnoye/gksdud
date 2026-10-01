@@ -32,20 +32,26 @@ extension AppDelegate {
         full(inputRow, in: root)
         testInput.widthAnchor.constraint(equalTo: root.widthAnchor, constant: -48).isActive = true
         let host = NSView(); full(host, in: root)
-        for _ in 0..<5 {
+        for _ in 0..<6 {
             let panel = column(); host.addSubview(panel)
             NSLayoutConstraint.activate([panel.leadingAnchor.constraint(equalTo: host.leadingAnchor), panel.trailingAnchor.constraint(equalTo: host.trailingAnchor), panel.bottomAnchor.constraint(lessThanOrEqualTo: host.bottomAnchor),
-                tabPanels.count == 4 ? panel.centerYAnchor.constraint(equalTo: host.centerYAnchor) : panel.topAnchor.constraint(equalTo: host.topAnchor)])
+                tabPanels.count == 5 ? panel.centerYAnchor.constraint(equalTo: host.centerYAnchor) : panel.topAnchor.constraint(equalTo: host.topAnchor)])
             tabPanels.append(panel)
         }
         let tabs = NSStackView(); tabs.distribution = .fillEqually; tabs.spacing = 8
         tabs.translatesAutoresizingMaskIntoConstraints = false; content.addSubview(tabs)
-        for (index, title) in ["일반", "대소문자", "특수문자", "추가기능", "gksdud"].enumerated() {
+        for (index, title) in ["일반", "대소문자", "특수문자", "추가기능", "아차차", "gksdud"].enumerated() {
             let button = NSButton(title: title, target: self, action: #selector(changeTab(_:)))
             button.tag = index; button.setButtonType(.toggle); button.bezelStyle = .regularSquare
             button.isBordered = false; button.imagePosition = .imageAbove; button.imageScaling = .scaleProportionallyDown
             button.font = .systemFont(ofSize: 10)
-            button.image = index == 0 ? sourceMenuIcon(korean: true) : tabGlyph(["", "Aa", "⌥", "+", "?"][index])
+            if index == 0 {
+                button.image = sourceMenuIcon(korean: true)
+            } else if index == 4 {
+                button.image = tabGlyph("aㅁ", fontSize: 14)
+            } else {
+                button.image = tabGlyph(["", "Aa", "⌥", "+", "", "?"][index])
+            }
             button.setAccessibilityLabel(title + " 탭")
             tabs.addArrangedSubview(button); tabButtons.append(button)
         }
@@ -166,7 +172,22 @@ extension AppDelegate {
         heading("기타", in: extras)
         escapeSwitch.target = self; escapeSwitch.action = #selector(toggleFeature(_:))
         extras.addArrangedSubview(escapeSwitch)
-        let about = tabPanels[4]; about.alignment = .centerX; about.spacing = 18
+        let correction = tabPanels[4]
+        manualCorrectionSwitch.target = self; manualCorrectionSwitch.action = #selector(toggleManualCorrection)
+        correction.addArrangedSubview(manualCorrectionSwitch)
+        manualShortcutPicker.addItems(withTitles: ManualCorrectionShortcut.allCases.map(\.title))
+        manualShortcutPicker.target = self; manualShortcutPicker.action = #selector(changeManualCorrectionShortcut)
+        manualShortcutPicker.setAccessibilityLabel("한영 바로잡기 단축키")
+        correction.addArrangedSubview(manualShortcutPicker)
+        hint("아차차! 한영 상태를 잘못 선택해 입력했나요?\n단축키로 잘못 입력한 단어를 바로잡습니다.\n사전 없이 두벌식 자판을 기준으로 바꿉니다.\n\n바로잡은 직후 같은 단축키를 누르면 원문을 복원합니다.\n공백·마침표는 유지하며, 선택 영역은 해제해주세요.\n\n예: dkssudgktpdy → 단축키 입력 → 안녕하세요", in: correction, indent: 0)
+        correction.setCustomSpacing(16, after: manualShortcutPicker)
+        separator(in: correction)
+        hint("앱 구분 없이 일반 입력창·검색창·주소창에서 사용합니다.\n암호 입력란과 보안 입력 중에는 동작하지 않습니다.", in: correction, indent: 0)
+        hint("선택한 단축키는 앱의 기존 동작보다 우선합니다.\nExcel·터미널·개발 앱도 별도로 제외하지 않습니다.", in: correction, indent: 0)
+        hint("ABC·U.S. 영문과 두벌식 한글을 지원합니다.\n입력 기록을 저장하거나 전송하지 않습니다.", in: correction, indent: 0)
+        correctionStatus.font = .systemFont(ofSize: 11); correctionStatus.textColor = .secondaryLabelColor
+        full(correctionStatus, in: correction)
+        let about = tabPanels[5]; about.alignment = .centerX; about.spacing = 18
         let appIcon = NSImageView(image: NSApp.applicationIconImage)
         appIcon.widthAnchor.constraint(equalToConstant: 72).isActive = true
         appIcon.heightAnchor.constraint(equalToConstant: 72).isActive = true
@@ -207,9 +228,9 @@ extension AppDelegate {
         about.setCustomSpacing(12, after: supportNote); about.addArrangedSubview(link("Fairy", icon: "fairy", template: false, action: #selector(openSupport)))
         selectTab(0); updatePressAccess(); refreshSpecialMode(); refreshUpdates(); refreshIconPreviews(); refreshKeyboardState(); updateInputIndicator()
     }
-    func tabGlyph(_ text: String) -> NSImage {
+    func tabGlyph(_ text: String, fontSize: CGFloat = 16) -> NSImage {
         let image = NSImage(size: NSSize(width: 24, height: 20), flipped: false) { rect in
-            let label = NSAttributedString(string: text, attributes: [.font: NSFont.systemFont(ofSize: 16, weight: .medium), .foregroundColor: NSColor.black])
+            let label = NSAttributedString(string: text, attributes: [.font: NSFont.systemFont(ofSize: fontSize, weight: .medium), .foregroundColor: NSColor.black])
             let size = label.size(); label.draw(at: NSPoint(x: (rect.width - size.width) / 2, y: (rect.height - size.height) / 2)); return true
         }
         image.isTemplate = true; return image
