@@ -75,6 +75,11 @@ func switchPlan(current: InputSourceIdentity, target: InputSourceIdentity, next:
 func reselectsTarget(landed: Bool, current: String?, origin: String, targetIsLayout: Bool) -> Bool {
     !landed && current == origin && targetIsLayout
 }
+// Back to back, the first of two selections can be lost while a third-party input method such as WeChat's is current or
+// selected, and the shortcut then goes to an older source. Apple's need no wait; compatibility mode waits for any.
+func waitsBetweenSelections(bundles: [String?], always: Bool) -> Bool {
+    always || bundles.contains { $0.map { !$0.hasPrefix("com.apple.") } ?? false }
+}
 
 // The badge of an input source other than Korean or English: its language code of up to three letters, or without one
 // its place among the sources, up to 10. Past that the badge stays empty.
@@ -185,6 +190,9 @@ extension AppDelegate {
         guard let source = sourceForID(id), let type = TISGetInputSourceProperty(source, kTISPropertyInputSourceType) else { return false }
         return Unmanaged<CFString>.fromOpaque(type).takeUnretainedValue() as String == kTISTypeKeyboardLayout as String
     }
+    static func bundleID(_ id: String) -> String? {
+        sourceForID(id).flatMap { TISGetInputSourceProperty($0, kTISPropertyBundleID) }.map { Unmanaged<CFString>.fromOpaque($0).takeUnretainedValue() as String }
+    }
     func plannedSwitch(to target: InputSourceIdentity, from current: InputSourceIdentity) -> SwitchPlan {
         var landed = sourceHistory; landed.note(current.id); landed.note(target.id)
         let next = addedSourceTarget(separateKey: false, current: target, mode: engine.addedSourceMode, cycle: cycleOrder,
@@ -207,8 +215,10 @@ extension AppDelegate {
         }
         guard target.id != current.id else { return }
         let plan = plannedSwitch(to: target, from: current)
+        let waits = waitsBetweenSelections(bundles: ([current.id] + plan.selections).map(Self.bundleID), always: engine.addedSourcesCompatible)
         var failed = false
-        for id in plan.selections {
+        for (index, id) in plan.selections.enumerated() {
+            if index > 0 && waits { usleep(50_000) }
             guard let source = Self.sourceForID(id), TISSelectInputSource(source) == noErr else { failed = true; break }
             sourceHistory.note(id)
         }
@@ -262,23 +272,6 @@ extension AppDelegate {
         let keys = heldKeys
         heldKeys = []
         for key in keys { key.setIntegerValueField(.eventSourceUserData, value: nativePulseMarker); key.post(tap: .cghidEventTap) }
-    }
-    // Once a switch has landed and the frontmost app has seen it, the Korean/English key's next target is made the
-    // shortcut's previous source, so that press sends the shortcut alone: selections right before the shortcut can still
-    // be on their way to the app. Never a layout while an input method is current.
-    func scheduleNextSetup() {
-        setupGeneration += 1
-        let generation = setupGeneration
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
-            guard let self, self.setupGeneration == generation, self.addedSourcesActive, !self.optionInput.busy,
-                  self.switchLanding == nil, self.queuedSwitch == nil,
-                  let current = self.currentSource, let next = self.addedTarget(separateKey: false, from: current),
-                  next.id != current.id, self.sourceHistory.previous(of: current.id) != next.id,
-                  self.isLayout(current.id) || !self.isLayout(next.id),
-                  let source = Self.sourceForID(next.id), let here = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue(),
-                  TISSelectInputSource(source) == noErr, TISSelectInputSource(here) == noErr else { return }
-            self.sourceHistory.note(next.id); self.sourceHistory.note(current.id)
-        }
     }
     // The recent sources macOS keeps, as far as they are known; otherwise only the current one.
     func seedSourceHistory() {
@@ -359,6 +352,7 @@ final class AddedSourcesSettings: NSObject {
     unowned let owner: AppDelegate
     private var engine: Engine { owner.engine }
     let enable = NSButton(checkboxWithTitle: "활성화", target: nil, action: nil)
+    let compatible = NSButton(checkboxWithTitle: "호환성 모드", target: nil, action: nil)
     let modePicker = NSPopUpButton()
     let keyPicker = NSPopUpButton()
     let sourcePicker = NSPopUpButton()
@@ -411,7 +405,9 @@ final class AddedSourcesSettings: NSObject {
         separateRows.addArrangedSubview(row("전환 키", keyPicker))
         separateRows.addArrangedSubview(row("입력 소스", sourcePicker))
         warning.font = .systemFont(ofSize: 11); warning.textColor = .systemOrange
-        for view in [enable, row("전환 방식", modePicker), cycleRows, separateRows, warning] { section.addArrangedSubview(view) }
+        compatible.target = self; compatible.action = #selector(toggleCompatible)
+        compatible.toolTip = "전환이 다른 입력 소스로 가면 켜주세요."
+        for view in [enable, row("전환 방식", modePicker), cycleRows, separateRows, row("", compatible), warning] { section.addArrangedSubview(view) }
         warning.widthAnchor.constraint(equalTo: section.widthAnchor).isActive = true
         panel.addArrangedSubview(section)
         section.widthAnchor.constraint(equalTo: panel.widthAnchor).isActive = true
@@ -432,6 +428,7 @@ final class AddedSourcesSettings: NSObject {
         let separateKey: String = engine.separateKey.map { String($0) } ?? ""
         parts += [engine.separateSource ?? "", separateKey, enabled.map(\.id).joined(separator: ",")]
         parts += [String(engine.separateKeyIsHangulKey()), String(engine.keyboards.result.extraBlocked), String(owner.iconStyle), error ?? ""]
+        parts += [String(engine.addedSourcesCompatible)]
         let state = parts.joined(separator: "|")
         guard force || state != signature else { return }
         signature = state
@@ -475,7 +472,8 @@ final class AddedSourcesSettings: NSObject {
         let saved = engine.separateSource.flatMap { id in sourcePicker.itemArray.first { $0.representedObject as? String == id } }
         if let saved { sourcePicker.select(saved) } else { sourcePicker.selectItem(at: 0) }
         sourcePicker.autoenablesItems = false; keyPicker.autoenablesItems = false
-        for control in [modePicker, keyPicker, sourcePicker] { control.isEnabled = usable }
+        compatible.state = engine.addedSourcesCompatible ? .on : .off
+        for control in [modePicker, keyPicker, sourcePicker, compatible] { control.isEnabled = usable }
         addPicker.isEnabled = usable && addPicker.numberOfItems > 1
         // Only states the user has to act on.
         let members = cycle.filter { id in enabled.contains { $0.id == id } }
@@ -511,6 +509,7 @@ final class AddedSourcesSettings: NSObject {
         return row
     }
     private func save(_ change: () -> Void) { change(); owner.addedSourcesChanged() }
+    @objc private func toggleCompatible() { save { engine.defaults.set(compatible.state == .on, forKey: "addedSourcesCompatibility") } }
     @objc private func toggle() {
         if enable.state == .on, engine.addedSourceMode == .separate, let key = engine.separateKey, !confirmKey(key) { refresh(force: true); return }
         save { engine.defaults.set(enable.state == .on, forKey: "addedSources") }

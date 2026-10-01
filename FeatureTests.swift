@@ -848,6 +848,10 @@ func runAddedSourceTests() {
     featureCheck(!reselectsTarget(landed: true, current: "ja", origin: "ja", targetIsLayout: true), "Back where it started after it landed stays there")
     featureCheck(!reselectsTarget(landed: false, current: "abc", origin: "ja", targetIsLayout: true)
         && !reselectsTarget(landed: false, current: "ja", origin: "ja", targetIsLayout: false), "Elsewhere, or toward an input method, nothing is selected")
+    featureCheck(!waitsBetweenSelections(bundles: ["com.apple.inputmethod.Korean", "com.apple.keyboardlayout.all", nil], always: false)
+        && waitsBetweenSelections(bundles: ["com.apple.inputmethod.Korean", "com.tencent.inputmethod.wetype"], always: false),
+        "Selections wait for each other only around a third-party input method")
+    featureCheck(waitsBetweenSelections(bundles: ["com.apple.inputmethod.Korean"], always: true), "Compatibility mode waits for any")
     // Notifications for a source already handled.
     var notifications = SourceNotifications()
     featureCheck(notifications.handles("abc", addedSources: true) && !notifications.handles("abc", addedSources: true), "With added sources a repeat is skipped")

@@ -160,6 +160,7 @@ final class Engine {
     var addedSourcesEnabled: Bool { defaults.bool(forKey: "addedSources") }
     var addedSourceMode: AddedSourceMode { AddedSourceMode(rawValue: defaults.integer(forKey: "addedSourceMode")) ?? .cycle }
     var usesSeparateKey: Bool { addedSourcesEnabled && addedSourceMode == .separate }
+    var addedSourcesCompatible: Bool { defaults.bool(forKey: "addedSourcesCompatibility") }
     // Saved once edited; until then every input source macOS offers.
     var cycleSources: [String]? {
         get { defaults.stringArray(forKey: "cycleSources") }
@@ -584,7 +585,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     var separateGate = PressGate()
     var sourceHistory = SourceHistory()
     var landingGeneration = 0
-    var setupGeneration = 0
     // The source a switch is on its way to, and one that waits for it to land.
     var switchLanding: String?
     var queuedSwitch: (target: InputSourceIdentity, pulse: (CGEvent, CGEvent))?
@@ -1195,7 +1195,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             }
             let added = self.addedSourcesActive
             guard self.sourceNotifications.handles(id, addedSources: added) else { return }
-            if added { self.scheduleNextSetup() }
             // The switch on its way has landed, so the next ESC needs its own. With added sources the selections before a
             // switch notify too, while the source is still the one the switch leaves.
             if !added || self.sentSwitch.map({ self.currentLanguage != $0.from }) != false { self.sentSwitch = nil }
