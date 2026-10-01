@@ -406,7 +406,7 @@ final class AddedSourcesSettings: NSObject {
         separateRows.addArrangedSubview(row("입력 소스", sourcePicker))
         warning.font = .systemFont(ofSize: 11); warning.textColor = .systemOrange
         compatible.target = self; compatible.action = #selector(toggleCompatible)
-        compatible.toolTip = "전환이 다른 입력 소스로 가면 켜주세요."
+        compatible.toolTip = "WeChat 입력기 등 서드파티 입력기 사용 시 켜주세요."
         for view in [enable, row("전환 방식", modePicker), cycleRows, separateRows, row("", compatible), warning] { section.addArrangedSubview(view) }
         warning.widthAnchor.constraint(equalTo: section.widthAnchor).isActive = true
         panel.addArrangedSubview(section)
