@@ -215,7 +215,8 @@ extension AppDelegate {
         }
         guard target.id != current.id else { return }
         let plan = plannedSwitch(to: target, from: current)
-        let waits = waitsBetweenSelections(bundles: ([current.id] + plan.selections).map(Self.bundleID), always: engine.addedSourcesCompatible)
+        let waits = plan.selections.count > 1
+            && waitsBetweenSelections(bundles: ([current.id] + plan.selections).map(Self.bundleID), always: engine.addedSourcesCompatible)
         var failed = false
         for (index, id) in plan.selections.enumerated() {
             if index > 0 && waits { usleep(50_000) }
@@ -406,7 +407,7 @@ final class AddedSourcesSettings: NSObject {
         separateRows.addArrangedSubview(row("입력 소스", sourcePicker))
         warning.font = .systemFont(ofSize: 11); warning.textColor = .systemOrange
         compatible.target = self; compatible.action = #selector(toggleCompatible)
-        compatible.toolTip = "WeChat 입력기 등 서드파티 입력기 사용 시 켜주세요."
+        compatible.toolTip = "WeChat 입력기 등 서드파티 입력기 사용 중 전환이 다른 입력 소스로 가면 켜주세요."
         for view in [enable, row("전환 방식", modePicker), cycleRows, separateRows, row("", compatible), warning] { section.addArrangedSubview(view) }
         warning.widthAnchor.constraint(equalTo: section.widthAnchor).isActive = true
         panel.addArrangedSubview(section)
