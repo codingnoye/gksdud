@@ -278,12 +278,17 @@ final class KeyboardManager {
         }
         return desired
     }
-    private func restore(_ device: KeyboardDevice) throws {
+    // Away, the undo stays: another user's session may still map the same keys when this one comes back, and those are
+    // no originals. The keys are given back once, as that session maps them again meanwhile.
+    private func restore(_ device: KeyboardDevice, away: Bool = false) throws {
         var saved = records
         guard let old = saved[device.registryID], UInt64(old["target"] ?? "") != nil else { return }
-        let current = try device.readMappings()
-        try setVerified(Self.restored(current, record: old), current: current, device: device)
-        saved.removeValue(forKey: device.registryID); records = saved
+        if old["away"] == nil {
+            let current = try device.readMappings()
+            try setVerified(Self.restored(current, record: old), current: current, device: device)
+        }
+        if away { saved[device.registryID]?["away"] = "1" } else { saved.removeValue(forKey: device.registryID) }
+        records = saved
     }
     private func apply(_ device: KeyboardDevice, sources: [UInt64], target: UInt64, extra: ExtraKey? = nil) throws {
         let current = try device.readMappings()
@@ -298,7 +303,7 @@ final class KeyboardManager {
             merged($0, source: $1.source, previous: $1.source, original: nil, target: $1.target)
         }
         let extraTarget = extra.map { String($0.target) }
-        if let old, old["source"] == encodeSources(all), old["target"] == String(target), old["extraTarget"] == extraTarget,
+        if let old, old["away"] == nil, old["source"] == encodeSources(all), old["target"] == String(target), old["extraTarget"] == extraTarget,
            old["pendingTarget"] == nil, old["pendingExtraTarget"] == nil, mappingEqual(current, desired) { return }
         let previous = old.map(Self.undo) ?? []
         let kept: [Undo] = all.map { source in
@@ -316,7 +321,8 @@ final class KeyboardManager {
         saved[device.registryID] = record; records = saved
     }
     // `extra` goes on every selected keyboard where it is not a Korean/English key already.
-    @discardableResult func reconcile(sources fallback: [UInt64], target: UInt64, active: Bool, extra: ExtraKey? = nil) -> KeyboardReconcileResult {
+    // `away` gives selected keyboards their own keys back for the lock screen or another user's session, still counting them.
+    @discardableResult func reconcile(sources fallback: [UInt64], target: UInt64, active: Bool, away: Bool = false, extra: ExtraKey? = nil) -> KeyboardReconcileResult {
         var next = KeyboardReconcileResult()
         let devices: [KeyboardDevice]
         do { devices = try snapshot(); failures.removeValue(forKey: "enumeration") }
@@ -329,8 +335,8 @@ final class KeyboardManager {
             let selected = active && isSelected(device)
             if selected { next.selected += 1 }
             // With only Space combinations chosen, a keyboard has nothing to map.
-            let keys = selected ? sources(for: device, default: fallback) : []
-            var own = selected ? extra.flatMap { keys.contains($0.source) ? nil : $0 } : nil
+            let keys = selected && !away ? sources(for: device, default: fallback) : []
+            var own = selected && !away ? extra.flatMap { keys.contains($0.source) ? nil : $0 } : nil
             do {
                 // The extra key never costs the Korean/English keys: if its target is taken, it waits.
                 if let key = own, let mappings = try? device.readMappings(),
@@ -338,7 +344,7 @@ final class KeyboardManager {
                     own = nil; next.extraBlocked += 1
                 }
                 if !keys.isEmpty || own != nil { try apply(device, sources: keys, target: target, extra: own); next.applied += 1 }
-                else { try restore(device) }
+                else { try restore(device, away: selected && away) }
                 failures.removeValue(forKey: device.registryID)
             } catch {
                 failedIDs.insert(device.registryID)

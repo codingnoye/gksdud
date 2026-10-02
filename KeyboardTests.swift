@@ -515,8 +515,9 @@ func runSessionAwayTests() {
     away = true
     try! engine.repair()
     precondition(keyboard.mappings == [original], "A locked screen gets the original Caps Lock mapping back")
-    precondition(engine.active && engine.defaultSources == [sources[2]], "Locking keeps activation and the chosen key")
-    let writes = keyboard.writes
+    precondition(engine.active && engine.defaultSources == [sources[2]] && engine.keyboards.result.selected == 1,
+        "Locking keeps activation, the chosen key and the keyboard count")
+    var writes = keyboard.writes
     try! engine.repair()
     precondition(keyboard.writes == writes, "Repairs while locked write nothing more")
     away = false
@@ -525,7 +526,19 @@ func runSessionAwayTests() {
     away = true
     try! engine.repair()
     precondition(keyboard.mappings == [original], "Each lock restores the original again")
-    print("PASS: lock screen restores keyboard mappings, keeps activation, maps again on unlock")
+    // Another user's session maps Caps Lock to the same F-key meanwhile, and gives it back only after this one is back.
+    keyboard.mappings = [mapping(sources[2], engine.target.usage)]
+    writes = keyboard.writes
+    try! engine.repair(); try! engine.repair()
+    precondition(keyboard.writes == writes, "Another session's mapping is left alone while away")
+    away = false
+    try! engine.repair()
+    away = true
+    try! engine.repair()
+    precondition(keyboard.mappings == [original], "Coming back keeps the original found before, not the other session's F-key")
+    try! engine.restoreMappings()
+    precondition(keyboard.mappings == [original] && engine.keyboards.records.isEmpty, "Quitting while away clears the undo")
+    print("PASS: lock screen restores keyboard mappings once, keeps activation and the undo, maps again on unlock")
 }
 
 // Caps Lock chosen as a Korean/English key while Caps Lock in Korean is on, from the menu and from the keyboard sheet.
