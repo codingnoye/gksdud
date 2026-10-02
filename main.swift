@@ -201,6 +201,9 @@ final class Engine {
         return systemShortcutKeys().contains { $0.keyCode == kVK_Space && CGEventFlags(rawValue: UInt64($0.modifiers)).intersection(modifiers) == flag }
     }
     var accessibilityTrusted: () -> Bool = { AXIsProcessTrusted() }
+    // While the screen is locked or another user's session is in front, keyboards keep their own keys: no key press
+    // reaches the tap there, so a mapped Caps Lock could not even turn uppercase off. The app sets this at launch.
+    var sessionAway: () -> Bool = { false }
     // Mapped like a Korean/English key, but only while the tap can act on it. A Space combination stays in the tap.
     var separateMapping: ExtraKey? {
         guard active, usesSeparateKey, separateSource != nil, let key = separateKey, sources.contains(key), accessibilityTrusted() else { return nil }
@@ -327,7 +330,7 @@ final class Engine {
         defaults.removeObject(forKey: "inputMenuBackedUp")
     }
     func reconcile() throws -> Int {
-        keyboards.reconcile(sources: defaultSources, target: target.usage, active: active, extra: separateMapping).applied
+        keyboards.reconcile(sources: defaultSources, target: target.usage, active: active && !sessionAway(), extra: separateMapping).applied
     }
     // Turning off is saved before anything is undone, so a later failure retries the undo instead of reapplying.
     func restore() throws {
@@ -481,6 +484,12 @@ func setCapsLock(_ enabled: Bool) throws {
     guard result == KERN_SUCCESS else {
         throw NSError(domain: "gksdud", code: Int(result), userInfo: [NSLocalizedDescriptionKey: "Caps Lock 상태를 변경하지 못했습니다."])
     }
+}
+
+// Read from the session: secure input turns on and off on the lock screen, and the lock notice can come 0.5 seconds late.
+func screenLockedOrAway() -> Bool {
+    guard let info = CGSessionCopyCurrentDictionary() as? [String: Any] else { return false }
+    return info["CGSSessionScreenIsLocked"] as? Bool == true || info[kCGSessionOnConsoleKey as String] as? Bool == false
 }
 
 // Only the reserved function key is synthesized. Text keys are never buffered.
@@ -1027,6 +1036,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         updateTimer?.tolerance = 60
         DistributedNotificationCenter.default().addObserver(self, selector: #selector(inputSourceChanged), name: Notification.Name(kTISNotifySelectedKeyboardInputSourceChanged as String), object: nil)
         DistributedNotificationCenter.default().addObserver(self, selector: #selector(enabledSourcesChanged), name: Notification.Name(kTISNotifyEnabledKeyboardInputSourcesChanged as String), object: nil)
+        engine.sessionAway = screenLockedOrAway
+        for name in ["com.apple.screenIsLocked", "com.apple.screenIsUnlocked"] {
+            DistributedNotificationCenter.default().addObserver(self, selector: #selector(screenLockChanged), name: Notification.Name(name), object: nil)
+        }
         let center = NSWorkspace.shared.notificationCenter
         observers.append(center.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] notice in
             guard let self, let owner = self.longPressOwner,
@@ -1365,7 +1378,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         do { try engine.restore(); lastError = ""; stickyError = ""; repairFailed = false; refreshStatus() } catch { report(error) }
         resetSelection(); syncCapsPreservation(); updatePressAccess(); refreshKeyboardState()
     }
-    func recover() { sourceCache = nil; queuedSwitch = nil; releaseHeldKeys(); optionInput.cancel(); cancelCapsRestore(); englishCaps.switching = false; cancelLongPress(); longPress = LongPressState(); pressGate.held.removeAll(); spaceGate = SpaceComboGate(); separateGate.held.removeAll(); for delay in [0.5, 2.0, 5.0] { DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.repair() } } }
+    func recover() { sourceCache = nil; queuedSwitch = nil; releaseHeldKeys(); optionInput.cancel(); cancelCapsRestore(); englishCaps.switching = false; followCapsLock(); cancelLongPress(); longPress = LongPressState(); pressGate.held.removeAll(); spaceGate = SpaceComboGate(); separateGate.held.removeAll(); for delay in [0.5, 2.0, 5.0] { DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.repair() } } }
+    // Caps Lock can change where the tap does not see it, such as on another user's login window. The lock in English
+    // (or Korean showing the English case) is the English case, so preservation takes it from there.
+    func followCapsLock() {
+        guard capsPreservationActive else { return }
+        let source = currentSource
+        englishCaps.capsKeyChanged(english: source?.language.hasPrefix("en") == true, actual: actualCaps, korean: showsEnglishCase(source))
+    }
+    // The 1-second repair follows the lock too; this only makes it sooner.
+    @objc func screenLockChanged(_ notification: Notification) {
+        // Key releases on the lock screen never reached the tap, so keys held before it count as released.
+        if notification.name.rawValue == "com.apple.screenIsUnlocked" { recover() }
+        repair()
+    }
     func repair() {
         guard !engine.isUpdatingSettings else { return }
         // Without Accessibility there is no tap to switch with, so activation turns off and stays off until turned on again.

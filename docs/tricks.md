@@ -20,6 +20,7 @@
   - `com.apple.symbolichotkeys` 60번(이전 입력 소스 선택)을 그 F-키로 설정하고 `activateSettings -u -virtualSession`으로 즉시 반영. `-virtualSession`이 없으면 마우스 가속 같은 물리 장치 설정까지 다시 적용됨
   - 쓰기 전에 되돌릴 정보(원래 매핑, 쓰려는 대상)를 먼저 저장하고, 쓴 뒤 다시 읽어 확인. 해제·종료 시 우리가 쓴 매핑만 원래대로 복원
   - 1초마다 매핑을 확인해 재연결, Karabiner 가상 키보드 재생성, 잠자기 복귀 후 다시 적용
+  - 화면이 잠겼거나 다른 사용자 세션이 앞에 있으면 매핑을 원래대로 돌리고, 돌아오면 다시 적용. 잠금화면에서는 이벤트 탭이 키 누름을 받지 못해 Caps Lock 한영 키로 대문자를 끌 수 없음. 잠금 여부는 보안 입력이 아니라 `CGSessionCopyCurrentDictionary`로 확인하고, 잠금 알림으로 바로 반영
   - 재부팅하면 HID 매핑이 사라지고 레지스트리 ID가 다른 장치에 재사용되므로, `kern.bootsessionuuid`가 바뀌면 기록 삭제
   - 레지스트리 ID는 연결마다 바뀌므로 키보드별 설정은 Vendor/Product/시리얼 등의 해시로 저장
   - 기본 입력기 메뉴바 아이콘은 `com.apple.TextInputMenu`의 `visible`을 끄고 `TextInputMenuAgent`를 재시작해 숨김. 메뉴바에 표시가 꺼져 있거나 'Mac 입력기 아이콘 대체'를 끄면 숨기지 않음

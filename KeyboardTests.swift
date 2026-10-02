@@ -499,6 +499,35 @@ func runRightControlTests() {
     print("PASS: right Control across F13-F20, left Control preservation, source changes, saved selection, restart, disable restoration")
 }
 
+// The lock screen gets the keyboards' own keys back without turning activation off; unlocking maps them again.
+func runSessionAwayTests() {
+    func mapping(_ source: UInt64, _ target: UInt64) -> Mapping { [srcKey: NSNumber(value: source), dstKey: NSNumber(value: target)] }
+    let suite = "io.gksdud.session-away-tests.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let original = mapping(sources[2], 0x7000000e0)
+    let keyboard = TestKeyboard("away", mappings: [original])
+    let engine = Engine(defaults: defaults, discover: { [keyboard] })
+    var away = false
+    engine.sessionAway = { away }
+    defaults.set(String(sources[2]), forKey: "source")
+    precondition((try! engine.reconcile()) == 1 && keyboard.mappings == [mapping(sources[2], engine.target.usage)])
+    away = true
+    try! engine.repair()
+    precondition(keyboard.mappings == [original], "A locked screen gets the original Caps Lock mapping back")
+    precondition(engine.active && engine.defaultSources == [sources[2]], "Locking keeps activation and the chosen key")
+    let writes = keyboard.writes
+    try! engine.repair()
+    precondition(keyboard.writes == writes, "Repairs while locked write nothing more")
+    away = false
+    try! engine.repair()
+    precondition(keyboard.mappings == [mapping(sources[2], engine.target.usage)], "Unlocking maps Caps Lock again")
+    away = true
+    try! engine.repair()
+    precondition(keyboard.mappings == [original], "Each lock restores the original again")
+    print("PASS: lock screen restores keyboard mappings, keeps activation, maps again on unlock")
+}
+
 // Caps Lock chosen as a Korean/English key while Caps Lock in Korean is on, from the menu and from the keyboard sheet.
 // Warnings are answered in order without a modal loop; nothing may reach system settings.
 func runCapsLockKeyTests() {
