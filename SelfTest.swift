@@ -38,6 +38,7 @@ func runSelfTest() {
     runSeparateKeyTapTests()
     runSeparateKeyWarningTests()
     runPermissionTests()
+    runCommandTests()
     for initial in [false, true] {
         for holdEnabled in [false, true] {
             var caps = EnglishCapsState()

@@ -121,7 +121,7 @@ func addedSourceTarget(separateKey: Bool, current: InputSourceIdentity, mode: Ad
 }
 
 extension AppDelegate {
-    var addedSourcesActive: Bool { engine.active && engine.addedSourcesEnabled && engine.accessibilityTrusted() }
+    var addedSourcesActive: Bool { engine.active && !engine.paused && engine.addedSourcesEnabled && engine.accessibilityTrusted() }
     var separateKeyActive: Bool { addedSourcesActive && engine.addedSourceMode == .separate }
     // The tap takes the separate key's F-key only while the separate key is mapped to it. When another mapping already
     // sends that F-key, the separate key is not applied and its presses stay that mapping's.
@@ -195,8 +195,11 @@ extension AppDelegate {
     }
     func plannedSwitch(to target: InputSourceIdentity, from current: InputSourceIdentity) -> SwitchPlan {
         var landed = sourceHistory; landed.note(current.id); landed.note(target.id)
-        let next = addedSourceTarget(separateKey: false, current: target, mode: engine.addedSourceMode, cycle: cycleOrder,
-                                     separate: engine.separateSource, enabled: enabledSources(), history: landed)
+        // A command can switch without added sources, when the Korean/English key goes between Korean and English as a
+        // separate key's sources do.
+        let added = addedSourcesActive
+        let next = addedSourceTarget(separateKey: false, current: target, mode: added ? engine.addedSourceMode : .separate, cycle: cycleOrder,
+                                     separate: added ? engine.separateSource : nil, enabled: enabledSources(), history: landed)
         return switchPlan(current: current, target: target, next: next?.id, previous: sourceHistory.previous(of: current.id), isLayout: isLayout)
     }
     // Only the system shortcut switches, as without added sources. Sources selected from here first only set where it goes.
@@ -510,12 +513,12 @@ final class AddedSourcesSettings: NSObject {
         return row
     }
     private func save(_ change: () -> Void) { change(); owner.addedSourcesChanged() }
-    @objc private func toggleCompatible() { save { engine.defaults.set(compatible.state == .on, forKey: "addedSourcesCompatibility") } }
-    @objc private func toggle() {
+    @objc func toggleCompatible() { save { engine.defaults.set(compatible.state == .on, forKey: "addedSourcesCompatibility") } }
+    @objc func toggle() {
         if enable.state == .on, engine.addedSourceMode == .separate, let key = engine.separateKey, !confirmKey(key) { refresh(force: true); return }
         save { engine.defaults.set(enable.state == .on, forKey: "addedSources") }
     }
-    @objc private func changeMode() {
+    @objc func changeMode() {
         let mode = AddedSourceMode(rawValue: modePicker.indexOfSelectedItem) ?? .cycle
         // The separate key takes a key away from the keyboard, so the same warnings as choosing it apply.
         if mode == .separate, let key = engine.separateKey, !confirmKey(key) { refresh(force: true); return }
@@ -529,8 +532,10 @@ final class AddedSourcesSettings: NSObject {
         guard let id = addPicker.selectedItem?.representedObject as? String else { return }
         edit { if !$0.contains(id) { $0.append(id) } }
     }
-    @objc private func changeSource() { save { engine.separateSource = sourcePicker.selectedItem?.representedObject as? String } }
-    @objc private func changeKey() {
+    // The whole order at once, from the command line.
+    func setCycle(_ order: [String]) { save { engine.cycleSources = order } }
+    @objc func changeSource() { save { engine.separateSource = sourcePicker.selectedItem?.representedObject as? String } }
+    @objc func changeKey() {
         let key = (keyPicker.selectedItem?.representedObject as? NSNumber)?.uint64Value
         guard let key else { save { engine.separateKey = nil }; return }
         guard !(engine.defaultSources.contains(key) || engine.keyboards.maps(key, default: engine.defaultSources)) else {

@@ -166,6 +166,12 @@ extension AppDelegate {
         heading("기타", in: extras)
         escapeSwitch.target = self; escapeSwitch.action = #selector(toggleFeature(_:))
         extras.addArrangedSubview(escapeSwitch)
+        installCLI.target = self; installCLI.action = #selector(toggleCLI); installCLI.bezelStyle = .rounded
+        let cliHelp = NSButton(title: "사용법", target: self, action: #selector(openCLIHelp)); cliHelp.bezelStyle = .rounded
+        let cliRow = NSStackView(views: [installCLI, cliHelp]); cliRow.spacing = 8
+        extras.addArrangedSubview(cliRow)
+        hint("터미널, Hammerspoon 등에서 gksdud 명령으로 설정을 바꿀 수 있어요.", in: extras, indent: 0)
+        refreshCLIButton()
         let about = tabPanels[4]; about.alignment = .centerX; about.spacing = 18
         let appIcon = NSImageView(image: NSApp.applicationIconImage)
         appIcon.widthAnchor.constraint(equalToConstant: 72).isActive = true

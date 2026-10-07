@@ -143,8 +143,11 @@ final class Engine {
     }
     // Keyboards map only the single keys, so a keyboard's Default follows just these.
     var mappedSources: [UInt64] { selectable(defaultSources) ?? [] }
-    var chosenCombos: [UInt64] { active ? defaultSources.filter(spaceCombos.contains) : [] }
+    var chosenCombos: [UInt64] { active && !paused ? defaultSources.filter(spaceCombos.contains) : [] }
     var active: Bool { defaults.object(forKey: "active") == nil || defaults.bool(forKey: "active") }
+    // Off for a while from the command line, such as while another app is in front: keyboards keep their own keys and the
+    // tap stops, but the shortcut and the input menu stay, so it turns back on at once. Not saved; turning activation on ends it.
+    var paused = false
     var longPressCapsLock: Bool { defaults.bool(forKey: "longPressCapsLock") }
     var preserveCapsLock: Bool { defaults.object(forKey: "preserveCapsLock") == nil || defaults.bool(forKey: "preserveCapsLock") }
     // The saved choice waits while Caps Lock is a Korean/English key, however that key was saved.
@@ -328,7 +331,7 @@ final class Engine {
         defaults.removeObject(forKey: "inputMenuBackedUp")
     }
     func reconcile() throws -> Int {
-        keyboards.reconcile(sources: defaultSources, target: target.usage, active: active, away: sessionAway(), extra: separateMapping).applied
+        keyboards.reconcile(sources: defaultSources, target: target.usage, active: active, away: sessionAway() || paused, extra: separateMapping).applied
     }
     // Turning off is saved before anything is undone, so a later failure retries the undo instead of reapplying.
     func restore() throws {
@@ -636,6 +639,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     let preserveCapsSwitch = NSButton(checkboxWithTitle: "한영 전환시 대소문자 보존", target: nil, action: nil)
     let koreanCapsSwitch = NSButton(checkboxWithTitle: "한글 상태에서도 Caps Lock으로 대소문자 전환", target: nil, action: nil)
     let escapeSwitch = NSButton(checkboxWithTitle: "ESC 누를 시 영소문자로 변경", target: nil, action: nil)
+    let installCLI = NSButton(title: "CLI 설치", target: nil, action: nil)
+    var commandPort: CFMessagePort?
+    var commandSession: CommandSession?
+    // Tests take a command's errors here instead of a window.
+    var presentCommandErrors: (([String]) -> Void)?
     var returningFromPermissionSettings = false
     var permissionSettingsWasActive = false
     func finishPermissionVisit() {
@@ -664,11 +672,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
     func ensureKeyTap() {
         guard AXIsProcessTrusted() else { stopKeyTap(); updatePressAccess(); return }
-        if let tap = keyTap, !CFMachPortIsValid(tap) { stopKeyTap() }
+        // Paused, nothing is caught; resuming starts again from the keyboard as it is then.
+        if let tap = keyTap, !CFMachPortIsValid(tap) || engine.paused { stopKeyTap() }
         syncCapsPreservation()
         // ESC shares the long-press transition, so it runs while either is on.
         if !engine.active || !engine.longPressCapsLock && !engine.escapeToEnglish { cancelLongPress() }
-        guard engine.active, keyTap == nil else { updatePressAccess(); return }
+        guard engine.active, !engine.paused, keyTap == nil else { updatePressAccess(); return }
         let mask = (CGEventMask(1) << CGEventType.keyDown.rawValue) | (CGEventMask(1) << CGEventType.keyUp.rawValue) | (CGEventMask(1) << CGEventType.flagsChanged.rawValue) | (CGEventMask(1) << CGEventType.leftMouseDown.rawValue) | (CGEventMask(1) << CGEventType.rightMouseDown.rawValue) | (CGEventMask(1) << CGEventType.otherMouseDown.rawValue)
         guard let tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .defaultTap,
             eventsOfInterest: mask, callback: { _, type, event, info in
@@ -814,7 +823,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
     var currentSource: InputSourceIdentity? { TISCopyCurrentKeyboardInputSource().flatMap { Self.sourceIdentity($0.takeRetainedValue()) } }
     var actualCaps: Bool { CGEventSource.flagsState(.combinedSessionState).contains(.maskAlphaShift) }
-    var capsPreservationActive: Bool { engine.active && engine.preserveCapsLock && AXIsProcessTrusted() }
+    var capsPreservationActive: Bool { engine.active && !engine.paused && engine.preserveCapsLock && AXIsProcessTrusted() }
     var koreanCapsActive: Bool { capsPreservationActive && engine.koreanCapsLock }
     // With Caps Lock in Korean, the lock shows the English case in Korean too.
     func showsEnglishCase(_ source: InputSourceIdentity?) -> Bool { source?.id == capsSafeKorean && engine.koreanCapsLock }
@@ -1078,6 +1087,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         do { try engine.resume() } catch { report(error) }
         seedSourceHistory(); engine.refreshSystemFKeys(); turnOffUnusedKoreanCaps()
         repair()
+        // Once launching has applied the settings, so a command right after `gksdud start` finds it ready.
+        startCommandServer()
         if showInMenuBar.state == .off || CommandLine.arguments.contains("--settings") { showSettings() }
         UpdateInstaller.acknowledgeLaunch()
     }
@@ -1275,7 +1286,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         login.state = SMAppService.mainApp.status == .enabled ? .on : .off
         for entry in menu.items {
             switch entry.action {
-            case #selector(menuEnabled): entry.state = engine.active ? .on : .off; entry.isEnabled = engine.accessibilityTrusted()
+            case #selector(menuEnabled): entry.state = engine.active && !engine.paused ? .on : .off; entry.isEnabled = engine.accessibilityTrusted()
             case #selector(menuLogin): entry.state = login.state; entry.isEnabled = engine.accessibilityTrusted()
             case #selector(menuHidden): entry.state = showInMenuBar.state; entry.isEnabled = engine.accessibilityTrusted()
             case #selector(selectKorean): entry.isEnabled = availableSource("ko") != nil
@@ -1299,10 +1310,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     func selectLanguage(_ prefix: String) { if let source = availableSource(prefix) { rememberCapsBeforeSwitch(); _ = TISSelectInputSource(source) }; updateInputIndicator() }
     @objc func selectKorean() { selectLanguage("ko") }
     @objc func selectEnglish() { selectLanguage("en") }
-    @objc func menuEnabled() { enabled.state = engine.active ? .off : .on; toggleEnabled() }
+    @objc func menuEnabled() {
+        // A pause from the command line shows here as off, and turns back on from here.
+        if engine.active && engine.paused { setPaused(false); return }
+        enabled.state = engine.active ? .off : .on; toggleEnabled()
+    }
     @objc func menuLogin() { login.state = SMAppService.mainApp.status == .enabled ? .off : .on; toggleLogin() }
     @objc func menuHidden() { showInMenuBar.state = showInMenuBar.state == .on ? .off : .on; toggleHidden() }
-    @objc func showSettings() { if !window.isVisible { selectTab(0) }; window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) }
+    @objc func showSettings() { if !window.isVisible { selectTab(0) }; refreshCLIButton(); window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { if showInMenuBar.state == .off { showSettings() }; return true }
     @objc func toggleHidden() {
         engine.defaults.set(showInMenuBar.state == .off, forKey: "hidden")
@@ -1326,7 +1341,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
     @objc func toggleEnabled() {
         guard !engine.isUpdatingSettings else { resetSelection(); return }
-        if enabled.state == .on { applyNow() }
+        if enabled.state == .on { engine.paused = false; applyNow() }
         else { restoreNow() }
     }
     @objc func selectionChanged() {
@@ -1433,6 +1448,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         if error is KeyboardError { refreshKeyboardState(); return }
         stickyError = error.localizedDescription; refreshStatus()
         enabled.toolTip = error.localizedDescription
+        // A command gets the error back, and shows it once it is done unless asked not to.
+        if let commandSession { commandSession.errors.append(error.localizedDescription); return }
         guard lastError != error.localizedDescription else { return }
         lastError = error.localizedDescription
         let alert = NSAlert(error: error)
