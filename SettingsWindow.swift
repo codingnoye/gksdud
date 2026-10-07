@@ -69,9 +69,11 @@ extension AppDelegate {
             tabs.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -5),
             tabs.heightAnchor.constraint(equalToConstant: 42)
         ])
-        func hint(_ text: String, in panel: NSStackView, indent: CGFloat = 20) {
+        // `dims`: dimmed with the settings that need Accessibility.
+        func hint(_ text: String, in panel: NSStackView, indent: CGFloat = 20, dims: Bool = true) {
             let label = NSTextField(wrappingLabelWithString: text)
-            label.font = .systemFont(ofSize: 11); label.textColor = .secondaryLabelColor; settingLabels.append((label, .secondaryLabelColor))
+            label.font = .systemFont(ofSize: 11); label.textColor = .secondaryLabelColor
+            if dims { settingLabels.append((label, .secondaryLabelColor)) }
             label.translatesAutoresizingMaskIntoConstraints = false
             let container = NSView(); container.addSubview(label)
             if let last = panel.arrangedSubviews.last { panel.setCustomSpacing(6, after: last) }
@@ -79,9 +81,10 @@ extension AppDelegate {
             NSLayoutConstraint.activate([label.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: indent), label.trailingAnchor.constraint(equalTo: container.trailingAnchor), label.topAnchor.constraint(equalTo: container.topAnchor), label.bottomAnchor.constraint(equalTo: container.bottomAnchor)])
         }
         func separator(in panel: NSStackView) { let line = NSBox(); line.boxType = .separator; full(line, in: panel) }
-        func heading(_ text: String, in panel: NSStackView) {
+        func heading(_ text: String, in panel: NSStackView, dims: Bool = true) {
             let label = NSTextField(labelWithString: text); label.font = .systemFont(ofSize: 13, weight: .semibold)
-            panel.addArrangedSubview(label); settingLabels.append((label, .labelColor))
+            panel.addArrangedSubview(label)
+            if dims { settingLabels.append((label, .labelColor)) }
         }
         func row(_ title: String, _ views: [NSView], in panel: NSStackView) {
             let label = NSTextField(labelWithString: title); label.widthAnchor.constraint(equalToConstant: 95).isActive = true
@@ -166,11 +169,14 @@ extension AppDelegate {
         heading("기타", in: extras)
         escapeSwitch.target = self; escapeSwitch.action = #selector(toggleFeature(_:))
         extras.addArrangedSubview(escapeSwitch)
+        separator(in: extras)
+        // Installing needs no Accessibility, so this section never dims.
+        heading("CLI", in: extras, dims: false)
         installCLI.target = self; installCLI.action = #selector(toggleCLI); installCLI.bezelStyle = .rounded
         let cliHelp = NSButton(title: "사용법", target: self, action: #selector(openCLIHelp)); cliHelp.bezelStyle = .rounded
         let cliRow = NSStackView(views: [installCLI, cliHelp]); cliRow.spacing = 8
         extras.addArrangedSubview(cliRow)
-        hint("터미널, Hammerspoon 등에서 gksdud 명령으로 설정을 바꿀 수 있어요.", in: extras, indent: 0)
+        hint("터미널, Hammerspoon 등에서 gksdud 명령으로 설정을 바꿀 수 있어요.", in: extras, indent: 0, dims: false)
         refreshCLIButton()
         let about = tabPanels[4]; about.alignment = .centerX; about.spacing = 18
         let appIcon = NSImageView(image: NSApp.applicationIconImage)
