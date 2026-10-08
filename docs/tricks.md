@@ -157,7 +157,8 @@
 
 ## 서명과 업데이트
 
-- **고정 인증서 서명**: 로컬 인증서로 서명하고 designated requirement를 인증서에 묶어, 업데이트해도 접근성 권한 유지. ad-hoc 서명은 바이너리 해시에 묶여 교체할 때마다 권한을 다시 허용해야 할 수 있음
+- **Developer ID 서명**: 팀 `2U3AX5XBMH`의 Developer ID로 서명하고 공증. designated requirement가 팀에 묶여 업데이트나 인증서 갱신 뒤에도 접근성 권한 유지. ad-hoc 서명은 바이너리 해시에 묶여 교체할 때마다 권한을 다시 허용해야 할 수 있음
+  - 자체 서명 빌드에서 받은 권한은 켜고 꺼도 예전 인증서 조건이 남아, Developer ID 빌드의 첫 실행에서 `tccutil reset`으로 지우고 다시 요청
 - **자동 업데이트**
   - GitHub 릴리스 자산의 URL·크기·SHA-256 검사, 링크가 든 압축은 거부
   - 새 앱은 설치된 앱의 인증서 요구사항을 만족해야 함. 자체 서명 인증서 앱은 Developer ID 전환을 위해 팀 `2U3AX5XBMH`의 Developer ID 서명도 받음
