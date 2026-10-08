@@ -101,10 +101,23 @@ enum UpdateValidation {
               let requirement else { throw UpdateFailure("현재 앱의 서명 정보를 읽지 못했습니다.") }
         return requirement
     }
+    // Releases move from the self-signed certificate to Developer ID: an app on that certificate also accepts the team's signature.
+    static let legacy = requirement("identifier \"\(identifier)\" and certificate leaf = H\"f1a12a9906f72189094440f2eb8cf2aaa20765ea\"")
+    static let developerID = requirement("anchor apple generic and identifier \"\(identifier)\" and certificate 1[field.1.2.840.113635.100.6.2.6]"
+        + " and certificate leaf[field.1.2.840.113635.100.6.1.13] and certificate leaf[subject.OU] = \"2U3AX5XBMH\"")
+    static func requirement(_ text: String) -> SecRequirement? {
+        var value: SecRequirement?
+        return SecRequirementCreateWithString(text as CFString, SecCSFlags(rawValue: 0), &value) == errSecSuccess ? value : nil
+    }
+    static func movesToDeveloperID(_ installed: URL, _ new: SecStaticCode) throws -> Bool {
+        guard let legacy, let developerID else { return false }
+        let old = try signedCode(installed)
+        return SecStaticCodeCheckValidity(old, strict, legacy) == errSecSuccess && SecStaticCodeCheckValidity(new, strict, developerID) == errSecSuccess
+    }
     static func candidate(_ new: URL, installed: URL, version: String) throws {
         let requirement = try installedRequirement(installed)
         let code = try signedCode(new)
-        guard SecStaticCodeCheckValidity(code, strict, requirement) == errSecSuccess else {
+        guard try SecStaticCodeCheckValidity(code, strict, requirement) == errSecSuccess || movesToDeveloperID(installed, code) else {
             throw UpdateFailure("현재 앱과 업데이트의 서명이 다릅니다. 기존 앱은 그대로 유지됩니다.")
         }
         guard let bundle = Bundle(url: new), bundle.bundleIdentifier == identifier,
