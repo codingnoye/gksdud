@@ -4,7 +4,6 @@ require 'digest'
 require 'fileutils'
 require 'open3'
 require 'tmpdir'
-require 'openssl'
 require_relative 'release-metadata'
 
 def capture!(*args)
@@ -23,10 +22,10 @@ filename = metadata.filename
 archive = File.expand_path(ARGV[1] || "#{root}/outputs/#{filename}")
 abort "Missing archive: #{archive}" unless File.file?(archive)
 abort "Release asset must be named #{filename}" unless File.basename(archive) == filename
-certificate = "#{root}/signing/local-certificate.pem"
-abort 'Missing publisher public certificate' unless File.file?(certificate)
-fingerprint = OpenSSL::Digest::SHA1.hexdigest(OpenSSL::X509::Certificate.new(File.read(certificate)).to_der)
-requirement = "identifier \"#{metadata.identifier}\" and certificate leaf = H\"#{fingerprint}\""
+team = File.read(File.expand_path('../signing/developer-team-id', __dir__)).strip
+abort 'Invalid Developer ID team' unless team.match?(/\A[A-Z0-9]{10}\z/)
+requirement = "anchor apple generic and identifier \"#{metadata.identifier}\" and certificate 1[field.1.2.840.113635.100.6.2.6]" \
+  " and certificate leaf[field.1.2.840.113635.100.6.1.13] and certificate leaf[subject.OU] = \"#{team}\""
 
 Dir.mktmpdir('gksdud-release-') do |stage|
   # Validate ZIP paths before extracting an explicitly selected build artifact.
@@ -38,6 +37,8 @@ Dir.mktmpdir('gksdud-release-') do |stage|
   abort 'Archive must include the current LICENSE' unless File.file?(license) &&
     File.binread(license) == File.binread("#{root}/LICENSE")
   capture!('/usr/bin/codesign', '--verify', '--deep', '--strict', '--all-architectures', '-R', "=#{requirement}", app)
+  capture!('/usr/bin/xcrun', 'stapler', 'validate', app)
+  capture!('/usr/sbin/spctl', '--assess', '--type', 'execute', app)
   %w[CFBundleShortVersionString CFBundleVersion CFBundleIdentifier].each do |key|
     expected = capture!('/usr/libexec/PlistBuddy', '-c', "Print :#{key}", "#{root}/Info.plist")
     expected = version if key == 'CFBundleShortVersionString'
@@ -72,8 +73,6 @@ unless metadata.prerelease?
     uninstall quit: "io.gksdud.inputswitch"
 
     caveats <<~EOS
-      This build is self-signed and is not notarized by Apple.
-      macOS may block its first launch. No security settings are changed by this cask.
       Accessibility permission is required for switching on key press.
       If Homebrew cannot quit gksdud, quit it normally to restore keyboard settings.
     EOS

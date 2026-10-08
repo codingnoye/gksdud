@@ -114,6 +114,25 @@ enum UpdateValidation {
         let old = try signedCode(installed)
         return SecStaticCodeCheckValidity(old, strict, legacy) == errSecSuccess && SecStaticCodeCheckValidity(new, strict, developerID) == errSecSuccess
     }
+    static var runsWithDeveloperID: Bool {
+        var code: SecCode?
+        guard let developerID, SecCodeCopySelf(SecCSFlags(rawValue: 0), &code) == errSecSuccess, let code else { return false }
+        return SecCodeCheckValidity(code, SecCSFlags(rawValue: 0), developerID) == errSecSuccess
+    }
+    // A permission given to a self-signed build stays listed as allowed but no longer applies to the Developer ID build, and
+    // switching it off and on keeps the old certificate. The first Developer ID launch after one ran removes it, so that
+    // allowing again adds a new one.
+    static func forgetSelfSignedPermissions(defaults: UserDefaults, developerID: Bool = UpdateValidation.runsWithDeveloperID,
+                                            reset: (String) -> Void = { service in
+        _ = try? UpdateValidation.command("/usr/bin/tccutil", ["reset", service, UpdateValidation.identifier])
+    }) -> Bool {
+        guard developerID, !defaults.bool(forKey: "permissions.developerID") else { return false }
+        defaults.set(true, forKey: "permissions.developerID")
+        // Written by every launch since 1.1: a first installation has nothing to remove.
+        guard defaults.object(forKey: "updates.nextCheck") != nil else { return false }
+        for service in ["Accessibility", "PostEvent"] { reset(service) }
+        return true
+    }
     static func candidate(_ new: URL, installed: URL, version: String) throws {
         let requirement = try installedRequirement(installed)
         let code = try signedCode(new)
