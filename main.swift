@@ -1143,7 +1143,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         repair()
         // Once launching has applied the settings, so a command right after `gksdud start` finds it ready.
         startCommandServer()
-        if showInMenuBar.state == .off || CommandLine.arguments.contains("--settings") { showSettings() }
+        // Restarted by an update, the window comes back on the tab it was installed from. Asking for the permission again opens it
+        // on the way back from System Settings instead, as a window shown first would cover the system's request.
+        if ProcessInfo.processInfo.environment["GKSDUD_UPDATE_READY"] != nil && !askForPermission { showAbout() }
+        else if showInMenuBar.state == .off || CommandLine.arguments.contains("--settings") { showSettings() }
         // Why it asks again, then the system's request, which offers its settings; coming back from there opens this app's.
         if askForPermission {
             DispatchQueue.main.async { [weak self] in
