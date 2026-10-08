@@ -43,6 +43,13 @@ case "$mode" in
   *) echo 'GKSDUD_SIGN_MODE must be local, developer-id, or ad-hoc' >&2; exit 1 ;;
 esac
 [[ ${#notary[@]} -eq 0 || $mode == developer-id ]] || { echo 'Notarization needs GKSDUD_SIGN_MODE=developer-id.' >&2; exit 1; }
+# Apps up to 1.7.1 install only updates signed with the self-signed certificate, which they find by the old archive name.
+# While they move to Developer ID, GKSDUD_SELF_SIGNED_COPY also writes the same app signed that way under that name.
+if [[ -n ${GKSDUD_SELF_SIGNED_COPY:-} ]]; then
+  [[ $mode == developer-id && -f signing/local-certificate.pem ]] ||
+    { echo 'The self-signed copy needs GKSDUD_SIGN_MODE=developer-id and signing/local-certificate.pem.' >&2; exit 1; }
+  self_signed=$(openssl x509 -in signing/local-certificate.pem -noout -fingerprint -sha1 | cut -d= -f2 | tr -d ':')
+fi
 # The command-line tool inside is signed before the app, with an identifier of its own.
 sign() {
   local requirement=()
@@ -93,6 +100,17 @@ sign "$test_app" "$identifier"
 # The command-line tool answers help without the app, and refuses wrong arguments before asking it.
 "$stage/$app.app/Contents/Helpers/gksdud" help settings >/dev/null
 if "$stage/$app.app/Contents/Helpers/gksdud" set no-such=on 2>/dev/null; then exit 1; else test $? -eq 2; fi
+if [[ -n ${self_signed:-} ]]; then
+  copy="$stage/self-signed/$app.app"
+  mkdir "$stage/self-signed"; ditto "$stage/$app.app" "$copy"
+  sign_self_signed() {
+    codesign --force --sign "$self_signed" --timestamp=none --identifier "$2" --options runtime \
+      --requirements "=designated => identifier \"$2\" and certificate leaf = H\"$self_signed\"" "$1"
+  }
+  sign_self_signed "$copy/Contents/Helpers/gksdud" "$identifier.cli"
+  sign_self_signed "$copy" "$identifier"
+  codesign --verify --deep --strict "$copy"
+fi
 if [[ ${#notary[@]} -gt 0 ]]; then
   ditto -c -k --keepParent --norsrc "$stage/$app.app" "$stage/notarize.zip"
   result=$(xcrun notarytool submit "$stage/notarize.zip" "${notary[@]}" --wait --timeout 30m --output-format json) || true
@@ -105,7 +123,8 @@ if [[ ${#notary[@]} -gt 0 ]]; then
   spctl --assess --type execute -vv "$stage/$app.app"
 fi
 version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$stage/$app.app/Contents/Info.plist")
-ditto -c -k --keepParent --norsrc "$stage/$app.app" "$output_dir/$app-$version-macos-universal.zip"
+ditto -c -k --keepParent --norsrc "$stage/$app.app" "$output_dir/$app-$version.zip"
+[[ -z ${copy:-} ]] || ditto -c -k --keepParent --norsrc "$copy" "$output_dir/$app-$version-macos-universal.zip"
 codesign -d -r- "$stage/$app.app"
 echo "Built app: $stage/$app.app"
 echo "Test app: $test_app"
