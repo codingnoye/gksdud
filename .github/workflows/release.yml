@@ -18,6 +18,10 @@ on:
         description: User-facing release summary
         required: true
         type: string
+      release_warning:
+        description: What users must know before installing, confirmed in the app before an update (optional)
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -174,7 +178,7 @@ jobs:
           if [[ "$CHANNEL" == pre ]]; then
             options=(--prerelease --latest=false --title "gksdud $VERSION Pre-release" --notes-file .github/PRERELEASE_NOTES.md --generate-notes)
           elif [[ "$CHANNEL" == canary ]]; then
-            # The annotated tag's message goes above the canary notes: its ### 요약 is what the app shows.
+            # The annotated tag's message goes above the canary notes: the app shows its ### 요약 and confirms its ### 경고.
             notes=$(mktemp "${RUNNER_TEMP:-/tmp}/gksdud-canary-notes.XXXXXX")
             read -r type sha < <(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq '.object.type + " " + .object.sha')
             if [[ "$type" == tag ]]; then gh api "repos/$GITHUB_REPOSITORY/git/tags/$sha" --jq .message > "$notes"; printf '\n' >> "$notes"; fi
@@ -192,6 +196,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_SUMMARY: ${{ inputs.release_summary }}
+          RELEASE_WARNING: ${{ inputs.release_warning }}
           RELEASE_TAG: ${{ steps.version.outputs.tag }}
         run: ruby scripts/publish-release.rb "$GITHUB_REPOSITORY" "$RELEASE_TAG"
 

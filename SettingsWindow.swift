@@ -263,7 +263,18 @@ extension AppDelegate {
     }
     @objc func showAbout() { showSettings(); selectTab(tabPanels.count - 1) }
     @objc func checkForUpdates() { installer.clearStatus(); updates.check(force: true) }
-    @objc func performUpdate() { if let release = updates.available { installer.start(release) } }
+    @objc func performUpdate() {
+        guard let release = updates.available else { return }
+        // The warnings of every version the update installs, such as permissions to allow again, are read first.
+        let warnings = updates.warnings
+        if !warnings.isEmpty {
+            let alert = NSAlert(); alert.alertStyle = .warning
+            alert.messageText = "업데이트 전에 확인해주세요"; alert.informativeText = warnings
+            alert.addButton(withTitle: "업데이트 설치"); alert.addButton(withTitle: "취소")
+            guard runAlert(alert) == .alertFirstButtonReturn, updates.available?.tag_name == release.tag_name else { return }
+        }
+        installer.start(release)
+    }
     func installPreparedUpdate(_ prepared: PreparedUpdate) {
         do {
             guard !engine.isUpdatingSettings else { throw UpdateFailure("설정을 적용하고 있습니다. 잠시 후 다시 시도해주세요.") }
@@ -289,7 +300,7 @@ extension AppDelegate {
         for entry in item?.menu?.items ?? [] where entry.action == #selector(showAbout) { entry.isHidden = release == nil }
         let latest = release.map { " → v\($0.versionString)" } ?? ""
         updateHeading.stringValue = "v\(updates.installedVersion)\(latest)"
-        updateSummary.string = release?.summary ?? ""
+        updateSummary.string = updates.summary
         updateScroll.isHidden = release == nil
         updateButton.isHidden = release == nil
         updateButton.isEnabled = !installer.busy
