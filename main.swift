@@ -1072,6 +1072,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         sentSwitch = SentSwitch(from: currentLanguage, at: ProcessInfo.processInfo.systemUptime)
     }
     func switchInFlight(from language: String) -> Bool { sentSwitch?.inFlight(now: ProcessInfo.processInfo.systemUptime, language: language) == true }
+    func permissionAgainAlert() -> NSAlert {
+        let name = UpdateChannel.current.appName, alert = NSAlert()
+        alert.messageText = "손쉬운 사용 권한을 다시 허용해주세요"
+        alert.informativeText = "\(name)가 Apple 서명 버전으로 바뀌어, 이전에 허용한 권한을 macOS가 더 이상 인정하지 않습니다. 다음 창에서 시스템 설정을 열고 \(name)를 켜주세요. 켜면 한영 전환도 다시 켜집니다."
+        alert.addButton(withTitle: "계속")
+        return alert
+    }
     @objc func requestPressAccess() {
         returningFromPermissionSettings = true
         permissionSettingsWasActive = false
@@ -1137,8 +1144,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         // Once launching has applied the settings, so a command right after `gksdud start` finds it ready.
         startCommandServer()
         if showInMenuBar.state == .off || CommandLine.arguments.contains("--settings") { showSettings() }
-        // The system's request offers its settings, and coming back from there opens this app's.
-        if askForPermission { requestPressAccess() }
+        // Why it asks again, then the system's request, which offers its settings; coming back from there opens this app's.
+        if askForPermission {
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                NSApp.activate(ignoringOtherApps: true); _ = self.runAlert(self.permissionAgainAlert())
+                self.requestPressAccess()
+            }
+        }
         UpdateInstaller.acknowledgeLaunch()
     }
     func applicationDidBecomeActive(_ notification: Notification) {

@@ -70,6 +70,7 @@ func runFeatureTests() {
     featureCheck(partly.summary == "v1.3.0\n* 탭 추가\n  * 세부\n* 개선\n* 문장\n\nv1.2.8\n* 작은 수정" && partly.warnings == "v1.2.8\n* 설정 초기화")
     featureCheck(UpdateChecker(defaults: defaults, installedVersion: "1.2.8", channel: .stable).warnings.isEmpty)
     featureCheck(stable("1.3.0", nil).summaryItems == ["* " + release(nil).summary])
+    featureCheck(stable("1.3.0", nil).archiveName == "gksdud-1.3.0.zip", "The Apple-signed archive; the old name is the self-signed copy")
     print("PASS: numeric versions, release summary boundaries, trusted release URLs, daily schedule, retry/cache/offline/upgrade behavior, summaries and warnings of every newer version")
     do { try runUpdateInstallTests() } catch { preconditionFailure("Installer tests: \(error)") }
     runPrereleaseTests()
@@ -744,7 +745,7 @@ func runCanaryTests() {
         AppRelease(tag_name: tag, html_url: "https://github.com/codingnoye/gksdud/releases/tag/\(tag)", body: "### 요약\n- \(tag)", draft: draft, prerelease: pre)
     }
     let canary = release("canary-v1.3.0")
-    featureCheck(canary.channel == .canary && canary.versionString == "1.3.0" && canary.archiveName == "gksdud-dev-1.3.0-macos-universal.zip")
+    featureCheck(canary.channel == .canary && canary.versionString == "1.3.0" && canary.archiveName == "gksdud-dev-1.3.0.zip")
     featureCheck(canary.isNewer(than: "1.2.0") && !release("canary-v1.3.0", pre: false).isNewer(than: "1.2.0"), "Canary releases are prereleases")
     featureCheck(release("v1.3.0", pre: false).channel == .stable && !release("v1.3.0").isNewer(than: "1.2.0") && release("pre-v1.3.0").channel == nil)
     let suite = "io.gksdud.canary-tests.\(UUID().uuidString)"

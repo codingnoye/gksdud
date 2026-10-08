@@ -1172,6 +1172,9 @@ func runPermissionTests() {
     precondition(!moved.active && movedDelegate.reactivateWhenTrusted)
     allowed = true; movedDelegate.repair()
     precondition(moved.active && movedDelegate.enabled.state == .on && !movedDelegate.reactivateWhenTrusted, "Allowed again, it turns back on")
+    let again = movedDelegate.permissionAgainAlert()
+    precondition(again.messageText == "손쉬운 사용 권한을 다시 허용해주세요" && again.informativeText.contains("Apple 서명 버전")
+                 && again.buttons.map(\.title) == ["계속"], "The reason comes before the system's request")
     // Replacing the Mac input menu is on by default and works only while this app's icon shows.
     precondition(delegate.replaceInputMenu.state == .on && delegate.replaceInputMenu.isEnabled && !engine.showsSystemInputMenu)
     delegate.replaceInputMenu.state = .off; delegate.toggleReplaceInputMenu()

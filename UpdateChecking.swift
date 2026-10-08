@@ -36,7 +36,9 @@ struct AppRelease: Codable {
     }
     var channel: UpdateChannel? { tag_name.hasPrefix("canary-v") ? .canary : tag_name.hasPrefix("v") ? .stable : nil }
     var versionString: String { String(tag_name.dropFirst(channel?.tagPrefix.count ?? 0)) }
-    var archiveName: String { "\(channel?.appName ?? "gksdud")-\(versionString)-macos-universal.zip" }
+    // The Apple-signed archive. -macos-universal.zip is the self-signed copy for apps up to 1.7.1, which take only that name: from
+    // it, the next update is Apple-signed.
+    var archiveName: String { "\(channel?.appName ?? "gksdud")-\(versionString).zip" }
     // Canary releases are prereleases, so the stable app and Homebrew never see them.
     var eligible: Bool { !draft && channel != nil && prerelease == (channel == .canary) && pageURL != nil && ReleaseVersion(versionString) != nil }
     func isNewer(than installed: String) -> Bool {

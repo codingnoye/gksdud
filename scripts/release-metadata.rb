@@ -1,5 +1,9 @@
 # Shared tag validation and asset naming for the release workflow and verifier.
 class ReleaseMetadata
+  # While apps up to 1.7.1 move to Developer ID: they install only updates signed with the self-signed certificate, found
+  # by the old archive name, so stable and canary releases also carry that copy. False once the move is over.
+  SELF_SIGNED_COPY = true
+
   attr_reader :version, :tag
 
   def initialize(version, tag = "v#{version}")
@@ -34,12 +38,17 @@ class ReleaseMetadata
   end
 
   def filename
-    channel == 'canary' ? "#{app}-#{version}-macos-universal.zip" : "gksdud-#{asset_version}-macos-universal.zip"
+    channel == 'canary' ? "#{app}-#{version}.zip" : "gksdud-#{asset_version}.zip"
+  end
+
+  # The name apps up to 1.7.1 download; prereleases were never their updates.
+  def self_signed_filename
+    "#{app}-#{version}-macos-universal.zip" if SELF_SIGNED_COPY && channel != 'pre'
   end
 
   def outputs
     { version: version, tag: tag, channel: channel, prerelease: prerelease?,
-      asset_version: asset_version, filename: filename }
+      asset_version: asset_version, filename: filename, self_signed_filename: self_signed_filename.to_s }
   end
 end
 
