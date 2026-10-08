@@ -3,7 +3,8 @@ import Foundation
 // The gksdud command's settings, arguments and help, shared by the command-line tool and the app that runs its commands.
 // Foundation only, so the tool starts quickly.
 enum CLI {
-    static let port = "io.gksdud.inputswitch.cli"
+    // Named after the app's bundle identifier, so gksdud and the canary gksdud-dev each answer their own command.
+    static func port(_ app: String?) -> String { (app ?? "io.gksdud.inputswitch") + ".cli" }
     // 0 everything done, 1 something failed, 2 the arguments were wrong, 3 the app did not answer.
     enum Exit { static let ok: Int32 = 0, failed: Int32 = 1, usage: Int32 = 2, notRunning: Int32 = 3 }
 

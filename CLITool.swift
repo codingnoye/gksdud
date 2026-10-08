@@ -50,6 +50,8 @@ enum Tool {
         return bundle.pathExtension == "app" ? bundle : nil
     }
 
+    static var port: CFString { CLI.port(app.flatMap { Bundle(url: $0)?.bundleIdentifier }) as CFString }
+
     struct Reply { var exit: Int32; var text: String; var json: [String: Any] }
     // While the app applies a change, it asks again for a few seconds.
     static func send(_ arguments: [String]) -> Reply? {
@@ -61,7 +63,7 @@ enum Tool {
         }
     }
     static func request(_ arguments: [String]) -> Reply? {
-        guard let port = CFMessagePortCreateRemote(nil, CLI.port as CFString),
+        guard let port = CFMessagePortCreateRemote(nil, Self.port),
               let request = try? JSONSerialization.data(withJSONObject: ["args": arguments]) else { return nil }
         var data: Unmanaged<CFData>?
         // Applying can wait on macOS's own settings for a moment.
@@ -85,7 +87,7 @@ enum Tool {
     }
 
     static func start() -> Never {
-        if CFMessagePortCreateRemote(nil, CLI.port as CFString) != nil { finish("gksdud가 이미 실행 중입니다.", CLI.Exit.ok) }
+        if CFMessagePortCreateRemote(nil, Self.port) != nil { finish("gksdud가 이미 실행 중입니다.", CLI.Exit.ok) }
         guard let app else { finish("gksdud 앱을 찾지 못했습니다.", CLI.Exit.failed) }
         let open = Process()
         open.executableURL = URL(fileURLWithPath: "/usr/bin/open")
@@ -93,7 +95,7 @@ enum Tool {
         do { try open.run(); open.waitUntilExit() } catch { finish(error.localizedDescription, CLI.Exit.failed) }
         let deadline = Date().addingTimeInterval(10)
         while Date() < deadline {
-            if CFMessagePortCreateRemote(nil, CLI.port as CFString) != nil { finish("gksdud를 실행했습니다.", CLI.Exit.ok) }
+            if CFMessagePortCreateRemote(nil, Self.port) != nil { finish("gksdud를 실행했습니다.", CLI.Exit.ok) }
             usleep(50_000)
         }
         finish("gksdud가 응답하지 않습니다.", CLI.Exit.notRunning)

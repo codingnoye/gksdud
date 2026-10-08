@@ -49,7 +49,7 @@ extension AppDelegate {
     // The command-line tool finds the app by this port; a second instance leaves it to the first.
     func startCommandServer() {
         var context = CFMessagePortContext(version: 0, info: Unmanaged.passUnretained(self).toOpaque(), retain: nil, release: nil, copyDescription: nil)
-        guard let port = CFMessagePortCreateLocal(nil, CLI.port as CFString, { _, _, data, info in
+        guard let port = CFMessagePortCreateLocal(nil, CLI.port(Bundle.main.bundleIdentifier) as CFString, { _, _, data, info in
             guard let info else { return nil }
             let owner = Unmanaged<AppDelegate>.fromOpaque(info).takeUnretainedValue()
             let request = (data as Data?).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
@@ -238,7 +238,7 @@ extension AppDelegate {
         case "active": return flip(enabled) { toggleEnabled() }
         case "login":
             let blocked = flip(login) { toggleLogin() }
-            if blocked == nil, on, SMAppService.mainApp.status == .requiresApproval { commandSession?.errors.append("시스템 설정 → 로그인 항목에서 gksdud를 허용하세요.") }
+            if blocked == nil, on, SMAppService.mainApp.status == .requiresApproval { commandSession?.errors.append("시스템 설정 → 로그인 항목에서 \(UpdateChannel.current.appName)를 허용하세요.") }
             return blocked
         case "menubar": return flip(showInMenuBar) { toggleHidden() }
         case "replace-input-menu": return flip(replaceInputMenu, unless: "메뉴바에 표시를 켜야 쓸 수 있습니다.") { toggleReplaceInputMenu() }
@@ -510,7 +510,7 @@ extension AppDelegate {
     // MARK: Installing
 
     // In /usr/local/bin, which every shell has on its PATH, as a link into this app: updates keep it current.
-    static let cliLink = "/usr/local/bin/gksdud"
+    static let cliLink = "/usr/local/bin/" + UpdateChannel.current.appName
     var cliTool: String { Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/gksdud").path }
     var cliLinked: Bool { (try? FileManager.default.destinationOfSymbolicLink(atPath: Self.cliLink)) == cliTool }
     func refreshCLIButton() {

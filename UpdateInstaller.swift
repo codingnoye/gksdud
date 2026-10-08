@@ -76,7 +76,9 @@ enum UpdateProcessLauncher {
 // The installer has no signing secrets and never modifies signature requirements.
 // A new bundle must satisfy the currently installed app's certificate-bound identity.
 enum UpdateValidation {
-    static let identifier = "io.gksdud.inputswitch"
+    static let identifier = Bundle.main.bundleIdentifier ?? "io.gksdud.inputswitch"
+    // The app inside an update archive: gksdud.app, or gksdud-dev.app for canary.
+    static let appFolder = UpdateChannel.current.appName + ".app"
     static let strict = SecCSFlags(rawValue: kSecCSCheckAllArchitectures | kSecCSStrictValidate | kSecCSCheckNestedCode)
     static func signedCode(_ path: URL) throws -> SecStaticCode {
         var code: SecStaticCode?
@@ -130,11 +132,11 @@ enum UpdateValidation {
         let actual = hash.finalize().map { String(format: "%02x", $0) }.joined()
         guard actual == matches[0] else { throw UpdateFailure("다운로드한 파일의 체크섬이 일치하지 않습니다. 다시 시도해주세요.") }
     }
-    static func archiveNames(_ names: String, listing: String) throws {
+    static func archiveNames(_ names: String, listing: String, app: String = appFolder) throws {
         let entries = names.split(separator: "\n", omittingEmptySubsequences: true)
         guard !entries.isEmpty, entries.count <= 5000,
               entries.allSatisfy({ name in
-                  (name == "gksdud.app/" || name.hasPrefix("gksdud.app/")) && !name.contains("\\")
+                  (name == "\(app)/" || name.hasPrefix("\(app)/")) && !name.contains("\\")
                       && !name.split(separator: "/").contains("..") && !name.contains("\r")
               }) else { throw UpdateFailure("업데이트 압축 파일의 경로가 올바르지 않습니다.") }
         // This app's archives contain only regular files/directories. Reject links
@@ -242,7 +244,7 @@ final class UpdateInstaller: @unchecked Sendable {
                 let expanded = directory.appendingPathComponent("expanded", isDirectory: true)
                 try FileManager.default.createDirectory(at: expanded, withIntermediateDirectories: false)
                 try UpdateValidation.command("/usr/bin/ditto", ["-x", "-k", archive.path, expanded.path])
-                let candidate = expanded.appendingPathComponent("gksdud.app", isDirectory: true)
+                let candidate = expanded.appendingPathComponent(UpdateValidation.appFolder, isDirectory: true)
                 try UpdateValidation.candidate(candidate, installed: installed, version: release.versionString)
                 let prepared = PreparedUpdate(directory: directory, candidate: candidate, version: release.versionString)
                 DispatchQueue.main.async {
@@ -279,7 +281,7 @@ final class UpdateInstaller: @unchecked Sendable {
         let installed = Bundle.main.bundleURL.resolvingSymlinksInPath()
         guard workspace.lastPathComponent.hasPrefix("gksdud-update-"),
               workspace.path == workspace.resolvingSymlinksInPath().path,
-              candidate.path == workspace.appendingPathComponent("expanded/gksdud.app").path,
+              candidate.path == workspace.appendingPathComponent("expanded/\(UpdateValidation.appFolder)").path,
               candidate.path == candidate.resolvingSymlinksInPath().path,
               installed.pathExtension == "app" else { throw UpdateFailure("잘못된 업데이트 경로입니다.") }
         defer { try? FileManager.default.removeItem(at: workspace) }
