@@ -107,6 +107,7 @@ extension AppDelegate {
         case "menubar": return .bool(!engine.defaults.bool(forKey: "hidden"))
         case "replace-input-menu": return .bool(engine.replacesInputMenu)
         case "icon": return .text(CLI.iconNames[iconStyle])
+        case "icon-case": return .bool(engine.defaults.bool(forKey: "iconCase"))
         case "keys": return .list(keyNames(engine.defaultSources))
         case "target": return .text(engine.target.name)
         case "keyboard-default": return .bool(engine.keyboards.defaultEnabled)
@@ -241,6 +242,7 @@ extension AppDelegate {
             return blocked
         case "menubar": return flip(showInMenuBar) { toggleHidden() }
         case "replace-input-menu": return flip(replaceInputMenu, unless: "메뉴바에 표시를 켜야 쓸 수 있습니다.") { toggleReplaceInputMenu() }
+        case "icon-case": return flip(iconCaseSwitch, unless: "메뉴바에 표시를 켜야 쓸 수 있습니다.") { toggleIconCase() }
         case "long-press": return flip(longPressSwitch) { toggleFeature(longPressSwitch) }
         case "preserve-case": return flip(preserveCapsSwitch) { toggleFeature(preserveCapsSwitch) }
         case "korean-caps-lock": return flip(koreanCapsSwitch) { toggleFeature(koreanCapsSwitch) }

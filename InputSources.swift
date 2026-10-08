@@ -275,7 +275,12 @@ extension AppDelegate {
         holdKeys = false
         let keys = heldKeys
         heldKeys = []
-        for key in keys { key.setIntegerValueField(.eventSourceUserData, value: nativePulseMarker); key.post(tap: .cghidEventTap) }
+        let caps = currentCaps
+        for key in keys {
+            // With the lock as it is now, as a key pressed now would have it.
+            key.flags = capsFlags(key.flags, caps: caps)
+            key.setIntegerValueField(.eventSourceUserData, value: nativePulseMarker); key.post(tap: .cghidEventTap)
+        }
     }
     // The recent sources macOS keeps, as far as they are known; otherwise only the current one.
     func seedSourceHistory() {
@@ -294,7 +299,7 @@ extension AppDelegate {
         sourceHistory = SourceHistory(ids.first == current ? ids : current.map { [$0] } ?? [])
     }
     func sourceIcon(_ source: InputSourceIdentity) -> NSImage {
-        isKorean(source) || isEnglish(source) ? sourceMenuIcon(korean: isKorean(source))
+        isKorean(source) || isEnglish(source) ? sourceMenuIcon(korean: isKorean(source), upper: englishCase())
             : badgeImage(label: sourceBadgeLabel(source.language, position: sourcePosition(source.id)), filled: false)
     }
     // Counted in the cycle's order, which starts as Korean, English, then the rest; a source outside it follows that
@@ -365,6 +370,8 @@ final class AddedSourcesSettings: NSObject {
     let warning = NSTextField(wrappingLabelWithString: "")
     private let cycleRows = NSStackView(), separateRows = NSStackView()
     private var labels: [NSTextField] = []
+    // English icons in the order and the add menu, which follow its case without rebuilding the section.
+    private var englishIcons: [NSImageView] = [], englishItems: [NSMenuItem] = []
     private var signature = ""
     private var error: String?
     static let rowHeight: CGFloat = 26
@@ -446,6 +453,7 @@ final class AddedSourcesSettings: NSObject {
         separateRows.isHidden = engine.addedSourceMode != .separate
         // Cycle: the saved order, with sources macOS no longer offers dimmed.
         list.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        englishIcons = []; englishItems = []
         for (index, id) in cycle.enumerated() {
             let source = enabled.first { $0.id == id }
             list.addArrangedSubview(cycleRow(id, source: source, index: index, count: cycle.count, usable: usable))
@@ -454,6 +462,7 @@ final class AddedSourcesSettings: NSObject {
         for source in enabled where !cycle.contains(source.id) {
             addPicker.addItem(withTitle: AppDelegate.sourceTitle(source.id))
             addPicker.lastItem?.representedObject = source.id; addPicker.lastItem?.image = owner.sourceIcon(source)
+            if isEnglish(source), let item = addPicker.lastItem { englishItems.append(item) }
         }
         // Separate: one key and one input source that is neither Korean nor English.
         keyPicker.removeAllItems(); keyPicker.addItem(withTitle: "선택 안 함")
@@ -488,8 +497,13 @@ final class AddedSourcesSettings: NSObject {
             : engine.keyboards.result.extraBlocked > 0 ? "\(engine.separateTarget.name)이 다른 키 매핑에서 사용 중이라 전환 키를 적용하지 못했습니다." : "")
         warning.isHidden = warning.stringValue.isEmpty
     }
+    func showEnglishIcon(_ image: NSImage) {
+        for icon in englishIcons where icon.image !== image { icon.image = image }
+        for item in englishItems where item.image !== image { item.image = image }
+    }
     private func cycleRow(_ id: String, source: InputSourceIdentity?, index: Int, count: Int, usable: Bool) -> NSView {
         let icon = NSImageView(image: source.map(owner.sourceIcon) ?? owner.badgeImage(label: sourceBadgeLabel("", position: index + 1), filled: false))
+        if source.map(isEnglish) == true { englishIcons.append(icon) }
         icon.contentTintColor = source == nil || !usable ? .disabledControlTextColor : .labelColor
         icon.widthAnchor.constraint(equalToConstant: 22).isActive = true; icon.heightAnchor.constraint(equalToConstant: 20).isActive = true
         let name = NSTextField(labelWithString: AppDelegate.sourceTitle(id))

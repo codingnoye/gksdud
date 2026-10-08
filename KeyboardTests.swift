@@ -1127,7 +1127,7 @@ func runPermissionTests() {
     let delegate = AppDelegate(engine: engine)
     delegate.buildWindow()
     delegate.updatePressAccess()
-    let settings: [NSControl] = [delegate.enabled, delegate.login, delegate.showInMenuBar, delegate.iconPicker, delegate.picker,
+    let settings: [NSControl] = [delegate.enabled, delegate.login, delegate.showInMenuBar, delegate.iconPicker, delegate.iconCaseSwitch, delegate.picker,
                                  delegate.advancedButton, delegate.longPressSwitch, delegate.escapeSwitch, delegate.addedSources.enable] + delegate.specialButtons
     precondition(settings.allSatisfy { !$0.isEnabled } && delegate.pressAccess.isEnabled, "Only the permission button is left")
     precondition(delegate.settingLabels.allSatisfy { $0.label.textColor == .disabledControlTextColor }, "Titles and hints dim too")
@@ -1159,8 +1159,60 @@ func runPermissionTests() {
     let shown = delegate.inputBadge.image
     delegate.updateInputIndicator()
     precondition(shown != nil && delegate.inputBadge.image === shown, "An unchanged source keeps its image")
+    let preview = delegate.englishPreview.image
     delegate.iconPicker.selectItem(at: (delegate.iconStyle + 1) % 4); delegate.changeIconStyle()
-    precondition(delegate.inputBadge.image !== shown, "Another style shows at once")
-    print("PASS: without Accessibility, settings disabled and activation off; granted again, settings back and activation still off; replacing the Mac input menu; indicator image kept while unchanged")
+    precondition(delegate.englishPreview.image !== preview, "Another style shows at once")
+    // Off by default, every style looks as it did; on, only English follows Caps Lock.
+    // The character style draws a face, so only the lettered ones have labels.
+    precondition((0...2).map { iconLabel(style: $0, korean: false) } == ["dud", "A", "EN"]
+        && (0...2).map { iconLabel(style: $0, korean: true) } == ["한", "한", "KO"])
+    precondition((0...2).map { iconLabel(style: $0, korean: false, upper: false) } == ["dud", "a", "en"]
+        && (0...2).map { iconLabel(style: $0, korean: false, upper: true) } == ["DuD", "A", "EN"]
+        && (0...2).allSatisfy { iconLabel(style: $0, korean: true, upper: false) == iconLabel(style: $0, korean: true, upper: true) })
+    precondition(englishIconCase(inEnglish: true, lock: true, restores: false) && !englishIconCase(inEnglish: false, lock: true, restores: false)
+        && englishIconCase(inEnglish: false, lock: true, restores: nil), "Away from English, the case preservation restores")
+    let english = (source: InputSourceIdentity(id: "com.apple.keylayout.US", language: "en"), badge: "")
+    let korean = (source: InputSourceIdentity(id: capsSafeKorean, language: "ko"), badge: "")
+    let japanese = (source: InputSourceIdentity(id: "com.apple.inputmethod.Kotoeri.RomajiTyping.Japanese", language: "ja"), badge: "JA")
+    func badge(_ indicator: (source: InputSourceIdentity, badge: String), caps: Bool) -> NSImage? {
+        delegate.indicator = indicator
+        delegate.observeCaps(caps); delegate.showIndicator()
+        return delegate.inputBadge.image
+    }
+    precondition(!delegate.showsIconCase && delegate.iconCaseSwitch.state == .off && delegate.iconCaseSwitch.isEnabled)
+    for style in 0...3 {
+        delegate.iconPicker.selectItem(at: style); delegate.changeIconStyle()
+        delegate.iconCaseSwitch.state = .off; delegate.toggleIconCase()
+        precondition(badge(english, caps: true) === badge(english, caps: false), "Off, Caps Lock changes nothing")
+        delegate.iconCaseSwitch.state = .on; delegate.toggleIconCase()
+        let lower = badge(english, caps: false), upper = badge(english, caps: true)
+        precondition(lower !== upper && delegate.englishPreview.image === upper, "On, English and its preview follow Caps Lock")
+        precondition(badge(korean, caps: true) === badge(korean, caps: false) && badge(japanese, caps: true) === badge(japanese, caps: false)
+            && delegate.inputBadge.image === delegate.badgeImage(label: "JA", filled: false), "Other sources stay as they were")
+        precondition(badge(english, caps: true) === upper, "The same icon is kept, not drawn again")
+    }
+    // Hiding the menu bar icon keeps the choice but turns it off and dims it, as with replacing the Mac input menu.
+    delegate.showInMenuBar.state = .off; delegate.toggleHidden()
+    precondition(!delegate.iconCaseSwitch.isEnabled && delegate.iconCaseSwitch.state == .on && !delegate.showsIconCase
+        && badge(english, caps: true) === badge(english, caps: false), "Hidden, the choice waits")
+    // Shown again without putting another icon in the real menu bar.
+    engine.defaults.set(false, forKey: "hidden"); delegate.showInMenuBar.state = .on; delegate.updatePressAccess()
+    precondition(delegate.iconCaseSwitch.isEnabled && delegate.showsIconCase && badge(english, caps: true) !== badge(english, caps: false))
+    delegate.iconCaseSwitch.state = .off; delegate.toggleIconCase()
+    // The lock seen last stands for the session's until no tap watches it.
+    delegate.observeCaps(!delegate.actualCaps)
+    precondition(delegate.currentCaps != delegate.actualCaps)
+    delegate.stopKeyTap()
+    precondition(delegate.observedCaps == nil && delegate.currentCaps == delegate.actualCaps)
+    // The character's D eye draws differently from its d.
+    func pixels(_ image: NSImage) -> Data {
+        let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 44, pixelsHigh: 40, bitsPerSample: 8, samplesPerPixel: 4,
+            hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+        NSGraphicsContext.saveGraphicsState(); NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
+        image.draw(in: NSRect(x: 0, y: 0, width: 44, height: 40)); NSGraphicsContext.restoreGraphicsState()
+        return Data(bytes: bitmap.bitmapData!, count: bitmap.bytesPerPlane)
+    }
+    precondition(pixels(DudIcon.badge(korean: false)) != pixels(DudIcon.badge(korean: false, upper: true)))
+    print("PASS: without Accessibility, settings disabled and activation off; granted again, settings back and activation still off; replacing the Mac input menu; indicator image kept while unchanged; English icon case only with its option, other sources unchanged")
 }
 #endif

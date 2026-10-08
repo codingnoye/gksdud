@@ -55,6 +55,12 @@ func runCommandTests() {
     precondition(run("toggle", "long-press").exit == CLI.Exit.ok && !engine.longPressCapsLock)
     reply = run("set", "escape=on")
     precondition(reply.exit == CLI.Exit.ok && results(reply).first?["changed"] as? Bool == false, "Already so is a success")
+    precondition(run("get", "icon-case").text == "off" && run("set", "icon-case=on").exit == CLI.Exit.ok && delegate.showsIconCase
+        && delegate.iconCaseSwitch.state == .on && run("toggle", "icon-case").exit == CLI.Exit.ok && !delegate.showsIconCase)
+    precondition(run("set", "menubar=off").exit == CLI.Exit.ok && run("set", "icon-case=on").exit == CLI.Exit.failed
+        && run("get", "icon-case").text == "off", "Without the menu bar icon it waits, as in the window")
+    // Back without putting an icon in the real menu bar.
+    defaults.set(false, forKey: "hidden"); delegate.showInMenuBar.state = .on; delegate.updatePressAccess()
     print("PASS: get one value or all, set several, toggle, unchanged values")
 
     // Caps Lock in Korean needs case preservation, which comes later in the same command.

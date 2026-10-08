@@ -2,7 +2,7 @@ import AppKit
 
 // Shared character geometry; cream artwork in the app, templates in the menu bar.
 enum DudIcon {
-    static func drawFace(in context: CGContext, korean: Bool = false) {
+    static func drawFace(in context: CGContext, korean: Bool = false, upper: Bool = false) {
         context.setLineCap(.round)
         context.setLineJoin(.round)
         context.setLineWidth(18)
@@ -15,6 +15,15 @@ enum DudIcon {
                 eye.move(to: CGPoint(x: centerX - 42, y: 218))
                 eye.addLine(to: CGPoint(x: centerX + 42, y: 218))
                 eye.addEllipse(in: CGRect(x: centerX - 38, y: 244.2, width: 76, height: 76))
+            } else if upper {
+                // A D eye for Caps Lock, narrower and lower than the d on the same baseline.
+                let left = centerX - 40, top: CGFloat = 208.2, bottom: CGFloat = 320.2, radius: CGFloat = 56
+                eye.move(to: CGPoint(x: left, y: top))
+                eye.addLine(to: CGPoint(x: centerX - 16, y: top))
+                eye.addArc(center: CGPoint(x: centerX - 16, y: top + radius), radius: radius,
+                    startAngle: -.pi / 2, endAngle: .pi / 2, clockwise: false)
+                eye.addLine(to: CGPoint(x: left, y: bottom))
+                eye.closeSubpath()
             } else {
                 eye.move(to: CGPoint(x: centerX + 48, y: 185.8))
                 eye.addLine(to: CGPoint(x: centerX + 48, y: 272.2))
@@ -48,7 +57,7 @@ enum DudIcon {
         context.restoreGState()
     }
 
-    static func badge(korean: Bool) -> NSImage {
+    static func badge(korean: Bool, upper: Bool = false) -> NSImage {
         let filled = korean
         let image = NSImage(size: NSSize(width: 22, height: 20), flipped: false) { rect in
             let shape = NSBezierPath(roundedRect: rect.insetBy(dx: 0.75, dy: 1.25), xRadius: 3, yRadius: 3)
@@ -62,7 +71,7 @@ enum DudIcon {
                 context.scaleBy(x: scale, y: -scale)
                 context.translateBy(x: -256, y: -255.5)
                 context.setStrokeColor(NSColor.black.cgColor)
-                drawFace(in: context, korean: korean)
+                drawFace(in: context, korean: korean, upper: upper)
                 context.restoreGState()
                 return true
             }

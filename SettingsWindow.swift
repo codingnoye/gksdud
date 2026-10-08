@@ -92,8 +92,21 @@ extension AppDelegate {
             let row = NSStackView(views: [label] + views); row.spacing = 16; row.alignment = .centerY
             panel.addArrangedSubview(row)
         }
-        // Fewer rows than the other tabs, so they spread out: activation, then login and the menu bar, then the keys.
-        let general = tabPanels[0]; general.spacing = 20
+        // Permission, activation and login first, without a title; then the keys and the menu bar. Fewer rows than the
+        // other tabs, so they get more room.
+        let general = tabPanels[0]; general.spacing = 18
+        func section(_ title: String) {
+            general.setCustomSpacing(28, after: general.arrangedSubviews.last!); separator(in: general)
+            general.setCustomSpacing(28, after: general.arrangedSubviews.last!); heading(title, in: general)
+        }
+        // Under 메뉴바에 표시, and only with it.
+        func indented(_ button: NSButton) {
+            button.translatesAutoresizingMaskIntoConstraints = false
+            let row = NSView(); row.addSubview(button)
+            NSLayoutConstraint.activate([button.leadingAnchor.constraint(equalTo: row.leadingAnchor, constant: 20),
+                button.topAnchor.constraint(equalTo: row.topAnchor), button.bottomAnchor.constraint(equalTo: row.bottomAnchor)])
+            full(row, in: general)
+        }
         pressAccess.target = self; pressAccess.action = #selector(requestPressAccess); pressAccess.bezelStyle = .rounded
         pressAccessRequired.font = .systemFont(ofSize: 11); pressAccessRequired.textColor = .systemOrange
         let accessRow = NSStackView(views: [pressAccess, pressAccessRequired]); accessRow.spacing = 8; accessRow.alignment = .centerY
@@ -108,20 +121,26 @@ extension AppDelegate {
         let activation = NSStackView(views: [enabled, keyboardWarningRow])
         activation.orientation = .vertical; activation.alignment = .leading; activation.spacing = 6
         full(activation, in: general); keyboardWarningRow.isHidden = true
-        general.setCustomSpacing(28, after: activation)
         login.target = self; login.action = #selector(toggleLogin)
         login.state = SMAppService.mainApp.status == .enabled ? .on : .off
+        general.addArrangedSubview(login)
+        section("한영 키")
+        picker.show(engine.defaultSources)
+        picker.onChange = { [weak self] _ in self?.selectionChanged() }
+        let keyboards = advancedButton; keyboards.target = self; keyboards.action = #selector(showKeyboardSettings); keyboards.bezelStyle = .rounded
+        let keysRow = NSStackView(views: [picker, keyboards]); keysRow.spacing = 8; keysRow.alignment = .centerY
+        general.addArrangedSubview(keysRow)
+        section("메뉴바")
         showInMenuBar.target = self; showInMenuBar.action = #selector(toggleHidden)
         showInMenuBar.state = engine.defaults.bool(forKey: "hidden") ? .off : .on
-        general.addArrangedSubview(login); general.addArrangedSubview(showInMenuBar)
-        // Under 메뉴바에 표시, and only with it.
-        replaceInputMenu.target = self; replaceInputMenu.action = #selector(toggleReplaceInputMenu)
-        replaceInputMenu.translatesAutoresizingMaskIntoConstraints = false
-        let replaceRow = NSView(); replaceRow.addSubview(replaceInputMenu)
-        NSLayoutConstraint.activate([replaceInputMenu.leadingAnchor.constraint(equalTo: replaceRow.leadingAnchor, constant: 20),
-            replaceInputMenu.topAnchor.constraint(equalTo: replaceRow.topAnchor), replaceInputMenu.bottomAnchor.constraint(equalTo: replaceRow.bottomAnchor)])
+        general.addArrangedSubview(showInMenuBar)
         hint("⌘+드래그로 위치를 옮길 수 있어요.", in: general)
-        general.setCustomSpacing(12, after: general.arrangedSubviews.last!); full(replaceRow, in: general)
+        replaceInputMenu.target = self; replaceInputMenu.action = #selector(toggleReplaceInputMenu)
+        general.setCustomSpacing(12, after: general.arrangedSubviews.last!); indented(replaceInputMenu)
+        iconCaseSwitch.target = self; iconCaseSwitch.action = #selector(toggleIconCase)
+        iconCaseSwitch.state = engine.defaults.bool(forKey: "iconCase") ? .on : .off
+        general.setCustomSpacing(12, after: general.arrangedSubviews.last!); indented(iconCaseSwitch)
+        general.setCustomSpacing(24, after: general.arrangedSubviews.last!)
         iconPicker.addItems(withTitles: ["한 / dud", "한 / A", "KO / EN", "ㅎuㅎ / dud"])
         iconPicker.selectItem(at: iconStyle); iconPicker.target = self; iconPicker.action = #selector(changeIconStyle)
         iconPicker.setAccessibilityLabel("메뉴바 아이콘 조합")
@@ -131,16 +150,7 @@ extension AppDelegate {
         }
         koreanPreview.setAccessibilityLabel("한국어 아이콘 미리보기")
         englishPreview.setAccessibilityLabel("영어 아이콘 미리보기")
-        row("메뉴바 아이콘", [iconPicker, koreanPreview, englishPreview], in: general)
-        general.setCustomSpacing(32, after: general.arrangedSubviews.last!)
-        separator(in: general)
-        general.setCustomSpacing(32, after: general.arrangedSubviews.last!)
-        picker.show(engine.defaultSources)
-        picker.onChange = { [weak self] _ in self?.selectionChanged() }
-        row("한영 키", [picker], in: general)
-        let keyboards = advancedButton; keyboards.target = self; keyboards.action = #selector(showKeyboardSettings); keyboards.bezelStyle = .rounded
-        general.setCustomSpacing(8, after: general.arrangedSubviews.last!)
-        row("", [keyboards], in: general)
+        row("아이콘", [iconPicker, koreanPreview, englishPreview], in: general)
         // Shown in the advanced settings sheet.
         targetPicker.addItems(withTitles: targets.map(\.name)); targetPicker.selectItem(withTitle: engine.target.name)
         targetPicker.target = self; targetPicker.action = #selector(selectionChanged)
@@ -217,7 +227,7 @@ extension AppDelegate {
         supportNote.font = .systemFont(ofSize: 11); supportNote.textColor = .secondaryLabelColor; supportNote.alignment = .center
         about.setCustomSpacing(6, after: supportTitle); about.addArrangedSubview(supportNote)
         about.setCustomSpacing(12, after: supportNote); about.addArrangedSubview(link("Fairy", icon: "fairy", template: false, action: #selector(openSupport)))
-        selectTab(0); updatePressAccess(); refreshSpecialMode(); refreshUpdates(); refreshIconPreviews(); refreshKeyboardState(); updateInputIndicator()
+        selectTab(0); updatePressAccess(); refreshSpecialMode(); refreshUpdates(); refreshKeyboardState(); updateInputIndicator()
     }
     func tabGlyph(_ text: String) -> NSImage {
         let image = NSImage(size: NSSize(width: 24, height: 20), flipped: false) { rect in

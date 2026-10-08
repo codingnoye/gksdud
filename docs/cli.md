@@ -87,12 +87,13 @@ gksdud source             # 현재 입력 소스 ID
 | `active` | `on`, `off` | 활성화 |
 | `paused` | `on`, `off` | (CLI 전용) 일시정지 |
 | `login` | `on`, `off` | 로그인 시 시작 |
-| `menubar` | `on`, `off` | 메뉴바에 표시 |
-| `replace-input-menu` | `on`, `off` | Mac 입력기 아이콘 대체 |
-| `icon` | `dud`, `a`, `ko-en`, `character` | 메뉴바 아이콘 |
 | `keys` | `<키>,...` | 한영 키 |
 | `target` | `F13` ~ `F20` | 고급 설정 → 내부 전환 키 |
 | `keyboard-default` | `on`, `off` | 고급 설정 → 기본값 |
+| `menubar` | `on`, `off` | 메뉴바에 표시 |
+| `replace-input-menu` | `on`, `off` | Mac 입력기 아이콘 대체 |
+| `icon-case` | `on`, `off` | 대소문자를 영문 아이콘에 반영 |
+| `icon` | `dud`, `a`, `ko-en`, `character` | 메뉴바 아이콘 |
 | `long-press` | `on`, `off` | 길게 눌러 대소문자 전환 |
 | `preserve-case` | `on`, `off` | 한영 전환시 대소문자 보존 |
 | `korean-caps-lock` | `on`, `off` | 한글 상태에서도 Caps Lock으로 대소문자 전환 |

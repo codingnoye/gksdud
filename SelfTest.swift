@@ -65,13 +65,22 @@ func runSelfTest() {
             precondition(caps.target(english: true) == initial, "Preserve the physical Caps choice on the next round trip")
             precondition(caps.beforeLongPress(actual: !initial, preserving: true) == initial,
                 "Next hold must toggle from the physical Caps choice, not an old remembered value")
+            // A lock change only a key showed: never mid-switch, even on the way into English, nor away from English.
+            caps.willSwitch(english: false, actual: false, longPress: holdEnabled)
+            caps.lockSeen(english: true, actual: !initial)
+            precondition(caps.remembered == initial, "The Korean input method turns the lock off mid-switch")
+            caps.switching = false
+            caps.lockSeen(english: false, actual: !initial)
+            precondition(caps.remembered == initial)
+            caps.lockSeen(english: true, actual: !initial)
+            precondition(caps.remembered == !initial, "A Caps Lock press with no event of its own counts with long press on or off")
             caps.reset()
             precondition(caps.target(english: true) == nil && !caps.switching)
             caps.enable(actual: !initial)
             precondition(caps.remembered == !initial, "Reactivation samples fresh keyboard state")
         }
     }
-    print("PASS: uppercase/lowercase round trips, physical Caps with hold on/off, next-hold baseline, transition reset suppression, reactivation")
+    print("PASS: uppercase/lowercase round trips, physical Caps with hold on/off, next-hold baseline, transition reset suppression, lock seen on keys, reactivation")
     var hold = LongPressState()
     hold.begin(key: 80, now: 10)
     precondition(!hold.claimLong(now: 10.499))
@@ -106,9 +115,12 @@ func runSelfTest() {
         }
         precondition(nativeSwitchPulse(from: up, marker: 12345) == nil)
     }
+    // Sent with the lock as it is then, so a pulse leaves the session's Caps Lock alone.
+    precondition(capsFlags(.maskSecondaryFn, caps: true) == [.maskSecondaryFn, .maskAlphaShift]
+        && capsFlags([.maskSecondaryFn, .maskAlphaShift], caps: false) == .maskSecondaryFn)
     let textKey = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true)!
     precondition(nativeSwitchPulse(from: textKey, marker: 12345) == nil, "Never synthesize ordinary typing")
-    print("PASS: F13-F20 native down/up pairs, marker, modifier isolation, original event preservation, text-key rejection")
+    print("PASS: F13-F20 native down/up pairs, marker, modifier isolation, Caps Lock as sent, original event preservation, text-key rejection")
     var gate = PressGate()
     let press = gate.handle(code: 80, down: true, repeatKey: false, active: true, target: 80)
     precondition(press.consume && press.switchNow)
