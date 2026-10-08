@@ -217,7 +217,8 @@ class ReleaseTests < Minitest::Test
     workflow = YAML.load_file("#{ROOT}/.github/workflows/release.yml")
     triggers = workflow.fetch('on') { workflow.fetch(true) }
     inputs = triggers.fetch('workflow_dispatch').fetch('inputs')
-    assert_equal %w[release_summary release_warning source_ref version], inputs.keys.sort
+    assert_equal %w[make_latest release_summary release_warning source_ref version], inputs.keys.sort
+    assert_equal true, inputs.fetch('make_latest').fetch('default')
     refute inputs.fetch('release_warning').fetch('required')
     assert_equal 'main', inputs.fetch('source_ref').fetch('default')
     steps = workflow.fetch('jobs').fetch('release').fetch('steps')
@@ -234,7 +235,7 @@ class ReleaseTests < Minitest::Test
     assert_equal 'false', create_tag.fetch('if')[/== '([^']+)'/, 1]
   end
 
-  def publication_result(draft: true, prerelease: false, actual_tag: 'v1.2.0', summary: 'Input fixes', warning: '', view_exit: 0, edit_exit: 0)
+  def publication_result(draft: true, prerelease: false, actual_tag: 'v1.2.0', summary: 'Input fixes', warning: '', latest: 'true', view_exit: 0, edit_exit: 0)
     Dir.mktmpdir('gksdud-publish-test-') do |dir|
       File.write("#{dir}/gh", <<~RUBY)
         #!/usr/bin/ruby
@@ -248,7 +249,7 @@ class ReleaseTests < Minitest::Test
         exit ENV.fetch('EDIT_EXIT').to_i
       RUBY
       File.chmod(0755, "#{dir}/gh")
-      env = { 'PATH' => "#{dir}:#{ENV.fetch('PATH')}", 'RELEASE_SUMMARY' => summary, 'RELEASE_WARNING' => warning,
+      env = { 'PATH' => "#{dir}:#{ENV.fetch('PATH')}", 'RELEASE_SUMMARY' => summary, 'RELEASE_WARNING' => warning, 'MAKE_LATEST' => latest,
               'RELEASE_JSON' => JSON.generate(tagName: actual_tag, isDraft: draft, isPrerelease: prerelease),
               'CAPTURE' => "#{dir}/args.json", 'NOTES' => "#{dir}/notes.md",
               'VIEW_EXIT' => view_exit.to_s, 'EDIT_EXIT' => edit_exit.to_s }
@@ -270,6 +271,12 @@ class ReleaseTests < Minitest::Test
     refute_includes notes, '<!-- 게시 전'
     assert_includes notes, 'brew install --cask codingnoye/tap/gksdud'
     refute_includes notes, '### 경고'
+  end
+
+  def test_publish_can_leave_the_latest_release_alone
+    status, args, _, output = publication_result(latest: 'false')
+    assert status.success?, output
+    assert_equal ['--draft=false', '--latest=false'], args.last(2)
   end
 
   def test_publish_adds_the_warning_section_after_the_summary

@@ -682,6 +682,16 @@ func runUpdateInstallTests() throws {
     featureCheck(UpdateValidation.legacy != nil && UpdateValidation.developerID != nil)
     let moves = try UpdateValidation.movesToDeveloperID(Bundle.main.bundleURL, UpdateValidation.signedCode(Bundle.main.bundleURL))
     featureCheck(!moves, "A build without the team's Developer ID signature is not a move to Developer ID")
+    let suite = "io.gksdud.permission-reset-tests.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+    var resets: [String] = []
+    featureCheck(!UpdateValidation.forgetSelfSignedPermissions(defaults: defaults, developerID: true) { resets.append($0) } && resets.isEmpty,
+                 "A first installation has no old permission")
+    defaults.removeObject(forKey: "permissions.developerID"); defaults.set(Date(), forKey: "updates.nextCheck")
+    featureCheck(!UpdateValidation.forgetSelfSignedPermissions(defaults: defaults, developerID: false) { resets.append($0) } && resets.isEmpty)
+    featureCheck(UpdateValidation.forgetSelfSignedPermissions(defaults: defaults, developerID: true) { resets.append($0) } && resets == ["Accessibility", "PostEvent"])
+    featureCheck(!UpdateValidation.forgetSelfSignedPermissions(defaults: defaults, developerID: true) { resets.append($0) } && resets.count == 2, "Only once")
     // Real children: timeout must reap the process before replacement can roll back.
     for arguments in [["5"], ["-c", "trap '' TERM; exec /bin/sleep 5"]] {
         var pid: pid_t = 0

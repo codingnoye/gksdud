@@ -1155,6 +1155,23 @@ func runPermissionTests() {
     precondition(settings.allSatisfy { $0.isEnabled } && !delegate.pressAccess.isEnabled)
     precondition(delegate.settingLabels.allSatisfy { $0.label.textColor == $0.color })
     precondition(!engine.active && delegate.enabled.state == .off, "It stays off until turned on again")
+    // Unless the move to Developer ID removed the permission: allowed again, activation comes back.
+    let movedSuite = "io.gksdud.permission-move-tests.\(UUID().uuidString)"
+    let movedDefaults = UserDefaults(suiteName: movedSuite)!
+    defer { movedDefaults.removePersistentDomain(forName: movedSuite) }
+    var movedMenu: CFPropertyList?
+    let moved = Engine(defaults: movedDefaults, discover: { [TestKeyboard("perm-2", name: "Keyboard", serial: "permission-move")] },
+                       shortcutPreferences: ShortcutPreferences(read: { [:] }, write: { _ in }, activate: {}),
+                       inputMenu: InputMenuPreference(read: { movedMenu }, write: { movedMenu = $0 }))
+    var allowed = false
+    moved.accessibilityTrusted = { allowed }
+    let movedDelegate = AppDelegate(engine: moved)
+    movedDelegate.buildWindow()
+    movedDelegate.reactivateWhenTrusted = moved.active
+    movedDelegate.repair()
+    precondition(!moved.active && movedDelegate.reactivateWhenTrusted)
+    allowed = true; movedDelegate.repair()
+    precondition(moved.active && movedDelegate.enabled.state == .on && !movedDelegate.reactivateWhenTrusted, "Allowed again, it turns back on")
     // Replacing the Mac input menu is on by default and works only while this app's icon shows.
     precondition(delegate.replaceInputMenu.state == .on && delegate.replaceInputMenu.isEnabled && !engine.showsSystemInputMenu)
     delegate.replaceInputMenu.state = .off; delegate.toggleReplaceInputMenu()

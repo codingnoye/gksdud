@@ -22,6 +22,11 @@ on:
         description: What users must know before installing, confirmed in the app before an update (optional)
         required: false
         type: string
+      make_latest:
+        description: Mark as GitHub's latest release; apps up to 1.7.1 update only to the latest
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -34,7 +39,7 @@ jobs:
   release:
     if: github.repository == 'codingnoye/gksdud' && ((github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/pre-v') || startsWith(github.ref, 'refs/tags/canary-v'))) || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))
     runs-on: macos-15
-    timeout-minutes: 30
+    timeout-minutes: 60
     environment: release
     permissions:
       contents: write
@@ -72,15 +77,17 @@ jobs:
           test -f release-source/build.sh
           /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $RELEASE_VERSION" release-source/Info.plist
 
-      - name: Import fixed signing identity into temporary keychain
+      - name: Import Developer ID identity and notary key
         env:
-          CERTIFICATE_BASE64: ${{ secrets.GKSDUD_CERTIFICATE_P12_BASE64 }}
-          P12_PASSWORD: ${{ secrets.GKSDUD_CERTIFICATE_PASSWORD }}
+          CERTIFICATE_BASE64: ${{ secrets.GKSDUD_DEVELOPER_ID_P12_BASE64 }}
+          P12_PASSWORD: ${{ secrets.GKSDUD_DEVELOPER_ID_P12_PASSWORD }}
+          NOTARY_KEY_BASE64: ${{ secrets.GKSDUD_NOTARY_KEY_BASE64 }}
         run: |
           set -euo pipefail
           umask 077
           : "${CERTIFICATE_BASE64:?Missing signing certificate secret}"
           : "${P12_PASSWORD:?Missing P12 password secret}"
+          : "${NOTARY_KEY_BASE64:?Missing notary key secret}"
           keychain="$RUNNER_TEMP/gksdud-signing.keychain-db"
           certificate="$RUNNER_TEMP/gksdud-signing.p12"
           keychain_password=$(openssl rand -hex 32)
@@ -90,24 +97,27 @@ jobs:
           security set-keychain-settings -lut 21600 "$keychain"
           security unlock-keychain -p "$keychain_password" "$keychain"
           security import "$certificate" -P "$P12_PASSWORD" -k "$keychain" -T /usr/bin/codesign
+          security import signing/DeveloperIDG2CA.cer -k "$keychain"
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" >/dev/null
           security list-keychains -d user -s "$keychain"
-          security find-certificate -c 'CodingNoye gksdud Local Signing' -p "$keychain" > signing/local-certificate.pem
-          actual=$(openssl x509 -in signing/local-certificate.pem -noout -fingerprint -sha1 | cut -d= -f2 | tr -d ':')
-          expected=$(tr -d '\n\r' < signing/release-certificate.sha1)
-          [[ "$actual" == "$expected" ]] || { echo 'Signing identity changed; refusing release.'; exit 1; }
-          mkdir -p release-source/signing
-          cp signing/local-certificate.pem release-source/signing/local-certificate.pem
-          # Ephemeral GitHub-hosted runner only; code signing policy, not TLS trust.
-          sudo security add-trusted-cert -d -r trustRoot -p codeSign -k "$keychain" signing/local-certificate.pem
           rm -f "$certificate"
+          team=$(tr -d '\n\r' < signing/developer-team-id)
+          identities=$(security find-identity -v -p codesigning "$keychain" |
+            sed -n -E "s/^ *[0-9]+\) ([0-9A-F]{40}) \"Developer ID Application: .* \($team\)\"$/\1/p")
+          [[ "$identities" =~ ^[0-9A-F]{40}$ ]] || { echo 'Expected one Developer ID Application identity of the team; refusing release.'; exit 1; }
+          echo "GKSDUD_SIGN_IDENTITY=$identities" >> "$GITHUB_ENV"
+          mkdir "$RUNNER_TEMP/gksdud-notary"
+          printf '%s' "$NOTARY_KEY_BASE64" | base64 --decode > "$RUNNER_TEMP/gksdud-notary/AuthKey.p8"
 
-      - name: Build and self-test Universal app
+      - name: Build, self-test and notarize Universal app
         working-directory: release-source
         env:
-          GKSDUD_SIGN_MODE: local
+          GKSDUD_SIGN_MODE: developer-id
           GKSDUD_CHANNEL: ${{ steps.version.outputs.channel == 'canary' && 'canary' || 'stable' }}
           GKSDUD_APP_VERSION: ${{ steps.version.outputs.version }}
+          GKSDUD_NOTARY_KEY: ${{ runner.temp }}/gksdud-notary/AuthKey.p8
+          GKSDUD_NOTARY_KEY_ID: ${{ secrets.GKSDUD_NOTARY_KEY_ID }}
+          GKSDUD_NOTARY_ISSUER: ${{ secrets.GKSDUD_NOTARY_ISSUER }}
         run: bash build.sh
 
       - name: Name prerelease archive
@@ -197,6 +207,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_SUMMARY: ${{ inputs.release_summary }}
           RELEASE_WARNING: ${{ inputs.release_warning }}
+          MAKE_LATEST: ${{ inputs.make_latest }}
           RELEASE_TAG: ${{ steps.version.outputs.tag }}
         run: ruby scripts/publish-release.rb "$GITHUB_REPOSITORY" "$RELEASE_TAG"
 
