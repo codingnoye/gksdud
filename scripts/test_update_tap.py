@@ -23,6 +23,18 @@ class TapTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 tap.updated_cask(OLD, v, sha)
 
+    def test_cask_moves_to_the_developer_id_archive(self):
+        old = ('cask "gksdud" do\n  version "1.7.1"\n  sha256 "' + 'a' * 64 + '"\n\n'
+               '  url "https://github.com/codingnoye/gksdud/releases/download/v#{version}/gksdud-#{version}-macos-universal.zip"\n'
+               '  caveats <<~EOS\n' + "".join(tap.SELF_SIGNED_CAVEATS) + '    Accessibility permission is required.\n  EOS\nend\n')
+        new = tap.updated_cask(old, "2.0.0", "b" * 64)
+        self.assertIn('/download/v#{version}/gksdud-#{version}.zip"\n', new)
+        self.assertNotIn("self-signed", new)
+        self.assertIn("  caveats <<~EOS\n" + tap.REGRANT_CAVEAT + "    Accessibility permission is required.\n  EOS\n", new)
+        with patch.object(tap, "MOVING_TO_DEVELOPER_ID", False):
+            self.assertNotIn(tap.REGRANT_CAVEAT, tap.updated_cask(new, "2.0.1", "c" * 64))
+        self.assertEqual(tap.updated_cask(new, "2.0.0", "b" * 64), new)
+
     def test_tag_validation(self):
         for tag in ["main", "v1.0.0-rc1", "pre-v1.2.0", "pre-v.1.2.0", "v1.0.0/../../main", "v01.0.0"]:
             with self.assertRaises(ValueError):
@@ -35,11 +47,15 @@ class TapTests(unittest.TestCase):
                 "CFBundleShortVersionString": "1.1.0", "CFBundleIdentifier": "io.gksdud.inputswitch"}))
         raw = archive.getvalue()
         digest = hashlib.sha256(raw).hexdigest()
-        name = "gksdud-1.1.0-macos-universal.zip"
+        name = "gksdud-1.1.0.zip"
         root = "https://github.com/codingnoye/gksdud/releases/download/v1.1.0/"
         release = {"tag_name": "v1.1.0", "draft": False, "prerelease": False,
                    "assets": [{"name": n, "browser_download_url": root + n} for n in [name, "SHA256SUMS"]]}
         with patch.object(tap, "download", side_effect=[raw, f"{digest}  {name}\n".encode()]):
+            self.assertEqual(tap.verify_release(release, "v1.1.0"), ("1.1.0", digest))
+        # The self-signed copy for old apps is listed after the Developer ID archive.
+        both = f"{digest}  {name}\n{'c' * 64}  gksdud-1.1.0-macos-universal.zip\n"
+        with patch.object(tap, "download", side_effect=[raw, both.encode()]):
             self.assertEqual(tap.verify_release(release, "v1.1.0"), ("1.1.0", digest))
         with patch.object(tap, "download", side_effect=[raw, b"wrong checksum"]):
             with self.assertRaises(ValueError):
