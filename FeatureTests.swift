@@ -706,6 +706,9 @@ func runUpdateInstallTests() throws {
     featureCheck(!UpdateValidation.forgetSelfSignedPermissions(defaults: defaults, developerID: false) { resets.append($0) } && resets.isEmpty)
     featureCheck(UpdateValidation.forgetSelfSignedPermissions(defaults: defaults, developerID: true) { resets.append($0) } && resets == ["Accessibility", "PostEvent"])
     featureCheck(!UpdateValidation.forgetSelfSignedPermissions(defaults: defaults, developerID: true) { resets.append($0) } && resets.count == 2, "Only once")
+    featureCheck(!UpdateValidation.forgetSelfSignedPermissions(defaults: defaults, developerID: false) { resets.append($0) } && resets.count == 2)
+    featureCheck(UpdateValidation.forgetSelfSignedPermissions(defaults: defaults, developerID: true) { resets.append($0) } && resets.count == 4,
+                 "Again after a self-signed build ran, as a rollback or a downgrade")
     // Real children: timeout must reap the process before replacement can roll back.
     for arguments in [["5"], ["-c", "trap '' TERM; exec /bin/sleep 5"]] {
         var pid: pid_t = 0

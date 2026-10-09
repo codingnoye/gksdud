@@ -120,16 +120,17 @@ enum UpdateValidation {
         return SecCodeCheckValidity(code, SecCSFlags(rawValue: 0), developerID) == errSecSuccess
     }
     // A permission given to a self-signed build stays listed as allowed but no longer applies to the Developer ID build, and
-    // switching it off and on keeps the old certificate. The first Developer ID launch after one ran removes it, so that
-    // allowing again adds a new one.
+    // switching it off and on keeps the old certificate. A Developer ID launch after another build ran removes it, so that
+    // allowing again adds a new one: after the self-signed releases, and again after a rollback, a downgrade or a local build.
     static func forgetSelfSignedPermissions(defaults: UserDefaults, developerID: Bool = UpdateValidation.runsWithDeveloperID,
                                             reset: (String) -> Void = { service in
         _ = try? UpdateValidation.command("/usr/bin/tccutil", ["reset", service, UpdateValidation.identifier])
     }) -> Bool {
-        guard developerID, !defaults.bool(forKey: "permissions.developerID") else { return false }
-        defaults.set(true, forKey: "permissions.developerID")
+        // Whether the last launch was the Developer ID build.
+        let otherBuildRan = !defaults.bool(forKey: "permissions.developerID")
+        defaults.set(developerID, forKey: "permissions.developerID")
         // Written by every launch since 1.1: a first installation has nothing to remove.
-        guard defaults.object(forKey: "updates.nextCheck") != nil else { return false }
+        guard developerID, otherBuildRan, defaults.object(forKey: "updates.nextCheck") != nil else { return false }
         for service in ["Accessibility", "PostEvent"] { reset(service) }
         return true
     }

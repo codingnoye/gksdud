@@ -668,9 +668,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     var presentCommandErrors: (([String]) -> Void)?
     var returningFromPermissionSettings = false
     // The permission of the self-signed build was removed at launch: ask for it again, and once it is given turn back on
-    // the activation that turning off without it undid.
+    // the activation that turning off without it undid. Kept until then, as the app can quit first.
     var askForPermission = false
-    var reactivateWhenTrusted = false
+    var reactivateWhenTrusted: Bool {
+        get { engine.defaults.bool(forKey: "permissions.reactivate") }
+        set { engine.defaults.set(newValue, forKey: "permissions.reactivate") }
+    }
     var permissionSettingsWasActive = false
     func finishPermissionVisit() {
         guard returningFromPermissionSettings else { return }
@@ -1097,7 +1100,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         }
         editEntry.submenu = editMenu; mainMenu.addItem(editEntry)
         NSApp.mainMenu = mainMenu
-        reactivateWhenTrusted = askForPermission && engine.active
+        if askForPermission { reactivateWhenTrusted = engine.active }
         buildWindow()
         updateMenu()
         updates.onChange = { [weak self] in self?.refreshUpdates() }
@@ -1145,8 +1148,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         startCommandServer()
         // Restarted by an update, the window comes back on the tab it was installed from. Asking for the permission again opens it
         // on the way back from System Settings instead, as a window shown first would cover the system's request.
-        if ProcessInfo.processInfo.environment["GKSDUD_UPDATE_READY"] != nil && !askForPermission { showAbout() }
-        else if showInMenuBar.state == .off || CommandLine.arguments.contains("--settings") { showSettings() }
+        if !askForPermission {
+            if ProcessInfo.processInfo.environment["GKSDUD_UPDATE_READY"] != nil { showAbout() }
+            else if showInMenuBar.state == .off || CommandLine.arguments.contains("--settings") { showSettings() }
+        }
         // Why it asks again, then the system's request, which offers its settings; coming back from there opens this app's.
         if askForPermission {
             DispatchQueue.main.async { [weak self] in
