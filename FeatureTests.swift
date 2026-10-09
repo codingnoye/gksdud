@@ -28,6 +28,11 @@ func runFeatureTests() {
     let warned = release("### 요약\n- 탭 추가\n\n### 경고\n- 접근성 권한을 다시 허용해주세요.\n  - 시스템 설정\n\n### 설치\n비표시")
     featureCheck(warned.summary == "- 탭 추가" && warned.warning == "- 접근성 권한을 다시 허용해주세요.\n  - 시스템 설정", warned.warning)
     featureCheck(warned.warningItems == ["* 접근성 권한을 다시 허용해주세요.", "  * 시스템 설정"] && sample.warning.isEmpty && release(nil).warningItems.isEmpty)
+    let linked = AppRelease.links("* [안내](https://github.com/codingnoye/gksdud/wiki) 참고, https://example.com/a.b. 주소 http://x.kr에서 [로컬](file:///etc) gksdud-1.0.zip")
+    featureCheck(linked.text == "* 안내 참고, https://example.com/a.b. 주소 http://x.kr에서 [로컬](file:///etc) gksdud-1.0.zip", linked.text)
+    featureCheck(linked.links.map { $0.url.absoluteString } == ["https://github.com/codingnoye/gksdud/wiki", "https://example.com/a.b", "http://x.kr"], "\(linked.links)")
+    featureCheck(linked.links.map { (linked.text as NSString).substring(with: $0.range) } == ["안내", "https://example.com/a.b", "http://x.kr"])
+    featureCheck(AppRelease.links("[https://a.com](https://a.com) https://").links.map { $0.range } == [NSRange(location: 0, length: 13)])
     featureCheck(release("**[경고]**\n권한\n## 설치").warning == "권한" && release("## [경고]\n권한").warning == "권한")
     featureCheck(sample.isNewer(than: "1.2.0") && !sample.isNewer(than: "1.3.0") && !sample.isNewer(than: "2.0.0"))
     featureCheck(!release(nil, draft: true).isNewer(than: "1.2.0"))
@@ -64,13 +69,16 @@ func runFeatureTests() {
                                             release(nil, tag: "canary-v1.4.0", pre: true), stable("1.3.0", "### 요약\n- 탭 추가\n  - 세부\n+ 개선\n문장"),
                                             stable("1.2.8", "### 요약\n- 작은 수정\n### 경고\n- 설정 초기화"), stable("1.2.0", "### 요약\n- 설치된 버전\n### 경고\n- 표시 안 함"), stable("1.1.0", nil)]))
     featureCheck(checker.pending.map(\.tag_name) == ["v1.3.0", "v1.2.8", "v1.2.5"] && checker.available?.tag_name == "v1.3.0", "Newer stable releases, newest first")
-    featureCheck(checker.summary == "v1.3.0\n* 탭 추가\n  * 세부\n* 개선\n* 문장\n\nv1.2.8\n* 작은 수정\n\nv1.2.5\n* 수정", checker.summary)
-    featureCheck(checker.warnings == "v1.2.8\n* 설정 초기화\n\nv1.2.5\n* 권한을 다시 허용", "Warnings of every version the update installs: \(checker.warnings)")
+    func shown(_ text: String) -> String { AppRelease.links(text).text }
+    featureCheck(shown(checker.summary) == "v1.3.0\n* 탭 추가\n  * 세부\n* 개선\n* 문장\n\nv1.2.8\n* 작은 수정\n\nv1.2.5\n* 수정", checker.summary)
+    featureCheck(AppRelease.links(checker.summary).links.map { $0.url.absoluteString } == ["1.3.0", "1.2.8", "1.2.5"].map { "https://github.com/codingnoye/gksdud/releases/tag/v\($0)" },
+                 "Each version links to its release page")
+    featureCheck(shown(checker.warnings) == "v1.2.8\n* 설정 초기화\n\nv1.2.5\n* 권한을 다시 허용", "Warnings of every version the update installs: \(checker.warnings)")
     let partly = UpdateChecker(defaults: defaults, installedVersion: "1.2.5", channel: .stable)
-    featureCheck(partly.summary == "v1.3.0\n* 탭 추가\n  * 세부\n* 개선\n* 문장\n\nv1.2.8\n* 작은 수정" && partly.warnings == "v1.2.8\n* 설정 초기화")
+    featureCheck(shown(partly.summary) == "v1.3.0\n* 탭 추가\n  * 세부\n* 개선\n* 문장\n\nv1.2.8\n* 작은 수정" && shown(partly.warnings) == "v1.2.8\n* 설정 초기화")
     featureCheck(UpdateChecker(defaults: defaults, installedVersion: "1.2.8", channel: .stable).warnings.isEmpty)
     featureCheck(stable("1.3.0", nil).summaryItems == ["* " + release(nil).summary])
-    print("PASS: numeric versions, release summary boundaries, trusted release URLs, daily schedule, retry/cache/offline/upgrade behavior, summaries and warnings of every newer version")
+    print("PASS: numeric versions, release summary boundaries, trusted release URLs, daily schedule, retry/cache/offline/upgrade behavior, summaries and warnings of every newer version, links in them")
     do { try runUpdateInstallTests() } catch { preconditionFailure("Installer tests: \(error)") }
     runPrereleaseTests()
     runOptionInputTests()
@@ -755,7 +763,7 @@ func runCanaryTests() {
     }
     respond([release("v2.0.0", pre: false), release("pre-v1.9.0"), release("canary-v1.4.0", draft: true), release("canary-v1.3.0"), release("canary-v1.3.1"), release("canary-v1.2.0")])
     featureCheck(checker.pending.map(\.tag_name) == ["canary-v1.3.1", "canary-v1.3.0"] && checker.error == nil, "Canary releases only")
-    featureCheck(checker.summary == "v1.3.1\n* canary-v1.3.1\n\nv1.3.0\n* canary-v1.3.0", checker.summary)
+    featureCheck(AppRelease.links(checker.summary).text == "v1.3.1\n* canary-v1.3.1\n\nv1.3.0\n* canary-v1.3.0", checker.summary)
     featureCheck(UpdateChecker(defaults: defaults, installedVersion: "1.2.0", channel: .canary).available?.tag_name == "canary-v1.3.1")
     respond([release("v2.0.0", pre: false)])
     featureCheck(checker.available == nil && checker.error == nil, "No canary release yet is not an error")

@@ -626,7 +626,7 @@ func renderKeyboardUI(to directory: String) throws {
     devices = [builtIn, virtual]
     virtual.mappings = []; virtual.failWrite = true
     for _ in 0..<3 { _ = engine.keyboards.reconcile(sources: [sources[0]], target: f19, active: true) }
-    let previewRelease = AppRelease(tag_name: "v9.0.0", html_url: "https://github.com/codingnoye/gksdud/releases/tag/v9.0.0", body: "## 요약\n- 설정을 일반·대소문자·특수문자·gksdud 탭으로 나눴습니다.\n- 한글에서도 Option 특수문자를 입력할 수 있습니다.\n- 새 버전이 나오면 메뉴에서 알려드립니다.\n\n## 경고\n- 업데이트 후 손쉬운 사용 권한을 다시 허용해주세요.\n\n## 설치\n요약에 나타나면 안 됩니다.", draft: false, prerelease: false)
+    let previewRelease = AppRelease(tag_name: "v9.0.0", html_url: "https://github.com/codingnoye/gksdud/releases/tag/v9.0.0", body: "## 요약\n- 설정을 일반·대소문자·특수문자·gksdud 탭으로 나눴습니다.\n- 한글에서도 Option 특수문자를 입력할 수 있습니다.\n- 새 버전이 나오면 메뉴에서 알려드립니다. 자세히: https://github.com/codingnoye/gksdud\n\n## 경고\n- 업데이트 후 손쉬운 사용 권한을 다시 허용해주세요. [방법 보기](https://support.apple.com/guide/mac-help/mh43185/mac)\n\n## 설치\n요약에 나타나면 안 됩니다.", draft: false, prerelease: false)
     let olderRelease = AppRelease(tag_name: "v8.9.0", html_url: "https://github.com/codingnoye/gksdud/releases/tag/v8.9.0", body: "## 요약\n- 이전 버전 항목입니다.", draft: false, prerelease: false)
     defaults.set(try JSONEncoder().encode([previewRelease, olderRelease]), forKey: "updates.releases")
     let delegate = AppDelegate(engine: engine)
@@ -691,13 +691,23 @@ func renderKeyboardUI(to directory: String) throws {
     precondition(delegate.selectedTab == 4 && !delegate.updateButton.isHidden)
     precondition(!delegate.updateSummary.string.contains("요약에 나타나면") && !delegate.updateSummary.string.contains("권한")
         && delegate.updateSummary.string.hasPrefix("v9.0.0\n* 설정을") && delegate.updateSummary.string.hasSuffix("\n\nv8.9.0\n* 이전 버전 항목입니다."))
+    // Links in the release notes open from the summary and the warning alert.
+    func link(_ text: NSAttributedString, at words: String) -> URL? {
+        let range = (text.string as NSString).range(of: words)
+        return range.location == NSNotFound ? nil : text.attribute(.link, at: range.location + range.length - 1, effectiveRange: nil) as? URL
+    }
+    precondition(link(delegate.updateSummary.textStorage!, at: "https://github.com/codingnoye/gksdud")?.absoluteString == "https://github.com/codingnoye/gksdud")
+    precondition(link(delegate.updateSummary.textStorage!, at: "v8.9.0")?.absoluteString == "https://github.com/codingnoye/gksdud/releases/tag/v8.9.0")
     // Installing asks about the warnings first; cancelling leaves the installer untouched.
     var warningAlerts: [NSAlert] = []
     delegate.runAlert = { alert in
         warningAlerts.append(alert); alert.layout(); try? save(alert.window.contentView!, "update-warning-alert.png"); return .alertSecondButtonReturn
     }
     delegate.updateButton.performClick(nil)
-    precondition(warningAlerts.map(\.informativeText) == ["v9.0.0\n* 업데이트 후 손쉬운 사용 권한을 다시 허용해주세요."] && !delegate.installer.busy && delegate.installer.status.isEmpty)
+    let warningText = (warningAlerts.first?.accessoryView as? NSTextView)?.textStorage
+    precondition(warningAlerts.count == 1 && warningText?.string == "v9.0.0\n* 업데이트 후 손쉬운 사용 권한을 다시 허용해주세요. 방법 보기" && !delegate.installer.busy && delegate.installer.status.isEmpty)
+    precondition(link(warningText!, at: "방법 보기")?.absoluteString == "https://support.apple.com/guide/mac-help/mh43185/mac"
+        && link(warningText!, at: "v9.0.0")?.absoluteString == "https://github.com/codingnoye/gksdud/releases/tag/v9.0.0")
     precondition(warningAlerts[0].buttons.map(\.title) == ["업데이트 설치", "취소"])
     delegate.runAlert = { $0.runModal() }
     delegate.updates = UpdateChecker(defaults: defaults, installedVersion: "9.0.0", channel: .stable)
