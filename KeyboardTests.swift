@@ -1180,6 +1180,7 @@ func runPermissionTests() {
     movedDelegate.reactivateWhenTrusted = moved.active
     movedDelegate.repair()
     precondition(!moved.active && movedDelegate.reactivateWhenTrusted)
+    precondition(movedDefaults.bool(forKey: "permissions.reactivate"), "Kept for the next launch, as the app can quit before it is allowed")
     allowed = true; movedDelegate.repair()
     precondition(moved.active && movedDelegate.enabled.state == .on && !movedDelegate.reactivateWhenTrusted, "Allowed again, it turns back on")
     let again = movedDelegate.permissionAgainAlert()
