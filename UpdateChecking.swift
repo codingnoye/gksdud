@@ -103,11 +103,11 @@ struct AppRelease: Codable {
             plain.append(label); last = NSMaxRange(match.range)
         }
         plain.append(source.substring(from: last))
-        // A bare address ends before the punctuation that closes its sentence.
+        // A bare address ends before the punctuation that closes its sentence, or the marks that make it bold.
         for match in try! NSRegularExpression(pattern: address).matches(in: plain as String, range: NSRange(location: 0, length: plain.length))
         where !links.contains(where: { NSIntersectionRange($0.range, match.range).length > 0 }) {
             var range = match.range
-            while range.length > 0, ".,;:!?'".contains(plain.substring(with: NSRange(location: NSMaxRange(range) - 1, length: 1))) { range.length -= 1 }
+            while range.length > 0, ".,;:!?'*".contains(plain.substring(with: NSRange(location: NSMaxRange(range) - 1, length: 1))) { range.length -= 1 }
             if let url = URL(string: plain.substring(with: range)), url.host != nil { links.append((range, url)) }
         }
         return (plain as String, links.sorted { $0.range.location < $1.range.location })
@@ -154,8 +154,9 @@ final class UpdateChecker {
         checking = true; error = nil
         defaults.set(date.addingTimeInterval(3600), forKey: "updates.nextCheck")
         onChange?()
-        // Recent releases of every kind: an update can skip versions, and canary releases are never GitHub's latest.
-        var request = URLRequest(url: URL(string: "https://api.github.com/repos/codingnoye/gksdud/releases?per_page=30")!)
+        // Recent releases of every kind: an update can skip versions, and canary releases are never GitHub's latest. A hundred
+        // keep the versions an update installs, and their warnings, in reach behind many canary and prereleases.
+        var request = URLRequest(url: URL(string: "https://api.github.com/repos/codingnoye/gksdud/releases?per_page=100")!)
         request.timeoutInterval = 20
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
@@ -166,7 +167,7 @@ final class UpdateChecker {
                 guard let self else { return }
                 self.checking = false
                 if failure == nil, let http = response as? HTTPURLResponse, http.statusCode == 200,
-                   let data, data.count <= 1_000_000,
+                   let data, data.count <= 4_000_000,
                    let values = try? JSONDecoder().decode([AppRelease].self, from: data) {
                     self.releases = values.filter { $0.channel == self.channel && $0.isNewer(than: self.installedVersion) }
                         .sorted { ReleaseVersion($0.versionString)! > ReleaseVersion($1.versionString)! }

@@ -33,6 +33,7 @@ func runFeatureTests() {
     featureCheck(linked.links.map { $0.url.absoluteString } == ["https://github.com/codingnoye/gksdud/wiki", "https://example.com/a.b", "http://x.kr"], "\(linked.links)")
     featureCheck(linked.links.map { (linked.text as NSString).substring(with: $0.range) } == ["안내", "https://example.com/a.b", "http://x.kr"])
     featureCheck(AppRelease.links("[https://a.com](https://a.com) https://").links.map { $0.range } == [NSRange(location: 0, length: 13)])
+    featureCheck(AppRelease.links("**https://a.com**").links.map { $0.url.absoluteString } == ["https://a.com"], "Bold marks are not part of the address")
     featureCheck(release("**[경고]**\n권한\n## 설치").warning == "권한" && release("## [경고]\n권한").warning == "권한")
     featureCheck(sample.isNewer(than: "1.2.0") && !sample.isNewer(than: "1.3.0") && !sample.isNewer(than: "2.0.0"))
     featureCheck(!release(nil, draft: true).isNewer(than: "1.2.0"))
@@ -731,7 +732,7 @@ func runPrereleaseTests() {
     featureCheck(!preview.isNewer(than: "1.2.0"))
     var completion: ((Data?, URLResponse?, Error?) -> Void)?
     let checker = UpdateChecker(defaults: defaults, installedVersion: "1.2.0", channel: .stable, fetch: { request, done in
-        featureCheck(request.url?.path == "/repos/codingnoye/gksdud/releases" && request.url?.query == "per_page=30")
+        featureCheck(request.url?.path == "/repos/codingnoye/gksdud/releases" && request.url?.query == "per_page=100")
         completion = done
     })
     checker.check()
@@ -757,7 +758,7 @@ func runCanaryTests() {
     defaults.set(try! JSONEncoder().encode([release("v9.0.0", pre: false)]), forKey: "updates.releases")
     var completion: ((Data?, URLResponse?, Error?) -> Void)?
     let checker = UpdateChecker(defaults: defaults, installedVersion: "1.2.0", channel: .canary, fetch: { request, done in
-        featureCheck(request.url?.path == "/repos/codingnoye/gksdud/releases" && request.url?.query == "per_page=30")
+        featureCheck(request.url?.path == "/repos/codingnoye/gksdud/releases" && request.url?.query == "per_page=100")
         completion = done
     })
     featureCheck(checker.available == nil)
