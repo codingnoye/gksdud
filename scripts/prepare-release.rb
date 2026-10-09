@@ -84,7 +84,7 @@ unless metadata.prerelease?
     uninstall quit: "io.gksdud.inputswitch"
 
     caveats <<~EOS
-  #{ReleaseMetadata::SELF_SIGNED_COPY ? "    Updating from 1.7.1 or earlier asks for Accessibility once more, as the app is now signed by Apple.\n" : ''}    Accessibility permission is required for switching on key press.
+  #{ReleaseMetadata::SELF_SIGNED_COPY ? "    Updating from 1.8.0 or earlier asks for Accessibility once more, as the app is now signed by Apple.\n" : ''}    Accessibility permission is required for switching on key press.
       If Homebrew cannot quit gksdud, quit it normally to restore keyboard settings.
     EOS
   end

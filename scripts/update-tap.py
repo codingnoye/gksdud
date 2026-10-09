@@ -17,7 +17,7 @@ TAP = "codingnoye/homebrew-tap"
 PATH = "Casks/gksdud.rb"
 # While apps up to 1.7.1 move to Developer ID; off together with SELF_SIGNED_COPY in release-metadata.rb.
 MOVING_TO_DEVELOPER_ID = True
-REGRANT_CAVEAT = "    Updating from 1.7.1 or earlier asks for Accessibility once more, as the app is now signed by Apple.\n"
+REGRANT_CAVEAT = "    Updating from 1.8.0 or earlier asks for Accessibility once more, as the app is now signed by Apple.\n"
 SELF_SIGNED_CAVEATS = ("    This build is self-signed and is not notarized by Apple.\n",
                        "    macOS may block its first launch. No security settings are changed by this cask.\n")
 
