@@ -8,11 +8,17 @@
 brew install --cask codingnoye/tap/gksdud
 ```
 
-기존 Homebrew 설치는 `brew update && brew upgrade --cask codingnoye/tap/gksdud`로 업데이트할 수 있습니다. 업데이트 전 gksdud를 정상 종료해주세요.
+직접 설치하려면 아래 첨부파일에서 `gksdud-<버전명>.zip` 파일을 다운받아 압축을 풀고, 응용프로그램 폴더로 옮긴 뒤 실행하세요.
 
-직접 설치하려면 아래 첨부파일에서 `gksdud-버전.zip`을 다운받아 압축을 풀고, 응용프로그램 폴더로 옮긴 뒤 실행하세요.
+### 업데이트
 
-- `gksdud-버전.zip`: Apple 공증을 받은 앱입니다. 직접 설치와 Homebrew에 씁니다.
-- `gksdud-버전-macos-universal.zip`: 기능은 같고 서명만 다른 자체 서명 앱입니다. 1.7.1 이하의 앱 안 업데이트용이며, 이 앱도 다음 업데이트부터 Apple 공증 앱으로 바뀝니다.
+Homebrew 설치는 `brew update && brew upgrade --cask codingnoye/tap/gksdud`로 업데이트할 수 있습니다. 업데이트 전 gksdud를 정상 종료해주세요.
+
+앱 내에서도 업데이트 가능합니다.
+
+### 참고
+
+- `gksdud-<버전명>-macos-universal.zip`은 애플 서명을 받기 전 자체서명 버전의 업데이트 호환용 파일입니다. 일반적으로는 다운받으실 필요는 없습니다.
+- v1.8.0 미만의 자체 서명 버전을 사용중이며 업데이트가 실패한다면 삭제 후 재설치로 해결 가능합니다!
 
 MIT License, © 2026 CodingNoye
