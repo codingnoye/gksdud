@@ -78,7 +78,12 @@ func runFeatureTests() {
     featureCheck(shown(partly.summary) == "v1.3.0\n* 탭 추가\n  * 세부\n* 개선\n* 문장\n\nv1.2.8\n* 작은 수정" && shown(partly.warnings) == "v1.2.8\n* 설정 초기화")
     featureCheck(UpdateChecker(defaults: defaults, installedVersion: "1.2.8", channel: .stable).warnings.isEmpty)
     featureCheck(stable("1.3.0", nil).summaryItems == ["* " + release(nil).summary])
-    print("PASS: numeric versions, release summary boundaries, trusted release URLs, daily schedule, retry/cache/offline/upgrade behavior, summaries and warnings of every newer version, links in them")
+    var both = stable("1.3.0", nil)
+    both.assets = ["gksdud-1.3.0-macos-universal.zip", "gksdud-1.3.0.zip", "SHA256SUMS"].map { ReleaseAsset(name: $0, browser_download_url: "", size: 1) }
+    featureCheck(both.archiveName == "gksdud-1.3.0.zip", "The Apple-signed archive when there is one")
+    both.assets?.removeAll { $0.name == "gksdud-1.3.0.zip" }
+    featureCheck(both.archiveName == "gksdud-1.3.0-macos-universal.zip" && stable("1.3.0", nil).archiveName == both.archiveName)
+    print("PASS: numeric versions, release summary boundaries, trusted release URLs, daily schedule, retry/cache/offline/upgrade behavior, summaries and warnings of every newer version, links in them, the Apple-signed archive first")
     do { try runUpdateInstallTests() } catch { preconditionFailure("Installer tests: \(error)") }
     runPrereleaseTests()
     runOptionInputTests()
