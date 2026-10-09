@@ -269,7 +269,7 @@ extension AppDelegate {
         let warnings = updates.warnings
         if !warnings.isEmpty {
             let alert = NSAlert(); alert.alertStyle = .warning
-            alert.messageText = "업데이트 전에 확인해주세요"; alert.informativeText = warnings
+            alert.messageText = "업데이트 전에 확인해주세요"; alert.accessoryView = linkedLabel(warnings, width: 222)
             alert.addButton(withTitle: "업데이트 설치"); alert.addButton(withTitle: "취소")
             guard runAlert(alert) == .alertFirstButtonReturn, updates.available?.tag_name == release.tag_name else { return }
         }
@@ -290,6 +290,25 @@ extension AppDelegate {
             repair()
         }
     }
+    // Release notes text whose links open in the browser.
+    func linkedText(_ text: String, size: CGFloat) -> NSAttributedString {
+        let (plain, links) = AppRelease.links(text)
+        // Korean wraps between words, as in labels.
+        let paragraph = NSMutableParagraphStyle(); paragraph.lineBreakStrategy = .standard
+        let result = NSMutableAttributedString(string: plain, attributes: [.font: NSFont.systemFont(ofSize: size), .foregroundColor: NSColor.labelColor, .paragraphStyle: paragraph])
+        for link in links { result.addAttribute(.link, value: link.url, range: link.range) }
+        return result
+    }
+    // An alert's text that can hold links, which its informative text cannot.
+    func linkedLabel(_ text: String, width: CGFloat) -> NSTextView {
+        let view = NSTextView(frame: NSRect(x: 0, y: 0, width: width, height: 0))
+        view.isEditable = false; view.isSelectable = true; view.drawsBackground = false
+        view.textContainerInset = .zero; view.textContainer?.lineFragmentPadding = 3  // lines up with the alert's title
+        view.textStorage?.setAttributedString(linkedText(text, size: NSFont.systemFontSize))
+        view.layoutManager?.ensureLayout(for: view.textContainer!)
+        view.frame.size.height = ceil(view.layoutManager!.usedRect(for: view.textContainer!).height)
+        return view
+    }
     @objc func openSupport() { NSWorkspace.shared.open(URL(string: "https://fairy.hada.io/@gksdud")!) }
     @objc func openProject() { NSWorkspace.shared.open(URL(string: "https://github.com/codingnoye/gksdud")!) }
     func refreshUpdates() {
@@ -300,7 +319,7 @@ extension AppDelegate {
         for entry in item?.menu?.items ?? [] where entry.action == #selector(showAbout) { entry.isHidden = release == nil }
         let latest = release.map { " → v\($0.versionString)" } ?? ""
         updateHeading.stringValue = "v\(updates.installedVersion)\(latest)"
-        updateSummary.string = updates.summary
+        updateSummary.textStorage?.setAttributedString(linkedText(updates.summary, size: 12))
         updateScroll.isHidden = release == nil
         updateButton.isHidden = release == nil
         updateButton.isEnabled = !installer.busy

@@ -83,6 +83,30 @@ struct AppRelease: Codable {
             return String(line.prefix(while: { $0 == " " || $0 == "\t" })) + "* " + (marker ? String(text.dropFirst(2)) : text)
         }
     }
+    // The text with each [label](https://…) written as its label, and where those and bare web addresses link to.
+    static func links(_ text: String) -> (text: String, links: [(range: NSRange, url: URL)]) {
+        let address = "https?://[A-Za-z0-9._~:/?#@!$&'*+,;=%-]+"
+        let source = text as NSString, plain = NSMutableString()
+        var links: [(range: NSRange, url: URL)] = [], last = 0
+        let written = try! NSRegularExpression(pattern: "\\[([^\\[\\]\\n]+)\\]\\((\(address))\\)")
+        for match in written.matches(in: text, range: NSRange(location: 0, length: source.length)) {
+            plain.append(source.substring(with: NSRange(location: last, length: match.range.location - last)))
+            let label = source.substring(with: match.range(at: 1))
+            if let url = URL(string: source.substring(with: match.range(at: 2))), url.host != nil {
+                links.append((NSRange(location: plain.length, length: (label as NSString).length), url))
+            }
+            plain.append(label); last = NSMaxRange(match.range)
+        }
+        plain.append(source.substring(from: last))
+        // A bare address ends before the punctuation that closes its sentence.
+        for match in try! NSRegularExpression(pattern: address).matches(in: plain as String, range: NSRange(location: 0, length: plain.length))
+        where !links.contains(where: { NSIntersectionRange($0.range, match.range).length > 0 }) {
+            var range = match.range
+            while range.length > 0, ".,;:!?'".contains(plain.substring(with: NSRange(location: NSMaxRange(range) - 1, length: 1))) { range.length -= 1 }
+            if let url = URL(string: plain.substring(with: range)), url.host != nil { links.append((range, url)) }
+        }
+        return (plain as String, links.sorted { $0.range.location < $1.range.location })
+    }
 }
 
 final class UpdateChecker {
@@ -102,8 +126,12 @@ final class UpdateChecker {
     var summary: String { Self.merge(pending.map { ($0, $0.summaryItems) }) }
     // The warnings of every version the update installs; empty when none has one.
     var warnings: String { Self.merge(pending.map { ($0, $0.warningItems) }.filter { !$0.1.isEmpty }) }
+    // Each version's lines under its name, which links to its release page.
     static func merge(_ versions: [(AppRelease, [String])]) -> String {
-        versions.map { (["v\($0.0.versionString)"] + $0.1).joined(separator: "\n") }.joined(separator: "\n\n")
+        versions.map { release, lines in
+            let name = "v\(release.versionString)"
+            return ([release.pageURL.map { "[\(name)](\($0.absoluteString))" } ?? name] + lines).joined(separator: "\n")
+        }.joined(separator: "\n\n")
     }
     var lastChecked: Date? { defaults.object(forKey: "updates.lastSuccess") as? Date }
 
