@@ -25,6 +25,16 @@ func runFeatureTests() {
     featureCheck(release("**요약**\n본문\n## 설치\n비표시").summary == "본문")
     featureCheck(release("## 설치\n설치 안내").summary == release(nil).summary)
     featureCheck(release("```\n## 요약\n잘못된 요약\n```\n## 요약\n정상\n## 설치").summary == "정상")
+    let warned = release("### 요약\n- 탭 추가\n\n### 경고\n- 접근성 권한을 다시 허용해주세요.\n  - 시스템 설정\n\n### 설치\n비표시")
+    featureCheck(warned.summary == "- 탭 추가" && warned.warning == "- 접근성 권한을 다시 허용해주세요.\n  - 시스템 설정", warned.warning)
+    featureCheck(warned.warningItems == ["* 접근성 권한을 다시 허용해주세요.", "  * 시스템 설정"] && sample.warning.isEmpty && release(nil).warningItems.isEmpty)
+    let linked = AppRelease.links("* [안내](https://github.com/codingnoye/gksdud/wiki) 참고, https://example.com/a.b. 주소 http://x.kr에서 [로컬](file:///etc) gksdud-1.0.zip")
+    featureCheck(linked.text == "* 안내 참고, https://example.com/a.b. 주소 http://x.kr에서 [로컬](file:///etc) gksdud-1.0.zip", linked.text)
+    featureCheck(linked.links.map { $0.url.absoluteString } == ["https://github.com/codingnoye/gksdud/wiki", "https://example.com/a.b", "http://x.kr"], "\(linked.links)")
+    featureCheck(linked.links.map { (linked.text as NSString).substring(with: $0.range) } == ["안내", "https://example.com/a.b", "http://x.kr"])
+    featureCheck(AppRelease.links("[https://a.com](https://a.com) https://").links.map { $0.range } == [NSRange(location: 0, length: 13)])
+    featureCheck(AppRelease.links("**https://a.com**").links.map { $0.url.absoluteString } == ["https://a.com"], "Bold marks are not part of the address")
+    featureCheck(release("**[경고]**\n권한\n## 설치").warning == "권한" && release("## [경고]\n권한").warning == "권한")
     featureCheck(sample.isNewer(than: "1.2.0") && !sample.isNewer(than: "1.3.0") && !sample.isNewer(than: "2.0.0"))
     featureCheck(!release(nil, draft: true).isNewer(than: "1.2.0"))
     featureCheck(!release(nil, pre: true).isNewer(than: "1.2.0"))
@@ -43,7 +53,7 @@ func runFeatureTests() {
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.01))
     }
     checker.check(); checker.check(force: true); featureCheck(requests == 1, "Coalesce concurrent requests")
-    respond(200, try! JSONEncoder().encode(sample)); featureCheck(checker.available != nil && !checker.checking)
+    respond(200, try! JSONEncoder().encode([sample])); featureCheck(checker.available != nil && !checker.checking)
     checker.check(); featureCheck(requests == 1)
     now += 86401; checker.check(); featureCheck(requests == 2)
     respond(503, nil); featureCheck(checker.available != nil && checker.error != nil, "Offline checks preserve cached notification")
@@ -52,9 +62,29 @@ func runFeatureTests() {
     let upgraded = UpdateChecker(defaults: defaults, installedVersion: "1.3.0", channel: .stable)
     featureCheck(upgraded.available == nil)
     checker.check(force: true); respond(200, Data("{}".utf8)); featureCheck(checker.error != nil && checker.available != nil)
-    checker.check(force: true); respond(200, try! JSONEncoder().encode(release(nil, tag: "v1.2.0")))
+    checker.check(force: true); respond(200, try! JSONEncoder().encode([release(nil, tag: "v1.2.0")]))
     featureCheck(checker.available == nil && checker.error == nil)
-    print("PASS: numeric versions, release summary boundaries, trusted release URLs, daily schedule, retry/cache/offline/upgrade behavior")
+    func stable(_ version: String, _ body: String?) -> AppRelease { release(body, tag: "v\(version)", url: "https://github.com/codingnoye/gksdud/releases/tag/v\(version)") }
+    checker.check(force: true)
+    respond(200, try! JSONEncoder().encode([stable("1.2.5", "### 요약\n\n* 수정\n\n### 경고\n권한을 다시 허용\n\n### 설치\n비표시"), release(nil, tag: "pre-v1.4.0", pre: true),
+                                            release(nil, tag: "canary-v1.4.0", pre: true), stable("1.3.0", "### 요약\n- 탭 추가\n  - 세부\n+ 개선\n문장"),
+                                            stable("1.2.8", "### 요약\n- 작은 수정\n### 경고\n- 설정 초기화"), stable("1.2.0", "### 요약\n- 설치된 버전\n### 경고\n- 표시 안 함"), stable("1.1.0", nil)]))
+    featureCheck(checker.pending.map(\.tag_name) == ["v1.3.0", "v1.2.8", "v1.2.5"] && checker.available?.tag_name == "v1.3.0", "Newer stable releases, newest first")
+    func shown(_ text: String) -> String { AppRelease.links(text).text }
+    featureCheck(shown(checker.summary) == "v1.3.0\n* 탭 추가\n  * 세부\n* 개선\n* 문장\n\nv1.2.8\n* 작은 수정\n\nv1.2.5\n* 수정", checker.summary)
+    featureCheck(AppRelease.links(checker.summary).links.map { $0.url.absoluteString } == ["1.3.0", "1.2.8", "1.2.5"].map { "https://github.com/codingnoye/gksdud/releases/tag/v\($0)" },
+                 "Each version links to its release page")
+    featureCheck(shown(checker.warnings) == "v1.2.8\n* 설정 초기화\n\nv1.2.5\n* 권한을 다시 허용", "Warnings of every version the update installs: \(checker.warnings)")
+    let partly = UpdateChecker(defaults: defaults, installedVersion: "1.2.5", channel: .stable)
+    featureCheck(shown(partly.summary) == "v1.3.0\n* 탭 추가\n  * 세부\n* 개선\n* 문장\n\nv1.2.8\n* 작은 수정" && shown(partly.warnings) == "v1.2.8\n* 설정 초기화")
+    featureCheck(UpdateChecker(defaults: defaults, installedVersion: "1.2.8", channel: .stable).warnings.isEmpty)
+    featureCheck(stable("1.3.0", nil).summaryItems == ["* " + release(nil).summary])
+    var both = stable("1.3.0", nil)
+    both.assets = ["gksdud-1.3.0-macos-universal.zip", "gksdud-1.3.0.zip", "SHA256SUMS"].map { ReleaseAsset(name: $0, browser_download_url: "", size: 1) }
+    featureCheck(both.archiveName == "gksdud-1.3.0.zip", "The Apple-signed archive when there is one")
+    both.assets?.removeAll { $0.name == "gksdud-1.3.0.zip" }
+    featureCheck(both.archiveName == "gksdud-1.3.0-macos-universal.zip" && stable("1.3.0", nil).archiveName == both.archiveName)
+    print("PASS: numeric versions, release summary boundaries, trusted release URLs, daily schedule, retry/cache/offline/upgrade behavior, summaries and warnings of every newer version, links in them, the Apple-signed archive first")
     do { try runUpdateInstallTests() } catch { preconditionFailure("Installer tests: \(error)") }
     runPrereleaseTests()
     runOptionInputTests()
@@ -663,6 +693,9 @@ func runUpdateInstallTests() throws {
     release.assets = [ReleaseAsset(name: "test.zip", browser_download_url: "https://evil.test/test.zip", size: 100)]
     rejected { _ = try release.assetURL(named: "test.zip", limit: 100) }
     rejected { _ = try UpdateValidation.installedRequirement(candidate) }
+    featureCheck(UpdateValidation.legacy != nil && UpdateValidation.developerID != nil)
+    let moves = try UpdateValidation.movesToDeveloperID(Bundle.main.bundleURL, UpdateValidation.signedCode(Bundle.main.bundleURL))
+    featureCheck(!moves, "A build without the team's Developer ID signature is not a move to Developer ID")
     // Real children: timeout must reap the process before replacement can roll back.
     for arguments in [["5"], ["-c", "trap '' TERM; exec /bin/sleep 5"]] {
         var pid: pid_t = 0
@@ -699,14 +732,14 @@ func runPrereleaseTests() {
     featureCheck(!preview.isNewer(than: "1.2.0"))
     var completion: ((Data?, URLResponse?, Error?) -> Void)?
     let checker = UpdateChecker(defaults: defaults, installedVersion: "1.2.0", channel: .stable, fetch: { request, done in
-        featureCheck(request.url?.path == "/repos/codingnoye/gksdud/releases/latest" && request.url?.query == nil)
+        featureCheck(request.url?.path == "/repos/codingnoye/gksdud/releases" && request.url?.query == "per_page=100")
         completion = done
     })
     checker.check()
-    completion?(try! JSONEncoder().encode(preview), HTTPURLResponse(url: URL(string: "https://api.github.com")!, statusCode: 200, httpVersion: nil, headerFields: nil), nil)
+    completion?(try! JSONEncoder().encode([preview]), HTTPURLResponse(url: URL(string: "https://api.github.com")!, statusCode: 200, httpVersion: nil, headerFields: nil), nil)
     RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.01))
-    featureCheck(checker.available == nil && checker.error != nil, "Prerelease responses are rejected")
-    print("PASS: stable-only endpoint and prerelease rejection")
+    featureCheck(checker.available == nil && checker.error == nil, "Prereleases are skipped")
+    print("PASS: release list endpoint and prerelease skipping")
     runCanaryTests()
 }
 
@@ -722,10 +755,10 @@ func runCanaryTests() {
     let defaults = UserDefaults(suiteName: suite)!
     defer { defaults.removePersistentDomain(forName: suite) }
     // A stable release cached under the same defaults is not an update for canary.
-    defaults.set(try! JSONEncoder().encode(release("v9.0.0", pre: false)), forKey: "updates.release")
+    defaults.set(try! JSONEncoder().encode([release("v9.0.0", pre: false)]), forKey: "updates.releases")
     var completion: ((Data?, URLResponse?, Error?) -> Void)?
     let checker = UpdateChecker(defaults: defaults, installedVersion: "1.2.0", channel: .canary, fetch: { request, done in
-        featureCheck(request.url?.path == "/repos/codingnoye/gksdud/releases" && request.url?.query == "per_page=30")
+        featureCheck(request.url?.path == "/repos/codingnoye/gksdud/releases" && request.url?.query == "per_page=100")
         completion = done
     })
     featureCheck(checker.available == nil)
@@ -735,7 +768,8 @@ func runCanaryTests() {
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.01))
     }
     respond([release("v2.0.0", pre: false), release("pre-v1.9.0"), release("canary-v1.4.0", draft: true), release("canary-v1.3.0"), release("canary-v1.3.1"), release("canary-v1.2.0")])
-    featureCheck(checker.available?.tag_name == "canary-v1.3.1" && checker.error == nil, "Newest canary release only")
+    featureCheck(checker.pending.map(\.tag_name) == ["canary-v1.3.1", "canary-v1.3.0"] && checker.error == nil, "Canary releases only")
+    featureCheck(AppRelease.links(checker.summary).text == "v1.3.1\n* canary-v1.3.1\n\nv1.3.0\n* canary-v1.3.0", checker.summary)
     featureCheck(UpdateChecker(defaults: defaults, installedVersion: "1.2.0", channel: .canary).available?.tag_name == "canary-v1.3.1")
     respond([release("v2.0.0", pre: false)])
     featureCheck(checker.available == nil && checker.error == nil, "No canary release yet is not an error")

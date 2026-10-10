@@ -8,6 +8,9 @@ abort 'Usage: publish-release.rb OWNER/REPO vVERSION' unless ARGV.length == 2 &&
   tag.match?(/\Av\d+\.\d+\.\d+\z/)
 summary = ENV.fetch('RELEASE_SUMMARY', '').strip
 abort 'Release summary is required' if summary.empty?
+# The app asks users to confirm a warning before an update installs its version.
+warning = ENV.fetch('RELEASE_WARNING', '').strip
+summary += "\n\n### 경고\n\n#{warning}" unless warning.empty?
 
 output, status = Open3.capture2e('gh', 'release', 'view', tag, '--repo', repo,
                               '--json', 'tagName,isDraft,isPrerelease')

@@ -217,7 +217,8 @@ class ReleaseTests < Minitest::Test
     workflow = YAML.load_file("#{ROOT}/.github/workflows/release.yml")
     triggers = workflow.fetch('on') { workflow.fetch(true) }
     inputs = triggers.fetch('workflow_dispatch').fetch('inputs')
-    assert_equal %w[release_summary source_ref version], inputs.keys.sort
+    assert_equal %w[release_summary release_warning source_ref version], inputs.keys.sort
+    refute inputs.fetch('release_warning').fetch('required')
     assert_equal 'main', inputs.fetch('source_ref').fetch('default')
     steps = workflow.fetch('jobs').fetch('release').fetch('steps')
     publish = steps.find { |step| step['name'] == 'Publish verified stable draft' }
@@ -233,7 +234,7 @@ class ReleaseTests < Minitest::Test
     assert_equal 'false', create_tag.fetch('if')[/== '([^']+)'/, 1]
   end
 
-  def publication_result(draft: true, prerelease: false, actual_tag: 'v1.2.0', summary: 'Input fixes', view_exit: 0, edit_exit: 0)
+  def publication_result(draft: true, prerelease: false, actual_tag: 'v1.2.0', summary: 'Input fixes', warning: '', view_exit: 0, edit_exit: 0)
     Dir.mktmpdir('gksdud-publish-test-') do |dir|
       File.write("#{dir}/gh", <<~RUBY)
         #!/usr/bin/ruby
@@ -247,7 +248,7 @@ class ReleaseTests < Minitest::Test
         exit ENV.fetch('EDIT_EXIT').to_i
       RUBY
       File.chmod(0755, "#{dir}/gh")
-      env = { 'PATH' => "#{dir}:#{ENV.fetch('PATH')}", 'RELEASE_SUMMARY' => summary,
+      env = { 'PATH' => "#{dir}:#{ENV.fetch('PATH')}", 'RELEASE_SUMMARY' => summary, 'RELEASE_WARNING' => warning,
               'RELEASE_JSON' => JSON.generate(tagName: actual_tag, isDraft: draft, isPrerelease: prerelease),
               'CAPTURE' => "#{dir}/args.json", 'NOTES' => "#{dir}/notes.md",
               'VIEW_EXIT' => view_exit.to_s, 'EDIT_EXIT' => edit_exit.to_s }
@@ -268,6 +269,13 @@ class ReleaseTests < Minitest::Test
     assert_includes notes, summary
     refute_includes notes, '<!-- 게시 전'
     assert_includes notes, 'brew install --cask codingnoye/tap/gksdud'
+    refute_includes notes, '### 경고'
+  end
+
+  def test_publish_adds_the_warning_section_after_the_summary
+    status, _, notes, output = publication_result(summary: '- 서명 변경', warning: " - 손쉬운 사용 권한을 다시 허용\n")
+    assert status.success?, output
+    assert_includes notes, "### 요약\n\n- 서명 변경\n\n### 경고\n\n- 손쉬운 사용 권한을 다시 허용\n\n### 설치"
   end
 
   def test_published_release_is_not_edited_on_retry
