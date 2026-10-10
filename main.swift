@@ -667,14 +667,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     // Tests take a command's errors here instead of a window.
     var presentCommandErrors: (([String]) -> Void)?
     var returningFromPermissionSettings = false
-    // The permission of the self-signed build was removed at launch: ask for it again, and once it is given turn back on
-    // the activation that turning off without it undid. Kept until then, as the app can quit first.
+    // The permission of the self-signed build was removed: ask for it again, on every launch until it is given, and then turn
+    // back on the activation that turning off without it undid. Kept until then, as the app can quit first.
     var askForPermission = false
     var reactivateWhenTrusted: Bool {
         get { engine.defaults.bool(forKey: "permissions.reactivate") }
         set { engine.defaults.set(newValue, forKey: "permissions.reactivate") }
     }
-    // A launch asking again after a failed removal finds the activation undone already, and keeps what the first one saved.
+    // A launch asking again finds the activation undone already, and keeps what the first one saved.
     func keepActivationUntilTrusted() { if engine.active { reactivateWhenTrusted = true } }
     var permissionSettingsWasActive = false
     func finishPermissionVisit() {
