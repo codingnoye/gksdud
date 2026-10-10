@@ -699,22 +699,29 @@ func runUpdateInstallTests() throws {
     let suite = "io.gksdud.permission-reset-tests.\(UUID().uuidString)"
     let defaults = UserDefaults(suiteName: suite)!
     defer { defaults.removePersistentDomain(forName: suite) }
-    var resets: [String] = [], failing: Set<String> = []
+    var resets: [String] = [], failing: Set<String> = [], allowed = false, checks = 0
     let forget = { (developerID: Bool) -> Bool in
-        UpdateValidation.forgetSelfSignedPermissions(defaults: defaults, developerID: developerID) { resets.append($0); return !failing.contains($0) }
+        UpdateValidation.forgetSelfSignedPermissions(defaults: defaults, developerID: developerID, trusted: { checks += 1; return allowed }) {
+            resets.append($0); return !failing.contains($0)
+        }
     }
     featureCheck(!forget(true) && resets.isEmpty, "A first installation has no old permission")
     defaults.removeObject(forKey: "permissions.developerID"); defaults.set(Date(), forKey: "updates.nextCheck")
     featureCheck(!forget(false) && resets.isEmpty)
-    featureCheck(forget(true) && resets == ["Accessibility", "PostEvent"])
-    featureCheck(!forget(true) && resets.count == 2, "Only once")
+    featureCheck(forget(true) && resets == ["Accessibility", "PostEvent"] && checks == 0, "Not asked whether it is allowed before the removal")
+    featureCheck(forget(true) && forget(true) && resets.count == 2, "Removed once, asked again on every launch until it is given")
+    allowed = true
+    featureCheck(!forget(true) && resets.count == 2)
+    allowed = false
+    featureCheck(!forget(true), "Not again once given, even when taken away later")
     featureCheck(!forget(false) && resets.count == 2)
     featureCheck(forget(true) && resets.count == 4, "Again after a self-signed build ran, as a rollback or a downgrade")
     defaults.set(false, forKey: "permissions.developerID"); failing = ["Accessibility", "PostEvent"]
     featureCheck(forget(true) && resets.count == 6, "Asked even when the removal failed")
     failing = ["PostEvent"]
     featureCheck(forget(true) && resets.suffix(2) == ["Accessibility", "PostEvent"], "A failed removal is tried again on the next launch")
-    featureCheck(!forget(true) && resets.suffix(1) == ["PostEvent"], "Only the one still left, without asking for the one removed already")
+    allowed = true
+    featureCheck(!forget(true) && resets.suffix(1) == ["PostEvent"], "Only the one still left")
     failing = []
     featureCheck(!forget(true) && !forget(true) && resets.count == 10, "Until it is removed")
     // Real children: timeout must reap the process before replacement can roll back.
