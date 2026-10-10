@@ -699,16 +699,24 @@ func runUpdateInstallTests() throws {
     let suite = "io.gksdud.permission-reset-tests.\(UUID().uuidString)"
     let defaults = UserDefaults(suiteName: suite)!
     defer { defaults.removePersistentDomain(forName: suite) }
-    var resets: [String] = []
-    featureCheck(!UpdateValidation.forgetSelfSignedPermissions(defaults: defaults, developerID: true) { resets.append($0) } && resets.isEmpty,
-                 "A first installation has no old permission")
+    var resets: [String] = [], failing: Set<String> = []
+    let forget = { (developerID: Bool) -> Bool in
+        UpdateValidation.forgetSelfSignedPermissions(defaults: defaults, developerID: developerID) { resets.append($0); return !failing.contains($0) }
+    }
+    featureCheck(!forget(true) && resets.isEmpty, "A first installation has no old permission")
     defaults.removeObject(forKey: "permissions.developerID"); defaults.set(Date(), forKey: "updates.nextCheck")
-    featureCheck(!UpdateValidation.forgetSelfSignedPermissions(defaults: defaults, developerID: false) { resets.append($0) } && resets.isEmpty)
-    featureCheck(UpdateValidation.forgetSelfSignedPermissions(defaults: defaults, developerID: true) { resets.append($0) } && resets == ["Accessibility", "PostEvent"])
-    featureCheck(!UpdateValidation.forgetSelfSignedPermissions(defaults: defaults, developerID: true) { resets.append($0) } && resets.count == 2, "Only once")
-    featureCheck(!UpdateValidation.forgetSelfSignedPermissions(defaults: defaults, developerID: false) { resets.append($0) } && resets.count == 2)
-    featureCheck(UpdateValidation.forgetSelfSignedPermissions(defaults: defaults, developerID: true) { resets.append($0) } && resets.count == 4,
-                 "Again after a self-signed build ran, as a rollback or a downgrade")
+    featureCheck(!forget(false) && resets.isEmpty)
+    featureCheck(forget(true) && resets == ["Accessibility", "PostEvent"])
+    featureCheck(!forget(true) && resets.count == 2, "Only once")
+    featureCheck(!forget(false) && resets.count == 2)
+    featureCheck(forget(true) && resets.count == 4, "Again after a self-signed build ran, as a rollback or a downgrade")
+    defaults.set(false, forKey: "permissions.developerID"); failing = ["Accessibility", "PostEvent"]
+    featureCheck(forget(true) && resets.count == 6, "Asked even when the removal failed")
+    failing = ["PostEvent"]
+    featureCheck(forget(true) && resets.suffix(2) == ["Accessibility", "PostEvent"], "A failed removal is tried again on the next launch")
+    featureCheck(!forget(true) && resets.suffix(1) == ["PostEvent"], "Only the one still left, without asking for the one removed already")
+    failing = []
+    featureCheck(!forget(true) && !forget(true) && resets.count == 10, "Until it is removed")
     // Real children: timeout must reap the process before replacement can roll back.
     for arguments in [["5"], ["-c", "trap '' TERM; exec /bin/sleep 5"]] {
         var pid: pid_t = 0

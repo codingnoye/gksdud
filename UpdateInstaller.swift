@@ -122,17 +122,24 @@ enum UpdateValidation {
     // A permission given to a self-signed build stays listed as allowed but no longer applies to the Developer ID build, and
     // switching it off and on keeps the old certificate. A Developer ID launch after another build ran removes it, so that
     // allowing again adds a new one: after the self-signed releases, and again after a rollback, a downgrade or a local build.
+    // One left behind could never be allowed again, so a failed removal is tried a few times, then again on every launch.
     static func forgetSelfSignedPermissions(defaults: UserDefaults, developerID: Bool = UpdateValidation.runsWithDeveloperID,
-                                            reset: (String) -> Void = { service in
-        _ = try? UpdateValidation.command("/usr/bin/tccutil", ["reset", service, UpdateValidation.identifier])
+                                            reset: (String) -> Bool = { service in
+        (0..<3).contains { attempt in
+            if attempt > 0 { Thread.sleep(forTimeInterval: 0.3) }
+            return (try? UpdateValidation.command("/usr/bin/tccutil", ["reset", service, UpdateValidation.identifier])) != nil
+        }
     }) -> Bool {
         // Whether the last launch was the Developer ID build.
         let otherBuildRan = !defaults.bool(forKey: "permissions.developerID")
         defaults.set(developerID, forKey: "permissions.developerID")
         // Written by every launch since 1.1: a first installation has nothing to remove.
-        guard developerID, otherBuildRan, defaults.object(forKey: "updates.nextCheck") != nil else { return false }
-        for service in ["Accessibility", "PostEvent"] { reset(service) }
-        return true
+        guard developerID, defaults.object(forKey: "updates.nextCheck") != nil else { return false }
+        let services = otherBuildRan ? ["Accessibility", "PostEvent"] : defaults.stringArray(forKey: "permissions.reset") ?? []
+        guard !services.isEmpty else { return false }
+        defaults.set(services.filter { !reset($0) }, forKey: "permissions.reset")
+        // Asked even when the removal failed: allowing then takes effect once the next launch removes it.
+        return services.contains("Accessibility")
     }
     static func candidate(_ new: URL, installed: URL, version: String) throws {
         let requirement = try installedRequirement(installed)
