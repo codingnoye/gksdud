@@ -2,6 +2,13 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 mode=${GKSDUD_SIGN_MODE:-local}
+# Canary is a separate app, gksdud-dev, with its own settings, permissions and update channel.
+channel=${GKSDUD_CHANNEL:-stable}
+case $channel in
+  stable) app=gksdud identifier=io.gksdud.inputswitch ;;
+  canary) app=gksdud-dev identifier=io.gksdud.inputswitch.dev ;;
+  *) echo 'GKSDUD_CHANNEL must be stable or canary' >&2; exit 1 ;;
+esac
 sign_args=()
 case "$mode" in
   local)
@@ -30,10 +37,10 @@ sign() {
 }
 output_dir=${GKSDUD_OUTPUT_DIR:-"$PWD/outputs"}
 stage=$(mktemp -d /private/tmp/gksdud-build.XXXXXX)
-mkdir -p "$stage/gksdud.app/Contents/MacOS" "$stage/gksdud.app/Contents/Helpers" "$stage/gksdud.app/Contents/Resources" "$output_dir"
+mkdir -p "$stage/$app.app/Contents/MacOS" "$stage/$app.app/Contents/Helpers" "$stage/$app.app/Contents/Resources" "$output_dir"
 swiftc -parse-as-library -D ICON_GENERATOR -module-cache-path "$stage/module-cache" DudIcon.swift -o "$stage/icon-generator"
 "$stage/icon-generator" "$stage/AppIcon.iconset"
-iconutil -c icns "$stage/AppIcon.iconset" -o "$stage/gksdud.app/Contents/Resources/AppIcon.icns"
+iconutil -c icns "$stage/AppIcon.iconset" -o "$stage/$app.app/Contents/Resources/AppIcon.icns"
 sources=(main.swift DudIcon.swift KeyboardManagement.swift KeyboardSettings.swift SettingsWindow.swift InputSources.swift UpdateChecking.swift UpdateInstaller.swift SpecialCharacters.swift CLI.swift CLIServer.swift KeyboardTests.swift FeatureTests.swift CLITests.swift SelfTest.swift)
 cli_sources=(CLI.swift CLITool.swift)
 compile() { swiftc -swift-version 5 -O -module-cache-path "$stage/module-cache" -import-objc-header Bridge.h "${sources[@]}" -framework AppKit -framework IOKit -framework ServiceManagement "$@"; }
@@ -41,33 +48,37 @@ for arch in arm64 x86_64; do
   compile -target "$arch-apple-macos13.0" -o "$stage/gksdud-$arch"
   swiftc -swift-version 5 -O -parse-as-library -module-cache-path "$stage/module-cache" "${cli_sources[@]}" -target "$arch-apple-macos13.0" -o "$stage/cli-$arch"
 done
-lipo -create "$stage/gksdud-arm64" "$stage/gksdud-x86_64" -output "$stage/gksdud.app/Contents/MacOS/gksdud"
-lipo -create "$stage/cli-arm64" "$stage/cli-x86_64" -output "$stage/gksdud.app/Contents/Helpers/gksdud"
-cp Info.plist "$stage/gksdud.app/Contents/Info.plist"
-cp LICENSE "$stage/gksdud.app/Contents/Resources/LICENSE"
-cp Resources/github.svg Resources/fairy.svg Resources/OCTICONS-LICENSE "$stage/gksdud.app/Contents/Resources/"
+lipo -create "$stage/gksdud-arm64" "$stage/gksdud-x86_64" -output "$stage/$app.app/Contents/MacOS/gksdud"
+lipo -create "$stage/cli-arm64" "$stage/cli-x86_64" -output "$stage/$app.app/Contents/Helpers/gksdud"
+cp Info.plist "$stage/$app.app/Contents/Info.plist"
+if [[ $channel == canary ]]; then
+  for key in CFBundleName CFBundleDisplayName; do /usr/libexec/PlistBuddy -c "Set :$key $app" "$stage/$app.app/Contents/Info.plist"; done
+  /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $identifier" -c 'Add :GKSDUDChannel string canary' "$stage/$app.app/Contents/Info.plist"
+fi
+cp LICENSE "$stage/$app.app/Contents/Resources/LICENSE"
+cp Resources/github.svg Resources/fairy.svg Resources/OCTICONS-LICENSE "$stage/$app.app/Contents/Resources/"
 if [[ -n "${GKSDUD_APP_VERSION:-}" ]]; then
   [[ "$GKSDUD_APP_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
-  /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $GKSDUD_APP_VERSION" "$stage/gksdud.app/Contents/Info.plist"
+  /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $GKSDUD_APP_VERSION" "$stage/$app.app/Contents/Info.plist"
 fi
 if [[ -n "${GKSDUD_BUILD_NUMBER:-}" ]]; then
   [[ "$GKSDUD_BUILD_NUMBER" =~ ^[0-9]+$ ]] || exit 1
-  /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $GKSDUD_BUILD_NUMBER" "$stage/gksdud.app/Contents/Info.plist"
+  /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $GKSDUD_BUILD_NUMBER" "$stage/$app.app/Contents/Info.plist"
 fi
-sign "$stage/gksdud.app/Contents/Helpers/gksdud" io.gksdud.inputswitch.cli
-sign "$stage/gksdud.app" io.gksdud.inputswitch
-codesign --verify --deep --strict "$stage/gksdud.app"
+sign "$stage/$app.app/Contents/Helpers/gksdud" "$identifier.cli"
+sign "$stage/$app.app" "$identifier"
+codesign --verify --deep --strict "$stage/$app.app"
 # The release app has no test code; the same bundle with the test modes compiled in (-D TESTS) runs them.
-test_app="$stage/test/gksdud.app"
-ditto "$stage/gksdud.app" "$test_app"
+test_app="$stage/test/$app.app"
+ditto "$stage/$app.app" "$test_app"
 compile -D TESTS -target "$(uname -m)-apple-macos13.0" -o "$test_app/Contents/MacOS/gksdud"
-sign "$test_app" io.gksdud.inputswitch
+sign "$test_app" "$identifier"
 "$test_app/Contents/MacOS/gksdud" --self-test
 # The command-line tool answers help without the app, and refuses wrong arguments before asking it.
-"$stage/gksdud.app/Contents/Helpers/gksdud" help settings >/dev/null
-if "$stage/gksdud.app/Contents/Helpers/gksdud" set no-such=on 2>/dev/null; then exit 1; else test $? -eq 2; fi
-version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$stage/gksdud.app/Contents/Info.plist")
-ditto -c -k --keepParent --norsrc "$stage/gksdud.app" "$output_dir/gksdud-$version-macos-universal.zip"
-codesign -d -r- "$stage/gksdud.app"
-echo "Built app: $stage/gksdud.app"
+"$stage/$app.app/Contents/Helpers/gksdud" help settings >/dev/null
+if "$stage/$app.app/Contents/Helpers/gksdud" set no-such=on 2>/dev/null; then exit 1; else test $? -eq 2; fi
+version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$stage/$app.app/Contents/Info.plist")
+ditto -c -k --keepParent --norsrc "$stage/$app.app" "$output_dir/$app-$version-macos-universal.zip"
+codesign -d -r- "$stage/$app.app"
+echo "Built app: $stage/$app.app"
 echo "Test app: $test_app"

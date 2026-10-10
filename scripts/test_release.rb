@@ -21,11 +21,17 @@ class ReleaseTests < Minitest::Test
   def test_stable_and_prerelease_assets_are_separate
     stable = ReleaseMetadata.new('1.2.0', 'v1.2.0')
     pre = ReleaseMetadata.new('1.2.0', 'pre-v1.2.0')
+    canary = ReleaseMetadata.new('1.2.0', 'canary-v1.2.0')
     refute stable.prerelease?
     assert pre.prerelease?
+    assert canary.prerelease?
     assert_equal 'gksdud-1.2.0-macos-universal.zip', stable.filename
     assert_equal 'gksdud-1.2.0-pre-macos-universal.zip', pre.filename
-    refute_equal stable.asset_version, pre.asset_version
+    assert_equal 'gksdud-dev-1.2.0-macos-universal.zip', canary.filename
+    assert_equal %w[gksdud gksdud gksdud-dev], [stable, pre, canary].map(&:app)
+    assert_equal 'io.gksdud.inputswitch.dev', canary.identifier
+    assert_equal 'io.gksdud.inputswitch', pre.identifier
+    assert_equal 3, [stable, pre, canary].map(&:asset_version).uniq.length
   end
 
   def test_only_prerelease_tags_trigger_on_push
@@ -33,6 +39,7 @@ class ReleaseTests < Minitest::Test
     triggers = workflow.fetch('on') { workflow.fetch(true) }
     patterns = triggers.fetch('push').fetch('tags')
     assert patterns.any? { |pattern| File.fnmatch?(pattern, 'pre-v1.2.0') }, 'No push trigger for pre-v1.2.0'
+    assert patterns.any? { |pattern| File.fnmatch?(pattern, 'canary-v1.2.0') }, 'No push trigger for canary-v1.2.0'
     refute patterns.any? { |pattern| File.fnmatch?(pattern, 'v1.2.0') }, 'Stable tags must use manual release'
   end
 
@@ -62,6 +69,10 @@ class ReleaseTests < Minitest::Test
         assert_equal tag.start_with?('pre-v'), result.fetch(:prerelease)
       end
       assert_raises(ArgumentError) { selection.resolve(event: 'push', tag: 'v9.0.0', version: '', source: '', summary: '') }
+      # A canary's version is its tag's, ahead of the source.
+      result = selection.resolve(event: 'push', tag: 'canary-v9.0.0', version: '', source: '', summary: '')
+      assert_equal ['9.0.0', 'canary', true], result.values_at(:version, :channel, :prerelease)
+      assert_raises(ArgumentError) { selection.resolve(event: 'push', tag: 'canary-v9.0', version: '', source: '', summary: '') }
     end
   end
 
@@ -134,27 +145,36 @@ class ReleaseTests < Minitest::Test
 
   # Run the actual publication shell block against a fake gh command. No network
   # or signing secrets are used, and no tag or release is created.
-  def release_arguments(tag)
+  def release_arguments(tag, tag_type: 'commit', message: '')
     metadata = ReleaseMetadata.new('1.2.0', tag)
     workflow = YAML.load_file("#{ROOT}/.github/workflows/release.yml")
     step = workflow.fetch('jobs').fetch('release').fetch('steps').find do |item|
       item.fetch('name', '').start_with?('Create stable draft')
     end
     Dir.mktmpdir('gksdud-release-test-') do |dir|
-      File.write("#{dir}/gh", "#!/usr/bin/ruby\nrequire 'json'\nFile.write(ENV.fetch('CAPTURE'), JSON.generate(ARGV))\n")
+      File.write("#{dir}/gh", <<~RUBY)
+        #!/usr/bin/ruby
+        require 'json'
+        if ARGV.first == 'api'
+          puts ARGV[1].include?('/git/ref/tags/') ? "\#{ENV.fetch('TAG_TYPE')} 0123abc" : ENV.fetch('TAG_MESSAGE')
+          exit
+        end
+        File.write(ENV.fetch('CAPTURE'), JSON.generate(ARGV))
+        File.write(ENV.fetch('NOTES'), File.read(ARGV.fetch(ARGV.index('--notes-file') + 1)))
+      RUBY
       File.chmod(0755, "#{dir}/gh")
       env = metadata.outputs.transform_keys { |key| key.to_s.upcase }.transform_values(&:to_s)
       env.merge!('PATH' => "#{dir}:#{ENV.fetch('PATH')}", 'GITHUB_REPOSITORY' => 'codingnoye/gksdud',
-                 'SOURCE_ROOT' => 'release-source',
-                 'CAPTURE' => "#{dir}/args.json")
+                 'SOURCE_ROOT' => 'release-source', 'RUNNER_TEMP' => dir, 'TAG_TYPE' => tag_type, 'TAG_MESSAGE' => message,
+                 'CAPTURE' => "#{dir}/args.json", 'NOTES' => "#{dir}/notes.md")
       output, status = Open3.capture2e(env, '/bin/bash', '-c', step.fetch('run'), chdir: ROOT)
       assert status.success?, output
-      JSON.parse(File.read("#{dir}/args.json"))
+      [JSON.parse(File.read("#{dir}/args.json")), File.read("#{dir}/notes.md")]
     end
   end
 
   def test_stable_remains_a_draft
-    args = release_arguments('v1.2.0')
+    args, = release_arguments('v1.2.0')
     assert_equal ['release', 'create', 'v1.2.0'], args.first(3)
     assert_includes args, '--draft'
     refute_includes args, '--prerelease'
@@ -165,7 +185,7 @@ class ReleaseTests < Minitest::Test
   end
 
   def test_prerelease_is_published_without_changing_latest
-    args = release_arguments('pre-v1.2.0')
+    args, = release_arguments('pre-v1.2.0')
     assert_equal ['release', 'create', 'pre-v1.2.0'], args.first(3)
     assert_includes args, '--prerelease'
     assert_includes args, '--latest=false'
@@ -175,6 +195,22 @@ class ReleaseTests < Minitest::Test
     assert_includes args, '.github/PRERELEASE_NOTES.md'
     assert_includes args, '--generate-notes'
     assert_includes args, '--verify-tag'
+  end
+
+  def test_canary_is_published_with_the_tag_message_without_changing_latest
+    message = "### 요약\n- 카나리아 항목"
+    args, notes = release_arguments('canary-v1.2.0', tag_type: 'tag', message: message)
+    assert_equal ['release', 'create', 'canary-v1.2.0'], args.first(3)
+    assert_includes args, '--prerelease'
+    assert_includes args, '--latest=false'
+    refute_includes args, '--draft'
+    refute_includes args, '--generate-notes'
+    assert_includes args, 'gksdud-dev 1.2.0 Canary'
+    assert_includes args, 'release-source/outputs/gksdud-dev-1.2.0-macos-universal.zip'
+    assert_includes args, 'release-source/outputs/release-1.2.0-canary/SHA256SUMS'
+    assert notes.start_with?("#{message}\n\n### 카나리아"), notes
+    _, notes = release_arguments('canary-v1.2.0')
+    assert_equal File.read("#{ROOT}/.github/CANARY_NOTES.md"), notes, 'A lightweight tag has no message'
   end
 
   def test_stable_publication_requires_explicit_dispatch_and_keeps_tap_in_actions

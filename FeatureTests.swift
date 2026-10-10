@@ -34,7 +34,7 @@ func runFeatureTests() {
     defer { defaults.removePersistentDomain(forName: suite) }
     var now = Date(timeIntervalSince1970: 100_000), requests = 0
     var completion: ((Data?, URLResponse?, Error?) -> Void)?
-    let checker = UpdateChecker(defaults: defaults, installedVersion: "1.2.0", now: { now }, fetch: { request, done in
+    let checker = UpdateChecker(defaults: defaults, installedVersion: "1.2.0", channel: .stable, now: { now }, fetch: { request, done in
         requests += 1; completion = done
         featureCheck(request.url?.host == "api.github.com" && request.timeoutInterval == 20)
     })
@@ -47,9 +47,9 @@ func runFeatureTests() {
     checker.check(); featureCheck(requests == 1)
     now += 86401; checker.check(); featureCheck(requests == 2)
     respond(503, nil); featureCheck(checker.available != nil && checker.error != nil, "Offline checks preserve cached notification")
-    let relaunched = UpdateChecker(defaults: defaults, installedVersion: "1.2.0")
+    let relaunched = UpdateChecker(defaults: defaults, installedVersion: "1.2.0", channel: .stable)
     featureCheck(relaunched.available != nil)
-    let upgraded = UpdateChecker(defaults: defaults, installedVersion: "1.3.0")
+    let upgraded = UpdateChecker(defaults: defaults, installedVersion: "1.3.0", channel: .stable)
     featureCheck(upgraded.available == nil)
     checker.check(force: true); respond(200, Data("{}".utf8)); featureCheck(checker.error != nil && checker.available != nil)
     checker.check(force: true); respond(200, try! JSONEncoder().encode(release(nil, tag: "v1.2.0")))
@@ -483,7 +483,7 @@ func probeEscape() throws {
     // The running app's settings, read only.
     let saved = UserDefaults.standard
     let target = targets.first { $0.name == saved.string(forKey: "target") } ?? targets[6]
-    guard NSRunningApplication.runningApplications(withBundleIdentifier: "io.gksdud.inputswitch").contains(where: { $0.processIdentifier != getpid() }),
+    guard NSRunningApplication.runningApplications(withBundleIdentifier: UpdateValidation.identifier).contains(where: { $0.processIdentifier != getpid() }),
           saved.object(forKey: "active") == nil || saved.bool(forKey: "active"), saved.bool(forKey: "escapeToEnglish") else {
         throw failure(2, "Run gksdud with ESC to English turned on first.")
     }
@@ -646,11 +646,15 @@ func runUpdateInstallTests() throws {
     rejected { try UpdateValidation.checksum(archive, text: valid, name: "test.zip") }
     let names = "gksdud.app/\ngksdud.app/Contents/MacOS/gksdud\n"
     let listing = "drwxr-xr-x  2.1 unx 0 bx stor 00-Sep-00 00:00 gksdud.app/\n-rwxr-xr-x  2.1 unx 42 bx defN 00-Sep-00 00:00 gksdud.app/Contents/MacOS/gksdud\n"
-    try UpdateValidation.archiveNames(names, listing: listing)
-    rejected { try UpdateValidation.archiveNames("gksdud.app/../../escape", listing: listing) }
-    rejected { try UpdateValidation.archiveNames("/gksdud.app/file", listing: listing) }
-    rejected { try UpdateValidation.archiveNames(names, listing: listing.replacingOccurrences(of: "-rwx", with: "lrwx")) }
-    rejected { try UpdateValidation.archiveNames(names, listing: listing.replacingOccurrences(of: "42 bx", with: "999999999 bx")) }
+    try UpdateValidation.archiveNames(names, listing: listing, app: "gksdud.app")
+    rejected { try UpdateValidation.archiveNames("gksdud.app/../../escape", listing: listing, app: "gksdud.app") }
+    rejected { try UpdateValidation.archiveNames("/gksdud.app/file", listing: listing, app: "gksdud.app") }
+    rejected { try UpdateValidation.archiveNames(names, listing: listing.replacingOccurrences(of: "-rwx", with: "lrwx"), app: "gksdud.app") }
+    rejected { try UpdateValidation.archiveNames(names, listing: listing.replacingOccurrences(of: "42 bx", with: "999999999 bx"), app: "gksdud.app") }
+    // The canary app is gksdud-dev.app; neither channel takes the other's archive.
+    rejected { try UpdateValidation.archiveNames(names, listing: listing, app: "gksdud-dev.app") }
+    try UpdateValidation.archiveNames(names.replacingOccurrences(of: "gksdud.app", with: "gksdud-dev.app"),
+                                      listing: listing.replacingOccurrences(of: "gksdud.app", with: "gksdud-dev.app"), app: "gksdud-dev.app")
     var release = AppRelease(tag_name: "v1.3.0", html_url: "https://github.com/codingnoye/gksdud/releases/tag/v1.3.0", body: nil, draft: false, prerelease: false)
     release.assets = [ReleaseAsset(name: "test.zip", browser_download_url: "https://github.com/codingnoye/gksdud/releases/download/v1.3.0/test.zip", size: 100)]
     let assetURL = try release.assetURL(named: "test.zip", limit: 100)
@@ -694,7 +698,7 @@ func runPrereleaseTests() {
     let preview = AppRelease(tag_name: tag, html_url: "https://github.com/codingnoye/gksdud/releases/tag/\(tag)", body: nil, draft: false, prerelease: true)
     featureCheck(!preview.isNewer(than: "1.2.0"))
     var completion: ((Data?, URLResponse?, Error?) -> Void)?
-    let checker = UpdateChecker(defaults: defaults, installedVersion: "1.2.0", fetch: { request, done in
+    let checker = UpdateChecker(defaults: defaults, installedVersion: "1.2.0", channel: .stable, fetch: { request, done in
         featureCheck(request.url?.path == "/repos/codingnoye/gksdud/releases/latest" && request.url?.query == nil)
         completion = done
     })
@@ -703,6 +707,39 @@ func runPrereleaseTests() {
     RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.01))
     featureCheck(checker.available == nil && checker.error != nil, "Prerelease responses are rejected")
     print("PASS: stable-only endpoint and prerelease rejection")
+    runCanaryTests()
+}
+
+func runCanaryTests() {
+    func release(_ tag: String, pre: Bool = true, draft: Bool = false) -> AppRelease {
+        AppRelease(tag_name: tag, html_url: "https://github.com/codingnoye/gksdud/releases/tag/\(tag)", body: "### 요약\n- \(tag)", draft: draft, prerelease: pre)
+    }
+    let canary = release("canary-v1.3.0")
+    featureCheck(canary.channel == .canary && canary.versionString == "1.3.0" && canary.archiveName == "gksdud-dev-1.3.0-macos-universal.zip")
+    featureCheck(canary.isNewer(than: "1.2.0") && !release("canary-v1.3.0", pre: false).isNewer(than: "1.2.0"), "Canary releases are prereleases")
+    featureCheck(release("v1.3.0", pre: false).channel == .stable && !release("v1.3.0").isNewer(than: "1.2.0") && release("pre-v1.3.0").channel == nil)
+    let suite = "io.gksdud.canary-tests.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+    // A stable release cached under the same defaults is not an update for canary.
+    defaults.set(try! JSONEncoder().encode(release("v9.0.0", pre: false)), forKey: "updates.release")
+    var completion: ((Data?, URLResponse?, Error?) -> Void)?
+    let checker = UpdateChecker(defaults: defaults, installedVersion: "1.2.0", channel: .canary, fetch: { request, done in
+        featureCheck(request.url?.path == "/repos/codingnoye/gksdud/releases" && request.url?.query == "per_page=30")
+        completion = done
+    })
+    featureCheck(checker.available == nil)
+    func respond(_ releases: [AppRelease]) {
+        checker.check(force: true)
+        completion?(try! JSONEncoder().encode(releases), HTTPURLResponse(url: URL(string: "https://api.github.com")!, statusCode: 200, httpVersion: nil, headerFields: nil), nil)
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.01))
+    }
+    respond([release("v2.0.0", pre: false), release("pre-v1.9.0"), release("canary-v1.4.0", draft: true), release("canary-v1.3.0"), release("canary-v1.3.1"), release("canary-v1.2.0")])
+    featureCheck(checker.available?.tag_name == "canary-v1.3.1" && checker.error == nil, "Newest canary release only")
+    featureCheck(UpdateChecker(defaults: defaults, installedVersion: "1.2.0", channel: .canary).available?.tag_name == "canary-v1.3.1")
+    respond([release("v2.0.0", pre: false)])
+    featureCheck(checker.available == nil && checker.error == nil, "No canary release yet is not an error")
+    print("PASS: canary releases, endpoint, newest canary, separate from stable")
 }
 
 func runOptionRepeatTests() {
@@ -882,7 +919,7 @@ func probeInputSources() throws {
     guard AXIsProcessTrusted() else { throw failure(1, "Launch the gksdud bundle with open -n so the probe has its accessibility permission.") }
     let saved = UserDefaults.standard
     let target = targets.first { $0.name == saved.string(forKey: "target") } ?? targets[6]
-    guard NSRunningApplication.runningApplications(withBundleIdentifier: "io.gksdud.inputswitch").contains(where: { $0.processIdentifier != getpid() }),
+    guard NSRunningApplication.runningApplications(withBundleIdentifier: UpdateValidation.identifier).contains(where: { $0.processIdentifier != getpid() }),
           saved.object(forKey: "active") == nil || saved.bool(forKey: "active") else { throw failure(2, "Run gksdud with activation on first.") }
     let suite = "io.gksdud.sources-probe.\(UUID().uuidString)"
     let defaults = UserDefaults(suiteName: suite)!

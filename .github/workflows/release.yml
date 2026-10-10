@@ -2,7 +2,7 @@ name: Release
 
 on:
   push:
-    tags: ['pre-v*']
+    tags: ['pre-v*', 'canary-v*']
   workflow_dispatch:
     inputs:
       source_ref:
@@ -28,7 +28,7 @@ concurrency:
 
 jobs:
   release:
-    if: github.repository == 'codingnoye/gksdud' && ((github.event_name == 'push' && startsWith(github.ref, 'refs/tags/pre-v')) || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))
+    if: github.repository == 'codingnoye/gksdud' && ((github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/pre-v') || startsWith(github.ref, 'refs/tags/canary-v'))) || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))
     runs-on: macos-15
     timeout-minutes: 30
     environment: release
@@ -102,11 +102,12 @@ jobs:
         working-directory: release-source
         env:
           GKSDUD_SIGN_MODE: local
+          GKSDUD_CHANNEL: ${{ steps.version.outputs.channel == 'canary' && 'canary' || 'stable' }}
           GKSDUD_APP_VERSION: ${{ steps.version.outputs.version }}
         run: bash build.sh
 
       - name: Name prerelease archive
-        if: steps.version.outputs.prerelease == 'true'
+        if: steps.version.outputs.channel == 'pre'
         working-directory: release-source
         env:
           VERSION: ${{ steps.version.outputs.version }}
@@ -157,21 +158,28 @@ jobs:
         timeout-minutes: 2
         run: bash scripts/cleanup-signing.sh
 
-      - name: Create stable draft or publish prerelease (never overwrite existing assets)
+      - name: Create stable draft or publish prerelease or canary (never overwrite existing assets)
         if: steps.existing.outputs.exists == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.version.outputs.version }}
           TAG: ${{ steps.version.outputs.tag }}
-          PRERELEASE: ${{ steps.version.outputs.prerelease }}
+          CHANNEL: ${{ steps.version.outputs.channel }}
           ASSET_VERSION: ${{ steps.version.outputs.asset_version }}
           FILENAME: ${{ steps.version.outputs.filename }}
           SOURCE_ROOT: ${{ github.workspace }}/release-source
         run: |
           set -euo pipefail
           options=(--draft --title "gksdud $VERSION" --notes-file .github/RELEASE_NOTES.md)
-          if [[ "$PRERELEASE" == true ]]; then
+          if [[ "$CHANNEL" == pre ]]; then
             options=(--prerelease --latest=false --title "gksdud $VERSION Pre-release" --notes-file .github/PRERELEASE_NOTES.md --generate-notes)
+          elif [[ "$CHANNEL" == canary ]]; then
+            # The annotated tag's message goes above the canary notes: its ### 요약 is what the app shows.
+            notes=$(mktemp "${RUNNER_TEMP:-/tmp}/gksdud-canary-notes.XXXXXX")
+            read -r type sha < <(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq '.object.type + " " + .object.sha')
+            if [[ "$type" == tag ]]; then gh api "repos/$GITHUB_REPOSITORY/git/tags/$sha" --jq .message > "$notes"; printf '\n' >> "$notes"; fi
+            cat .github/CANARY_NOTES.md >> "$notes"
+            options=(--prerelease --latest=false --title "gksdud-dev $VERSION Canary" --notes-file "$notes")
           fi
           gh release create "$TAG" \
             "$SOURCE_ROOT/outputs/$FILENAME" \

@@ -4,27 +4,41 @@ class ReleaseMetadata
 
   def initialize(version, tag = "v#{version}")
     raise ArgumentError, 'Expected numeric release version' unless version.match?(/\A(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)\z/)
-    unless ["v#{version}", "pre-v#{version}"].include?(tag)
-      raise ArgumentError, 'Tag must be vVERSION or pre-vVERSION and match the release version'
+    unless ["v#{version}", "pre-v#{version}", "canary-v#{version}"].include?(tag)
+      raise ArgumentError, 'Tag must be vVERSION, pre-vVERSION or canary-vVERSION and match the release version'
     end
     @version = version
     @tag = tag
   end
 
+  def channel
+    tag.start_with?('pre-v') ? 'pre' : tag.start_with?('canary-v') ? 'canary' : 'stable'
+  end
+
+  # Published as a GitHub prerelease: never Latest, never in Homebrew or the stable app's updates.
   def prerelease?
-    tag.start_with?('pre-v')
+    channel != 'stable'
+  end
+
+  # Canary is a separate app, gksdud-dev, that updates only from canary releases.
+  def app
+    channel == 'canary' ? 'gksdud-dev' : 'gksdud'
+  end
+
+  def identifier
+    channel == 'canary' ? 'io.gksdud.inputswitch.dev' : 'io.gksdud.inputswitch'
   end
 
   def asset_version
-    prerelease? ? "#{version}-pre" : version
+    channel == 'stable' ? version : "#{version}-#{channel}"
   end
 
   def filename
-    "gksdud-#{asset_version}-macos-universal.zip"
+    channel == 'canary' ? "#{app}-#{version}-macos-universal.zip" : "gksdud-#{asset_version}-macos-universal.zip"
   end
 
   def outputs
-    { version: version, tag: tag, prerelease: prerelease?,
+    { version: version, tag: tag, channel: channel, prerelease: prerelease?,
       asset_version: asset_version, filename: filename }
   end
 end

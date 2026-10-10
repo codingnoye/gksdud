@@ -26,14 +26,14 @@ abort "Release asset must be named #{filename}" unless File.basename(archive) ==
 certificate = "#{root}/signing/local-certificate.pem"
 abort 'Missing publisher public certificate' unless File.file?(certificate)
 fingerprint = OpenSSL::Digest::SHA1.hexdigest(OpenSSL::X509::Certificate.new(File.read(certificate)).to_der)
-requirement = "identifier \"io.gksdud.inputswitch\" and certificate leaf = H\"#{fingerprint}\""
+requirement = "identifier \"#{metadata.identifier}\" and certificate leaf = H\"#{fingerprint}\""
 
 Dir.mktmpdir('gksdud-release-') do |stage|
   # Validate ZIP paths before extracting an explicitly selected build artifact.
   entries = capture!('/usr/bin/unzip', '-Z1', archive).lines.map(&:strip)
-  abort 'Unexpected ZIP contents' unless entries.all? { |p| p.start_with?('gksdud.app/') && !p.split('/').include?('..') }
+  abort 'Unexpected ZIP contents' unless entries.all? { |p| p.start_with?("#{metadata.app}.app/") && !p.split('/').include?('..') }
   capture!('/usr/bin/ditto', '-x', '-k', archive, stage)
-  app = "#{stage}/gksdud.app"
+  app = "#{stage}/#{metadata.app}.app"
   license = "#{app}/Contents/Resources/LICENSE"
   abort 'Archive must include the current LICENSE' unless File.file?(license) &&
     File.binread(license) == File.binread("#{root}/LICENSE")
@@ -41,6 +41,7 @@ Dir.mktmpdir('gksdud-release-') do |stage|
   %w[CFBundleShortVersionString CFBundleVersion CFBundleIdentifier].each do |key|
     expected = capture!('/usr/libexec/PlistBuddy', '-c', "Print :#{key}", "#{root}/Info.plist")
     expected = version if key == 'CFBundleShortVersionString'
+    expected = metadata.identifier if key == 'CFBundleIdentifier'
     actual = capture!('/usr/libexec/PlistBuddy', '-c', "Print :#{key}", "#{app}/Contents/Info.plist")
     abort "Archive #{key} does not match source" unless expected == actual
   end

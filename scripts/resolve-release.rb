@@ -21,7 +21,9 @@ class ReleaseSelection
       sha = capture('git', 'rev-parse', 'FETCH_HEAD^{commit}')
     else
       raise 'Expected a tag push or manual release' unless event == 'push'
-      version = capture('/usr/libexec/PlistBuddy', '-c', 'Print :CFBundleShortVersionString', 'Info.plist')
+      # A canary goes out before the stable release of its version, so the tag names the version.
+      version = if tag.start_with?('canary-v') then tag.delete_prefix('canary-v')
+                else capture('/usr/libexec/PlistBuddy', '-c', 'Print :CFBundleShortVersionString', 'Info.plist') end
       metadata = ReleaseMetadata.new(version, tag)
       sha = capture('git', 'rev-parse', 'HEAD^{commit}')
     end

@@ -4,7 +4,7 @@ import ServiceManagement
 extension AppDelegate {
     func buildWindow() {
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 384, height: 636), styleMask: [.titled, .closable], backing: .buffered, defer: false)
-        window.title = "gksdud"; window.isReleasedWhenClosed = false
+        window.title = UpdateChannel.current.appName; window.isReleasedWhenClosed = false
         window.delegate = self; window.hidesOnDeactivate = false; window.center()
         let content = window.contentView!
         func column() -> NSStackView {
@@ -40,7 +40,7 @@ extension AppDelegate {
         }
         let tabs = NSStackView(); tabs.distribution = .fillEqually; tabs.spacing = 8
         tabs.translatesAutoresizingMaskIntoConstraints = false; content.addSubview(tabs)
-        for (index, title) in ["일반", "대소문자", "특수문자", "추가기능", "gksdud"].enumerated() {
+        for (index, title) in ["일반", "대소문자", "특수문자", "추가기능", UpdateChannel.current.appName].enumerated() {
             let button = NSButton(title: title, target: self, action: #selector(changeTab(_:)))
             button.tag = index; button.setButtonType(.toggle); button.bezelStyle = .regularSquare
             button.isBordered = false; button.imagePosition = .imageAbove; button.imageScaling = .scaleProportionallyDown
@@ -193,7 +193,7 @@ extension AppDelegate {
         appIcon.widthAnchor.constraint(equalToConstant: 72).isActive = true
         appIcon.heightAnchor.constraint(equalToConstant: 72).isActive = true
         about.addArrangedSubview(appIcon)
-        let name = NSTextField(labelWithString: "gksdud"); name.font = .systemFont(ofSize: 20, weight: .semibold)
+        let name = NSTextField(labelWithString: UpdateChannel.current.appName); name.font = .systemFont(ofSize: 20, weight: .semibold)
         about.setCustomSpacing(12, after: appIcon); about.addArrangedSubview(name)
         updateHeading.font = .systemFont(ofSize: 12); updateHeading.textColor = .secondaryLabelColor; updateHeading.alignment = .center
         about.setCustomSpacing(4, after: name); full(updateHeading, in: about)
@@ -285,7 +285,7 @@ extension AppDelegate {
         let release = updates.available
         tabButtons.last?.image = release == nil ? tabGlyph("?") : updateGlyph(NSSize(width: 24, height: 20), color: .controlAccentColor)
         selectTab(selectedTab)
-        tabButtons.last?.setAccessibilityLabel(release == nil ? "gksdud 탭" : "gksdud 탭, 업데이트 가능")
+        tabButtons.last?.setAccessibilityLabel(release == nil ? "\(UpdateChannel.current.appName) 탭" : "\(UpdateChannel.current.appName) 탭, 업데이트 가능")
         for entry in item?.menu?.items ?? [] where entry.action == #selector(showAbout) { entry.isHidden = release == nil }
         let latest = release.map { " → v\($0.versionString)" } ?? ""
         updateHeading.stringValue = "v\(updates.installedVersion)\(latest)"

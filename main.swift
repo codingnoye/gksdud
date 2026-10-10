@@ -1077,8 +1077,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
     func applicationDidFinishLaunching(_ notification: Notification) {
         let mainMenu = NSMenu()
-        let appEntry = NSMenuItem(); let appMenu = NSMenu(title: "gksdud")
-        appMenu.addItem(withTitle: "gksdud 종료", action: #selector(quit), keyEquivalent: "q").target = self
+        let appEntry = NSMenuItem(); let appMenu = NSMenu(title: UpdateChannel.current.appName)
+        appMenu.addItem(withTitle: "\(UpdateChannel.current.appName) 종료", action: #selector(quit), keyEquivalent: "q").target = self
         appEntry.submenu = appMenu; mainMenu.addItem(appEntry)
         let editEntry = NSMenuItem(); let editMenu = NSMenu(title: "편집")
         for (title, action, key) in [("잘라내기", "cut:", "x"), ("복사", "copy:", "c"), ("붙여넣기", "paste:", "v"), ("모두 선택", "selectAll:", "a")] {
@@ -1185,8 +1185,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let menu = NSMenu()
         menu.delegate = self
         menu.autoenablesItems = false
-        let brandEntry = NSMenuItem(title: "gksdud", action: #selector(menuBrand), keyEquivalent: "")
-        brandEntry.attributedTitle = NSAttributedString(string: "gksdud", attributes: [.font: NSFont.systemFont(ofSize: 15, weight: .heavy), .kern: 0.6])
+        let brandEntry = NSMenuItem(title: UpdateChannel.current.appName, action: #selector(menuBrand), keyEquivalent: "")
+        brandEntry.attributedTitle = NSAttributedString(string: UpdateChannel.current.appName, attributes: [.font: NSFont.systemFont(ofSize: 15, weight: .heavy), .kern: 0.6])
         brandEntry.image = DudIcon.badge(korean: false)
         brandEntry.target = self
         brandEntry.isEnabled = true
@@ -1317,8 +1317,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         guard let button = item?.button else { return }
         if button.image !== badge { button.title = ""; button.image = badge; button.imagePosition = .imageOnly }
         let warning = engine.keyboards.warning.map { "\n\($0)" } ?? ""
-        let tip = "gksdud · 현재 입력 소스: \(source.language)\(warning)"
-        let spoken = "gksdud, 현재 입력 \(name)\(warning)"
+        let tip = "\(UpdateChannel.current.appName) · 현재 입력 소스: \(source.language)\(warning)"
+        let spoken = "\(UpdateChannel.current.appName), 현재 입력 \(name)\(warning)"
         if button.toolTip != tip { button.toolTip = tip }
         if button.accessibilityLabel() != spoken { button.setAccessibilityLabel(spoken) }
     }
@@ -1520,7 +1520,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             : !stickyError.isEmpty ? stickyError
             : !engine.chosenCombos.isEmpty && !AXIsProcessTrusted() ? "조합 키를 쓰려면 접근성 권한을 허용하세요."
             : engine.active && result.selected == 0 && !engine.mappedSources.isEmpty ? "적용할 키보드 연결 대기 중"
-            : window.isVisible && login.state == .on && SMAppService.mainApp.status == .requiresApproval ? "시스템 설정 → 로그인 항목에서 gksdud를 허용하세요." : ""
+            : window.isVisible && login.state == .on && SMAppService.mainApp.status == .requiresApproval ? "시스템 설정 → 로그인 항목에서 \(UpdateChannel.current.appName)를 허용하세요." : ""
     }
     var lastError = ""
     var stickyError = ""
