@@ -114,6 +114,36 @@ enum UpdateValidation {
         let old = try signedCode(installed)
         return SecStaticCodeCheckValidity(old, strict, legacy) == errSecSuccess && SecStaticCodeCheckValidity(new, strict, developerID) == errSecSuccess
     }
+    static var runsWithDeveloperID: Bool {
+        var code: SecCode?
+        guard let developerID, SecCodeCopySelf(SecCSFlags(rawValue: 0), &code) == errSecSuccess, let code else { return false }
+        return SecCodeCheckValidity(code, SecCSFlags(rawValue: 0), developerID) == errSecSuccess
+    }
+    // A permission given to a self-signed build stays listed as allowed but no longer applies to the Developer ID build, and
+    // switching it off and on keeps the old certificate. A Developer ID launch after another build ran removes it, so that
+    // allowing again adds a new one: after the self-signed releases, and again after a rollback, a downgrade or a local build.
+    // One left behind could never be allowed again, so a failed removal is tried a few times, then again on every launch.
+    // Whether to ask for it again: on every launch until it is given.
+    static func forgetSelfSignedPermissions(defaults: UserDefaults, developerID: Bool = UpdateValidation.runsWithDeveloperID,
+                                            trusted: () -> Bool = { AXIsProcessTrusted() }, reset: (String) -> Bool = { service in
+        (0..<3).contains { attempt in
+            if attempt > 0 { Thread.sleep(forTimeInterval: 0.3) }
+            return (try? UpdateValidation.command("/usr/bin/tccutil", ["reset", service, UpdateValidation.identifier])) != nil
+        }
+    }) -> Bool {
+        // Whether the last launch was the Developer ID build.
+        let otherBuildRan = !defaults.bool(forKey: "permissions.developerID")
+        defaults.set(developerID, forKey: "permissions.developerID")
+        // Written by every launch since 1.1: a first installation has nothing to remove.
+        guard developerID, defaults.object(forKey: "updates.nextCheck") != nil else { return false }
+        let services = otherBuildRan ? ["Accessibility", "PostEvent"] : defaults.stringArray(forKey: "permissions.reset") ?? []
+        if !services.isEmpty { defaults.set(services.filter { !reset($0) }, forKey: "permissions.reset") }
+        // Asked even when the removal failed: allowing then takes effect once the next launch removes it. Whether it is allowed
+        // only once nothing is left to remove, as the answer to the old permission would stay.
+        let ask = services.contains("Accessibility") || defaults.bool(forKey: "permissions.ask") && !trusted()
+        defaults.set(ask, forKey: "permissions.ask")
+        return ask
+    }
     static func candidate(_ new: URL, installed: URL, version: String) throws {
         let requirement = try installedRequirement(installed)
         let code = try signedCode(new)

@@ -11,6 +11,8 @@ abort 'Release summary is required' if summary.empty?
 # The app asks users to confirm a warning before an update installs its version.
 warning = ENV.fetch('RELEASE_WARNING', '').strip
 summary += "\n\n### 경고\n\n#{warning}" unless warning.empty?
+# Apps up to 1.7.1 only take the latest release, which stays on the bridge release while a newer one is not marked.
+latest = ENV.fetch('MAKE_LATEST', 'true') == 'false' ? '--latest=false' : '--latest'
 
 output, status = Open3.capture2e('gh', 'release', 'view', tag, '--repo', repo,
                               '--json', 'tagName,isDraft,isPrerelease')
@@ -30,6 +32,6 @@ Tempfile.create(['gksdud-release-notes-', '.md']) do |file|
   file.write(notes.sub(marker) { summary })
   file.flush
   success = system('gh', 'release', 'edit', tag, '--repo', repo,
-                   '--notes-file', file.path, '--draft=false', '--latest')
+                   '--notes-file', file.path, '--draft=false', latest)
   abort 'Could not publish the verified draft' unless success
 end

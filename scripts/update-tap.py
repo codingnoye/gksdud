@@ -15,6 +15,11 @@ import zipfile
 SOURCE = "codingnoye/gksdud"
 TAP = "codingnoye/homebrew-tap"
 PATH = "Casks/gksdud.rb"
+# While apps up to 1.7.1 move to Developer ID; off together with SELF_SIGNED_COPY in release-metadata.rb.
+MOVING_TO_DEVELOPER_ID = True
+REGRANT_CAVEAT = "    Updating from 1.8.0 or earlier asks for Accessibility once more, as the app is now signed by Apple.\n"
+SELF_SIGNED_CAVEATS = ("    This build is self-signed and is not notarized by Apple.\n",
+                       "    macOS may block its first launch. No security settings are changed by this cask.\n")
 
 
 def api(repo, path, method="GET", data=None):
@@ -46,7 +51,8 @@ def verify_release(release, tag):
     v = version(tag)
     if release["tag_name"] != tag or release["draft"] or release["prerelease"]:
         raise ValueError("Only published stable releases can update the tap")
-    name = f"gksdud-{v}-macos-universal.zip"
+    # The Developer ID archive; -macos-universal.zip is the self-signed copy for apps up to 1.7.1.
+    name = f"gksdud-{v}.zip"
     root = f"https://github.com/{SOURCE}/releases/download/{tag}/"
     assets = release["assets"]
     for asset_name in (name, "SHA256SUMS"):
@@ -56,7 +62,7 @@ def verify_release(release, tag):
     archive = download(root + name, 20 * 1024 * 1024)
     digest = hashlib.sha256(archive).hexdigest()
     checksums = download(root + "SHA256SUMS", 4096).decode("utf-8")
-    if checksums != f"{digest}  {name}\n":
+    if checksums.splitlines()[:1] != [f"{digest}  {name}"]:
         raise ValueError("Published checksum mismatch")
     with zipfile.ZipFile(io.BytesIO(archive)) as bundle:
         info = bundle.getinfo("gksdud.app/Contents/Info.plist")
@@ -78,8 +84,15 @@ def updated_cask(text, target, digest):
         raise ValueError("Refusing a tap downgrade")
     if current == target and hashes[0] != digest:
         raise ValueError("Refusing to replace an existing version's checksum")
-    return text.replace(f'  version "{current}"', f'  version "{target}"', 1).replace(
+    text = text.replace(f'  version "{current}"', f'  version "{target}"', 1).replace(
         f'  sha256 "{hashes[0]}"', f'  sha256 "{digest}"', 1)
+    # From the move to Developer ID: the notarized archive's name, and no more self-signed notes.
+    text = text.replace('/gksdud-#{version}-macos-universal.zip"', '/gksdud-#{version}.zip"')
+    for line in SELF_SIGNED_CAVEATS + (REGRANT_CAVEAT,):
+        text = text.replace(line, "")
+    if MOVING_TO_DEVELOPER_ID:
+        text = text.replace("  caveats <<~EOS\n", "  caveats <<~EOS\n" + REGRANT_CAVEAT, 1)
+    return text
 
 
 def open_update(tag, dry_run=False):
@@ -116,7 +129,7 @@ def open_update(tag, dry_run=False):
         "title": f"[CHORE] gksdud {v}", "head": branch, "base": "main",
         "body": f"## Update\n\nRelease: https://github.com/{SOURCE}/releases/tag/{tag}\n\n"
                 f"Published ZIP checksum verified: `{digest}`.\n\n"
-                "Only the Cask version and checksum change. Squash merge after checks pass."})
+                "Only the Cask version, checksum and archive name change. Squash merge after checks pass."})
     print(f"Created PR: {pr['html_url']}")
 
 

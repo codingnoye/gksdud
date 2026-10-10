@@ -25,9 +25,17 @@ class ReleaseTests < Minitest::Test
     refute stable.prerelease?
     assert pre.prerelease?
     assert canary.prerelease?
-    assert_equal 'gksdud-1.2.0-macos-universal.zip', stable.filename
-    assert_equal 'gksdud-1.2.0-pre-macos-universal.zip', pre.filename
-    assert_equal 'gksdud-dev-1.2.0-macos-universal.zip', canary.filename
+    assert_equal 'gksdud-1.2.0.zip', stable.filename
+    assert_equal 'gksdud-1.2.0-pre.zip', pre.filename
+    assert_equal 'gksdud-dev-1.2.0.zip', canary.filename
+    # Apps up to 1.7.1 download the old name, which holds the self-signed copy while they move to Developer ID.
+    assert ReleaseMetadata::SELF_SIGNED_COPY
+    assert_equal 'gksdud-1.2.0-macos-universal.zip', stable.self_signed_filename
+    assert_equal 'gksdud-dev-1.2.0-macos-universal.zip', canary.self_signed_filename
+    assert_nil pre.self_signed_filename
+    # The Homebrew note about asking again ends with the copy.
+    tap = File.read("#{ROOT}/scripts/update-tap.py")[/^MOVING_TO_DEVELOPER_ID = (True|False)$/, 1]
+    assert_equal ReleaseMetadata::SELF_SIGNED_COPY.to_s, tap.downcase
     assert_equal %w[gksdud gksdud gksdud-dev], [stable, pre, canary].map(&:app)
     assert_equal 'io.gksdud.inputswitch.dev', canary.identifier
     assert_equal 'io.gksdud.inputswitch', pre.identifier
@@ -178,8 +186,8 @@ class ReleaseTests < Minitest::Test
     assert_equal ['release', 'create', 'v1.2.0'], args.first(3)
     assert_includes args, '--draft'
     refute_includes args, '--prerelease'
-    assert_includes args, 'release-source/outputs/gksdud-1.2.0-macos-universal.zip'
-    assert_includes args, 'release-source/outputs/release-1.2.0/SHA256SUMS'
+    assert_equal ['release-source/outputs/gksdud-1.2.0.zip', 'release-source/outputs/gksdud-1.2.0-macos-universal.zip',
+                  'release-source/outputs/release-1.2.0/SHA256SUMS'], args[3, 3]
     assert_includes args, '.github/RELEASE_NOTES.md'
     assert_includes args, '--verify-tag'
   end
@@ -190,8 +198,7 @@ class ReleaseTests < Minitest::Test
     assert_includes args, '--prerelease'
     assert_includes args, '--latest=false'
     refute_includes args, '--draft'
-    assert_includes args, 'release-source/outputs/gksdud-1.2.0-pre-macos-universal.zip'
-    assert_includes args, 'release-source/outputs/release-1.2.0-pre/SHA256SUMS'
+    assert_equal ['release-source/outputs/gksdud-1.2.0-pre.zip', 'release-source/outputs/release-1.2.0-pre/SHA256SUMS'], args[3, 2]
     assert_includes args, '.github/PRERELEASE_NOTES.md'
     assert_includes args, '--generate-notes'
     assert_includes args, '--verify-tag'
@@ -206,6 +213,7 @@ class ReleaseTests < Minitest::Test
     refute_includes args, '--draft'
     refute_includes args, '--generate-notes'
     assert_includes args, 'gksdud-dev 1.2.0 Canary'
+    assert_includes args, 'release-source/outputs/gksdud-dev-1.2.0.zip'
     assert_includes args, 'release-source/outputs/gksdud-dev-1.2.0-macos-universal.zip'
     assert_includes args, 'release-source/outputs/release-1.2.0-canary/SHA256SUMS'
     assert notes.start_with?("#{message}\n\n### 카나리아"), notes
@@ -217,7 +225,8 @@ class ReleaseTests < Minitest::Test
     workflow = YAML.load_file("#{ROOT}/.github/workflows/release.yml")
     triggers = workflow.fetch('on') { workflow.fetch(true) }
     inputs = triggers.fetch('workflow_dispatch').fetch('inputs')
-    assert_equal %w[release_summary release_warning source_ref version], inputs.keys.sort
+    assert_equal %w[make_latest release_summary release_warning source_ref version], inputs.keys.sort
+    assert_equal true, inputs.fetch('make_latest').fetch('default')
     refute inputs.fetch('release_warning').fetch('required')
     assert_equal 'main', inputs.fetch('source_ref').fetch('default')
     steps = workflow.fetch('jobs').fetch('release').fetch('steps')
@@ -234,7 +243,7 @@ class ReleaseTests < Minitest::Test
     assert_equal 'false', create_tag.fetch('if')[/== '([^']+)'/, 1]
   end
 
-  def publication_result(draft: true, prerelease: false, actual_tag: 'v1.2.0', summary: 'Input fixes', warning: '', view_exit: 0, edit_exit: 0)
+  def publication_result(draft: true, prerelease: false, actual_tag: 'v1.2.0', summary: 'Input fixes', warning: '', latest: 'true', view_exit: 0, edit_exit: 0)
     Dir.mktmpdir('gksdud-publish-test-') do |dir|
       File.write("#{dir}/gh", <<~RUBY)
         #!/usr/bin/ruby
@@ -248,7 +257,7 @@ class ReleaseTests < Minitest::Test
         exit ENV.fetch('EDIT_EXIT').to_i
       RUBY
       File.chmod(0755, "#{dir}/gh")
-      env = { 'PATH' => "#{dir}:#{ENV.fetch('PATH')}", 'RELEASE_SUMMARY' => summary, 'RELEASE_WARNING' => warning,
+      env = { 'PATH' => "#{dir}:#{ENV.fetch('PATH')}", 'RELEASE_SUMMARY' => summary, 'RELEASE_WARNING' => warning, 'MAKE_LATEST' => latest,
               'RELEASE_JSON' => JSON.generate(tagName: actual_tag, isDraft: draft, isPrerelease: prerelease),
               'CAPTURE' => "#{dir}/args.json", 'NOTES' => "#{dir}/notes.md",
               'VIEW_EXIT' => view_exit.to_s, 'EDIT_EXIT' => edit_exit.to_s }
@@ -270,6 +279,12 @@ class ReleaseTests < Minitest::Test
     refute_includes notes, '<!-- 게시 전'
     assert_includes notes, 'brew install --cask codingnoye/tap/gksdud'
     refute_includes notes, '### 경고'
+  end
+
+  def test_publish_can_leave_the_latest_release_alone
+    status, args, _, output = publication_result(latest: 'false')
+    assert status.success?, output
+    assert_equal ['--draft=false', '--latest=false'], args.last(2)
   end
 
   def test_publish_adds_the_warning_section_after_the_summary

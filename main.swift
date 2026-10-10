@@ -667,6 +667,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     // Tests take a command's errors here instead of a window.
     var presentCommandErrors: (([String]) -> Void)?
     var returningFromPermissionSettings = false
+    // The permission of the self-signed build was removed: ask for it again, on every launch until it is given, and then turn
+    // back on the activation that turning off without it undid. Kept until then, as the app can quit first.
+    var askForPermission = false
+    var reactivateWhenTrusted: Bool {
+        get { engine.defaults.bool(forKey: "permissions.reactivate") }
+        set { engine.defaults.set(newValue, forKey: "permissions.reactivate") }
+    }
+    // A launch asking again finds the activation undone already, and keeps what the first one saved.
+    func keepActivationUntilTrusted() { if engine.active { reactivateWhenTrusted = true } }
     var permissionSettingsWasActive = false
     func finishPermissionVisit() {
         guard returningFromPermissionSettings else { return }
@@ -1068,6 +1077,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         sentSwitch = SentSwitch(from: currentLanguage, at: ProcessInfo.processInfo.systemUptime)
     }
     func switchInFlight(from language: String) -> Bool { sentSwitch?.inFlight(now: ProcessInfo.processInfo.systemUptime, language: language) == true }
+    func permissionAgainAlert() -> NSAlert {
+        let name = UpdateChannel.current.appName, alert = NSAlert()
+        alert.messageText = "손쉬운 사용 권한을 다시 허용해주세요"
+        alert.informativeText = "\(name)가 Apple 서명 버전으로 바뀌어, 이전에 허용한 권한을 macOS가 더 이상 인정하지 않습니다. 다음 창에서 시스템 설정을 열고 \(name)를 켜주세요. 켜면 한영 전환도 다시 켜집니다."
+        alert.addButton(withTitle: "계속")
+        return alert
+    }
     @objc func requestPressAccess() {
         returningFromPermissionSettings = true
         permissionSettingsWasActive = false
@@ -1086,6 +1102,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         }
         editEntry.submenu = editMenu; mainMenu.addItem(editEntry)
         NSApp.mainMenu = mainMenu
+        if askForPermission { keepActivationUntilTrusted() }
         buildWindow()
         updateMenu()
         updates.onChange = { [weak self] in self?.refreshUpdates() }
@@ -1131,7 +1148,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         repair()
         // Once launching has applied the settings, so a command right after `gksdud start` finds it ready.
         startCommandServer()
-        if showInMenuBar.state == .off || CommandLine.arguments.contains("--settings") { showSettings() }
+        // Restarted by an update, the window comes back on the tab it was installed from. Asking for the permission again opens it
+        // on the way back from System Settings instead, as a window shown first would cover the system's request.
+        if !askForPermission {
+            if ProcessInfo.processInfo.environment["GKSDUD_UPDATE_READY"] != nil { showAbout() }
+            else if showInMenuBar.state == .off || CommandLine.arguments.contains("--settings") { showSettings() }
+        }
+        // Why it asks again, then the system's request, which offers its settings; coming back from there opens this app's.
+        if askForPermission {
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                NSApp.activate(ignoringOtherApps: true); _ = self.runAlert(self.permissionAgainAlert())
+                self.requestPressAccess()
+            }
+        }
         UpdateInstaller.acknowledgeLaunch()
     }
     func applicationDidBecomeActive(_ notification: Notification) {
@@ -1503,6 +1533,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         guard !engine.isUpdatingSettings else { return }
         // Without Accessibility there is no tap to switch with, so activation turns off and stays off until turned on again.
         if engine.active && !engine.accessibilityTrusted() { restoreNow(); return }
+        if reactivateWhenTrusted && engine.accessibilityTrusted() { reactivateWhenTrusted = false; enabled.state = .on; toggleEnabled() }
         ensureKeyTap()
         do { try engine.repair(); if repairFailed { repairFailed = false; stickyError = "" } } catch { report(error); repairFailed = !(error is KeyboardError) }
         // This follows the session itself, as the unlock notice can come late. Not at once: right after unlocking, the lock
@@ -1561,8 +1592,11 @@ if CommandLine.arguments.dropFirst().first == "--install-update" {
     #if TESTS
     if runTestMode() { exit(0) }
     #endif
+    // Before anything asks about Accessibility: a process keeps the answer it got first.
+    let askForPermission = UpdateValidation.forgetSelfSignedPermissions(defaults: .standard)
     let app = NSApplication.shared
     let delegate = AppDelegate()
+    delegate.askForPermission = askForPermission
     app.delegate = delegate
     app.setActivationPolicy(.accessory)
     app.run()

@@ -1165,6 +1165,29 @@ func runPermissionTests() {
     precondition(settings.allSatisfy { $0.isEnabled } && !delegate.pressAccess.isEnabled)
     precondition(delegate.settingLabels.allSatisfy { $0.label.textColor == $0.color })
     precondition(!engine.active && delegate.enabled.state == .off, "It stays off until turned on again")
+    // Unless the move to Developer ID removed the permission: allowed again, activation comes back.
+    let movedSuite = "io.gksdud.permission-move-tests.\(UUID().uuidString)"
+    let movedDefaults = UserDefaults(suiteName: movedSuite)!
+    defer { movedDefaults.removePersistentDomain(forName: movedSuite) }
+    var movedMenu: CFPropertyList?
+    let moved = Engine(defaults: movedDefaults, discover: { [TestKeyboard("perm-2", name: "Keyboard", serial: "permission-move")] },
+                       shortcutPreferences: ShortcutPreferences(read: { [:] }, write: { _ in }, activate: {}),
+                       inputMenu: InputMenuPreference(read: { movedMenu }, write: { movedMenu = $0 }))
+    var allowed = false
+    moved.accessibilityTrusted = { allowed }
+    let movedDelegate = AppDelegate(engine: moved)
+    movedDelegate.buildWindow()
+    movedDelegate.keepActivationUntilTrusted()
+    movedDelegate.repair()
+    precondition(!moved.active && movedDelegate.reactivateWhenTrusted)
+    precondition(movedDefaults.bool(forKey: "permissions.reactivate"), "Kept for the next launch, as the app can quit before it is allowed")
+    movedDelegate.keepActivationUntilTrusted()
+    precondition(movedDelegate.reactivateWhenTrusted, "Kept by a launch that asks again after a failed removal")
+    allowed = true; movedDelegate.repair()
+    precondition(moved.active && movedDelegate.enabled.state == .on && !movedDelegate.reactivateWhenTrusted, "Allowed again, it turns back on")
+    let again = movedDelegate.permissionAgainAlert()
+    precondition(again.messageText == "손쉬운 사용 권한을 다시 허용해주세요" && again.informativeText.contains("Apple 서명 버전")
+                 && again.buttons.map(\.title) == ["계속"], "The reason comes before the system's request")
     // Replacing the Mac input menu is on by default and works only while this app's icon shows.
     precondition(delegate.replaceInputMenu.state == .on && delegate.replaceInputMenu.isEnabled && !engine.showsSystemInputMenu)
     delegate.replaceInputMenu.state = .off; delegate.toggleReplaceInputMenu()
