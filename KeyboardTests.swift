@@ -1177,10 +1177,12 @@ func runPermissionTests() {
     moved.accessibilityTrusted = { allowed }
     let movedDelegate = AppDelegate(engine: moved)
     movedDelegate.buildWindow()
-    movedDelegate.reactivateWhenTrusted = moved.active
+    movedDelegate.keepActivationUntilTrusted()
     movedDelegate.repair()
     precondition(!moved.active && movedDelegate.reactivateWhenTrusted)
     precondition(movedDefaults.bool(forKey: "permissions.reactivate"), "Kept for the next launch, as the app can quit before it is allowed")
+    movedDelegate.keepActivationUntilTrusted()
+    precondition(movedDelegate.reactivateWhenTrusted, "Kept by a launch that asks again after a failed removal")
     allowed = true; movedDelegate.repair()
     precondition(moved.active && movedDelegate.enabled.state == .on && !movedDelegate.reactivateWhenTrusted, "Allowed again, it turns back on")
     let again = movedDelegate.permissionAgainAlert()

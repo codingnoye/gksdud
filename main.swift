@@ -674,6 +674,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         get { engine.defaults.bool(forKey: "permissions.reactivate") }
         set { engine.defaults.set(newValue, forKey: "permissions.reactivate") }
     }
+    // A launch asking again after a failed removal finds the activation undone already, and keeps what the first one saved.
+    func keepActivationUntilTrusted() { if engine.active { reactivateWhenTrusted = true } }
     var permissionSettingsWasActive = false
     func finishPermissionVisit() {
         guard returningFromPermissionSettings else { return }
@@ -1100,7 +1102,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         }
         editEntry.submenu = editMenu; mainMenu.addItem(editEntry)
         NSApp.mainMenu = mainMenu
-        if askForPermission { reactivateWhenTrusted = engine.active }
+        if askForPermission { keepActivationUntilTrusted() }
         buildWindow()
         updateMenu()
         updates.onChange = { [weak self] in self?.refreshUpdates() }
