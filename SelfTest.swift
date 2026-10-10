@@ -29,6 +29,7 @@ func runSelfTest() {
     do { try runShortcutRestoreTests() } catch { fputs("Shortcut tests failed: \(error)\n", stderr); exit(1) }
     do { try runExitTests() } catch { fputs("Exit tests failed: \(error)\n", stderr); exit(1) }
     runFeatureTests()
+    runUniversalControlTests()
     runKeyboardTests()
     runRightControlTests()
     runSessionAwayTests()

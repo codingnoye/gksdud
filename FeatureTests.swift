@@ -1096,4 +1096,34 @@ func probeInputSources() throws {
     print("PROBE RESULT: \(passed)/\(total) added input source cases")
     guard passed == total else { throw failure(7, "Added input source expectations failed.") }
 }
+
+func runUniversalControlTests() {
+    featureCheck(remoteLongPress(down: 10, tapDown: nil), "A press the tap never saw is remote")
+    featureCheck(!remoteLongPress(down: 10, tapDown: 10.05), "The tap seeing the press after the device keeps it local")
+    featureCheck(!remoteLongPress(down: 10, tapDown: 9.95), "The tap seeing the press before the device keeps it local")
+    featureCheck(remoteLongPress(down: 10, tapDown: 5), "An older tap press does not claim this one")
+    var keyboards = RemoteKeyboards(), lookups: [UInt64] = []
+    keyboards.inKernel = { lookups.append($0); return $0 < 1 << 40 }
+    let key = CGEvent(keyboardEventSource: nil, virtualKey: 64, keyDown: true)!
+    featureCheck(!keyboards.sentFromOtherMac(key) && lookups.isEmpty, "An event with no sending service is this Mac's")
+    key.setIntegerValueField(RemoteKeyboards.senderField!, value: 34407378380128265)
+    featureCheck(keyboards.sentFromOtherMac(key) && keyboards.sentFromOtherMac(key) && lookups == [34407378380128265],
+                 "A service outside the kernel is another Mac's, looked up once")
+    key.setIntegerValueField(RemoteKeyboards.senderField!, value: 4294969256)
+    featureCheck(!keyboards.sentFromOtherMac(key), "Posted events and this Mac's keyboards are local")
+    // The other Mac's key-up right after a long press here, still in the switching window, is not learned from; the next
+    // press from there sets the case straight whatever the lock here did meanwhile.
+    for upper in [false, true] {
+        var caps = EnglishCapsState()
+        caps.enable(actual: upper)
+        caps.willSwitch(english: true, actual: upper, longPress: true)
+        caps.committedLongPress(!upper)
+        caps.lockSeen(english: true, actual: upper)
+        featureCheck(caps.remembered == !upper, "A lock seen mid-switch is not remembered")
+        caps.switching = false
+        caps.followSender(upper)
+        featureCheck(caps.beforeLongPress(actual: !upper, preserving: true) == upper, "A long press toggles from the sending keyboard's lock")
+    }
+    print("PASS: Universal Control long press told from the tap's, other Mac's keys by sending service, its lock followed")
+}
 #endif

@@ -174,10 +174,10 @@ extension AppDelegate {
         switchSource(to: target, from: current, pulse: pulse)
     }
     // False when there is nothing to switch with, so a Space goes back to the app.
-    func switchSeparate() -> Bool {
+    func switchSeparate(_ key: CGEvent) -> Bool {
         guard separateKeyActive, let current = logicalSource, let target = addedTarget(separateKey: true, from: current),
               let pulse = nativeSwitchPulse(keyCode: engine.target.keyCode, marker: nativePulseMarker) else { return false }
-        rememberCapsBeforeSwitch()
+        rememberCapsBeforeSwitch(key)
         switchSource(to: target, from: current, pulse: pulse)
         return true
     }

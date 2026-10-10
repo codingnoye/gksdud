@@ -64,7 +64,7 @@ mkdir -p "$stage/$app.app/Contents/MacOS" "$stage/$app.app/Contents/Helpers" "$s
 swiftc -parse-as-library -D ICON_GENERATOR -module-cache-path "$stage/module-cache" DudIcon.swift -o "$stage/icon-generator"
 "$stage/icon-generator" "$stage/AppIcon.iconset"
 iconutil -c icns "$stage/AppIcon.iconset" -o "$stage/$app.app/Contents/Resources/AppIcon.icns"
-sources=(main.swift DudIcon.swift KeyboardManagement.swift KeyboardSettings.swift SettingsWindow.swift InputSources.swift UpdateChecking.swift UpdateInstaller.swift SpecialCharacters.swift CLI.swift CLIServer.swift KeyboardTests.swift FeatureTests.swift CLITests.swift SelfTest.swift)
+sources=(main.swift DudIcon.swift KeyboardManagement.swift KeyboardSettings.swift SettingsWindow.swift InputSources.swift UpdateChecking.swift UpdateInstaller.swift SpecialCharacters.swift CLI.swift CLIServer.swift UniversalControl.swift KeyboardTests.swift FeatureTests.swift CLITests.swift SelfTest.swift)
 cli_sources=(CLI.swift CLITool.swift)
 compile() { swiftc -swift-version 5 -O -module-cache-path "$stage/module-cache" -import-objc-header Bridge.h "${sources[@]}" -framework AppKit -framework IOKit -framework ServiceManagement "$@"; }
 for arch in arm64 x86_64; do

@@ -468,6 +468,8 @@ struct EnglishCapsState {
     // A change only a key's flags showed, as after a Caps Lock press that sent no event of its own. English only and not
     // mid-switch, where the Korean input method turns the lock off by itself.
     mutating func lockSeen(english: Bool, actual: Bool) { if english && !switching { remembered = actual } }
+    // A key from another Mac carries that Mac's keyboard lock, the case it types here whatever happened to the lock here.
+    mutating func followSender(_ caps: Bool) { remembered = caps }
     func target(english: Bool) -> Bool? { english ? remembered : nil }
     func beforeLongPress(actual: Bool, preserving: Bool) -> Bool { preserving ? (remembered ?? actual) : actual }
     mutating func committedLongPress(_ desired: Bool) { remembered = desired }
@@ -649,6 +651,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     var runAlert: (NSAlert) -> NSApplication.ModalResponse = { $0.runModal() }
     var capsConfirmationTimer: DispatchWorkItem?
     var englishCaps = EnglishCapsState()
+    var remoteKeyboards = RemoteKeyboards()
+    // When the tap last saw the Korean/English key go down; a long press it never saw went to another Mac.
+    var tapTargetDown: TimeInterval?
+    lazy var remoteHold = RemoteHoldMonitor(target: { [unowned self] in self.engine.target.usage }, tapDown: { [unowned self] in self.tapTargetDown })
     var capsRestoreGeneration = 0
     var capsRestoreTasks: [DispatchWorkItem] = []
     let nativePulseMarker = Int64.random(in: 1...Int64.max)
@@ -702,6 +708,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         separateGate.held.removeAll(); observedCaps = nil
     }
     func ensureKeyTap() {
+        defer { updateRemoteHold() }
         guard AXIsProcessTrusted() else { stopKeyTap(); updatePressAccess(); return }
         // Paused, nothing is caught; resuming starts again from the keyboard as it is then.
         if let tap = keyTap, !CFMachPortIsValid(tap) || engine.paused { stopKeyTap() }
@@ -768,11 +775,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 // The separate key's F-key only switches, on press like the Korean/English key.
                 if owner.takesSeparateKey(code) {
                     let decision = owner.separateGate.handle(code: code, down: type == .keyDown, repeatKey: repeated, active: true, target: code)
-                    if decision.switchNow { _ = owner.switchSeparate() }
+                    if decision.switchNow { _ = owner.switchSeparate(event) }
                     return decision.consume ? nil : Unmanaged.passUnretained(event)
                 }
                 if owner.engine.active && type == .keyDown && !repeated && code == Int64(owner.engine.target.keyCode) {
-                    owner.rememberCapsBeforeSwitch()
+                    owner.tapTargetDown = ProcessInfo.processInfo.systemUptime
+                    owner.rememberCapsBeforeSwitch(event)
                 }
                 if owner.longPress.key == code {
                     if type == .keyUp { owner.finishLongPress(code: code) }
@@ -806,6 +814,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         CFRunLoopAddSource(CFRunLoopGetMain(), keyTapSource, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
         updatePressAccess()
+    }
+    // With Universal Control in front, the keys go to another Mac. Only with a keyboard mapped here: others have nothing to
+    // carry the lock there, and Input Monitoring would be asked for nothing.
+    func updateRemoteHold() {
+        remoteHold.update(enabled: engine.active && !engine.paused && engine.longPressCapsLock && engine.accessibilityTrusted()
+            && engine.keyboards.result.applied > 0)
     }
     func updatePressAccess() {
         addedSources.refresh()
@@ -898,17 +912,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let decision = spaceGate.handle(down: event.type == .keyDown,
             repeatKey: event.getIntegerValueField(.keyboardEventAutorepeat) != 0, flags: event.flags, chosen: engine.chosenCombos + (separate.map { [$0] } ?? []))
         if decision.switchNow, let separate, spaceCombo(flags: event.flags) == separate {
-            guard switchSeparate() else { spaceGate.held = false; return false }
+            guard switchSeparate(event) else { spaceGate.held = false; return false }
         } else if decision.switchNow {
             // Without a pulse, give the Space back instead of swallowing it.
             guard let pulse = nativeSwitchPulse(keyCode: engine.target.keyCode, marker: nativePulseMarker) else { spaceGate.held = false; return false }
-            rememberCapsBeforeSwitch()
+            rememberCapsBeforeSwitch(event)
             switchHangul(pulse)
         }
         return decision.consume
     }
-    func rememberCapsBeforeSwitch() {
+    // `key` is the key that switches, when there is one.
+    func rememberCapsBeforeSwitch(_ key: CGEvent? = nil) {
         guard capsPreservationActive else { return }
+        if let key, remoteKeyboards.sentFromOtherMac(key) { englishCaps.followSender(key.flags.contains(.maskAlphaShift)) }
         englishCaps.willSwitch(english: currentLanguage.hasPrefix("en"), actual: currentCaps,
             longPress: engine.longPressCapsLock)
         // Also settle if macOS does not change sources (for example, only one is enabled).
@@ -1135,6 +1151,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         })
         observers.append(center.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] _ in
             self?.optionInput.cancel(focusChanged: true)
+            self?.updateRemoteHold()
         })
         observers.append(center.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in self?.optionInput.cancel() })
         for name in [NSWorkspace.didWakeNotification, NSWorkspace.screensDidWakeNotification, NSWorkspace.sessionDidBecomeActiveNotification] {
