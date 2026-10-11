@@ -38,16 +38,19 @@ struct AppRelease: Codable {
     var versionString: String { String(tag_name.dropFirst(channel?.tagPrefix.count ?? 0)) }
     // The Apple-signed <app>-<version>.zip when the release has one, so this app moves to it on its next update; otherwise the
     // self-signed -macos-universal.zip, the only name apps up to 1.7.1 take.
-    var archiveName: String {
-        let name = "\(channel?.appName ?? "gksdud")-\(versionString)"
-        return assets?.contains { $0.name == "\(name).zip" } == true ? "\(name).zip" : "\(name)-macos-universal.zip"
-    }
+    var appleSigned: Bool { assets?.contains { $0.name == "\(archiveBase).zip" } == true }
+    var archiveName: String { appleSigned ? "\(archiveBase).zip" : "\(archiveBase)-macos-universal.zip" }
+    private var archiveBase: String { "\(channel?.appName ?? "gksdud")-\(versionString)" }
     // Canary releases are prereleases, so the stable app and Homebrew never see them.
     var eligible: Bool { !draft && channel != nil && prerelease == (channel == .canary) && pageURL != nil && ReleaseVersion(versionString) != nil }
     func isNewer(than installed: String) -> Bool {
         guard eligible,
               let candidate = ReleaseVersion(versionString), let current = ReleaseVersion(installed) else { return false }
         return candidate > current
+    }
+    // A self-signed app, as apps up to 1.7.1 update to, moves to the Apple-signed build of its own version as well.
+    func updates(_ installed: String, developerID: Bool) -> Bool {
+        isNewer(than: installed) || !developerID && eligible && appleSigned && ReleaseVersion(versionString) == ReleaseVersion(installed)
     }
     // The text under a heading such as ### 요약 or **경고**; the other sections, such as installation, stay on GitHub.
     func section(_ name: String) -> String {
@@ -119,6 +122,7 @@ final class UpdateChecker {
     let defaults: UserDefaults
     let installedVersion: String
     let channel: UpdateChannel
+    let developerID: Bool
     let fetch: Fetch
     var now: () -> Date
     var onChange: (() -> Void)?
@@ -126,7 +130,7 @@ final class UpdateChecker {
     private(set) var releases: [AppRelease] = []
     private(set) var checking = false
     private(set) var error: String?
-    var pending: [AppRelease] { releases.filter { $0.channel == channel && $0.isNewer(than: installedVersion) } }
+    var pending: [AppRelease] { releases.filter { $0.channel == channel && $0.updates(installedVersion, developerID: developerID) } }
     var available: AppRelease? { pending.first }
     var summary: String { Self.merge(pending.map { ($0, $0.summaryItems) }) }
     // The warnings of every version the update installs; empty when none has one.
@@ -141,9 +145,10 @@ final class UpdateChecker {
     var lastChecked: Date? { defaults.object(forKey: "updates.lastSuccess") as? Date }
 
     init(defaults: UserDefaults, installedVersion: String = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0",
-         channel: UpdateChannel = .current, now: @escaping () -> Date = Date.init,
+         channel: UpdateChannel = .current, developerID: Bool = UpdateValidation.runsWithDeveloperID, now: @escaping () -> Date = Date.init,
          fetch: @escaping Fetch = { request, completion in URLSession.shared.dataTask(with: request, completionHandler: completion).resume() }) {
-        self.defaults = defaults; self.installedVersion = installedVersion; self.channel = channel; self.now = now; self.fetch = fetch
+        self.defaults = defaults; self.installedVersion = installedVersion; self.channel = channel; self.developerID = developerID
+        self.now = now; self.fetch = fetch
         if let data = defaults.data(forKey: "updates.releases") { releases = (try? JSONDecoder().decode([AppRelease].self, from: data)) ?? [] }
     }
     func check(force: Bool = false) {
@@ -169,7 +174,7 @@ final class UpdateChecker {
                 if failure == nil, let http = response as? HTTPURLResponse, http.statusCode == 200,
                    let data, data.count <= 4_000_000,
                    let values = try? JSONDecoder().decode([AppRelease].self, from: data) {
-                    self.releases = values.filter { $0.channel == self.channel && $0.isNewer(than: self.installedVersion) }
+                    self.releases = values.filter { $0.channel == self.channel && $0.updates(self.installedVersion, developerID: self.developerID) }
                         .sorted { ReleaseVersion($0.versionString)! > ReleaseVersion($1.versionString)! }
                     self.defaults.set(try? JSONEncoder().encode(self.releases), forKey: "updates.releases")
                     self.defaults.removeObject(forKey: "updates.release")

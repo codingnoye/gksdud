@@ -84,7 +84,15 @@ func runFeatureTests() {
     featureCheck(both.archiveName == "gksdud-1.3.0.zip", "The Apple-signed archive when there is one")
     both.assets?.removeAll { $0.name == "gksdud-1.3.0.zip" }
     featureCheck(both.archiveName == "gksdud-1.3.0-macos-universal.zip" && stable("1.3.0", nil).archiveName == both.archiveName)
-    print("PASS: numeric versions, release summary boundaries, trusted release URLs, daily schedule, retry/cache/offline/upgrade behavior, summaries and warnings of every newer version, links in them, the Apple-signed archive first")
+    var signed = stable("1.3.0", nil)
+    signed.assets = [ReleaseAsset(name: "gksdud-1.3.0.zip", browser_download_url: "", size: 1)]
+    featureCheck(signed.updates("1.3.0", developerID: false) && !signed.updates("1.3.0", developerID: true) && !both.updates("1.3.0", developerID: false)
+                 && signed.updates("1.2.0", developerID: true) && !signed.updates("1.3.1", developerID: false), "A self-signed app takes its own version signed by Apple")
+    let selfSigned = UpdateChecker(defaults: defaults, installedVersion: "1.3.0", channel: .stable, developerID: false, fetch: { _, done in completion = done })
+    selfSigned.check(force: true); respond(200, try! JSONEncoder().encode([stable("1.2.0", nil), signed]))
+    featureCheck(selfSigned.available?.tag_name == "v1.3.0" && selfSigned.available?.archiveName == "gksdud-1.3.0.zip" && selfSigned.pending.count == 1)
+    featureCheck(UpdateChecker(defaults: defaults, installedVersion: "1.3.0", channel: .stable, developerID: true).available == nil, "Already signed by Apple, nothing to take")
+    print("PASS: numeric versions, release summary boundaries, trusted release URLs, daily schedule, retry/cache/offline/upgrade behavior, summaries and warnings of every newer version, links in them, the Apple-signed archive first, the same version signed by Apple for a self-signed app")
     do { try runUpdateInstallTests() } catch { preconditionFailure("Installer tests: \(error)") }
     runPrereleaseTests()
     runOptionInputTests()
