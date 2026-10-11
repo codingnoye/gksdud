@@ -147,16 +147,21 @@ enum UpdateValidation {
     static func candidate(_ new: URL, installed: URL, version: String) throws {
         let requirement = try installedRequirement(installed)
         let code = try signedCode(new)
-        guard try SecStaticCodeCheckValidity(code, strict, requirement) == errSecSuccess || movesToDeveloperID(installed, code) else {
+        let moves = try movesToDeveloperID(installed, code)
+        guard try SecStaticCodeCheckValidity(code, strict, requirement) == errSecSuccess || moves else {
             throw UpdateFailure("현재 앱과 업데이트의 서명이 다릅니다. 기존 앱은 그대로 유지됩니다.")
         }
         guard let bundle = Bundle(url: new), bundle.bundleIdentifier == identifier,
               bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String == version,
               let oldBundle = Bundle(url: installed), oldBundle.bundleIdentifier == identifier,
               let old = oldBundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
-              let current = ReleaseVersion(old), let next = ReleaseVersion(version), next > current else {
+              let current = ReleaseVersion(old), let next = ReleaseVersion(version), accepts(next, over: current, movingToDeveloperID: moves) else {
             throw UpdateFailure("업데이트의 앱 이름 또는 버전이 올바르지 않습니다.")
         }
+    }
+    // Only the move to Developer ID installs the version already installed; anything else must be newer.
+    static func accepts(_ next: ReleaseVersion, over current: ReleaseVersion, movingToDeveloperID: Bool) -> Bool {
+        next > current || movingToDeveloperID && next == current
     }
     static func checksum(_ archive: URL, text: String, name: String) throws {
         let lines = text.split(whereSeparator: \.isNewline)

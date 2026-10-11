@@ -48,7 +48,7 @@ struct AppRelease: Codable {
               let candidate = ReleaseVersion(versionString), let current = ReleaseVersion(installed) else { return false }
         return candidate > current
     }
-    // A self-signed app, as apps up to 1.7.1 update to, moves to the Apple-signed build of its own version as well.
+    // A self-signed app (what apps up to 1.7.1 update to) also moves to the Apple-signed build of the version it already runs.
     func updates(_ installed: String, developerID: Bool) -> Bool {
         isNewer(than: installed) || !developerID && eligible && appleSigned && ReleaseVersion(versionString) == ReleaseVersion(installed)
     }

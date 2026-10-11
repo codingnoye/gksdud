@@ -92,6 +92,10 @@ func runFeatureTests() {
     selfSigned.check(force: true); respond(200, try! JSONEncoder().encode([stable("1.2.0", nil), signed]))
     featureCheck(selfSigned.available?.tag_name == "v1.3.0" && selfSigned.available?.archiveName == "gksdud-1.3.0.zip" && selfSigned.pending.count == 1)
     featureCheck(UpdateChecker(defaults: defaults, installedVersion: "1.3.0", channel: .stable, developerID: true).available == nil, "Already signed by Apple, nothing to take")
+    let v130 = ReleaseVersion("1.3.0")!, v131 = ReleaseVersion("1.3.1")!
+    featureCheck(UpdateValidation.accepts(v131, over: v130, movingToDeveloperID: false) && !UpdateValidation.accepts(v130, over: v130, movingToDeveloperID: false)
+                 && UpdateValidation.accepts(v130, over: v130, movingToDeveloperID: true) && !UpdateValidation.accepts(v130, over: v131, movingToDeveloperID: true),
+                 "The installer takes the same version only on the move to Developer ID")
     print("PASS: numeric versions, release summary boundaries, trusted release URLs, daily schedule, retry/cache/offline/upgrade behavior, summaries and warnings of every newer version, links in them, the Apple-signed archive first, the same version signed by Apple for a self-signed app")
     do { try runUpdateInstallTests() } catch { preconditionFailure("Installer tests: \(error)") }
     runPrereleaseTests()
