@@ -116,6 +116,7 @@ extension AppDelegate {
         case "korean-caps-lock": return .bool(engine.koreanCapsLock)
         case "special-chars": return .text(CLI.specialNames[specialMode.rawValue])
         case "escape": return .bool(engine.escapeToEnglish)
+        case "universal-control": return .bool(engine.universalControlCompatibility)
         case "backquote": return .bool(engine.swapBackquote)
         case "added-sources": return .bool(engine.addedSourcesEnabled)
         case "added-mode": return .text(engine.addedSourceMode == .cycle ? "cycle" : "separate")
@@ -248,6 +249,7 @@ extension AppDelegate {
         case "preserve-case": return flip(preserveCapsSwitch) { toggleFeature(preserveCapsSwitch) }
         case "korean-caps-lock": return flip(koreanCapsSwitch) { toggleFeature(koreanCapsSwitch) }
         case "escape": return flip(escapeSwitch) { toggleFeature(escapeSwitch) }
+        case "universal-control": return flip(universalControlSwitch) { toggleFeature(universalControlSwitch) }
         case "backquote": return flip(backquoteSwitch) { toggleFeature(backquoteSwitch) }
         case "icon":
             guard iconPicker.isEnabled, let index = text.flatMap({ CLI.iconNames.firstIndex(of: $0) }) else { return accessibilityHint }

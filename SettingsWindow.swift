@@ -182,6 +182,9 @@ extension AppDelegate {
         heading("기타", in: extras)
         escapeSwitch.target = self; escapeSwitch.action = #selector(toggleFeature(_:))
         extras.addArrangedSubview(escapeSwitch)
+        universalControlSwitch.target = self; universalControlSwitch.action = #selector(toggleFeature(_:))
+        extras.addArrangedSubview(universalControlSwitch)
+        hint("길게 누르기·입력 소스 추가가 꺼져 있을 때 적용", in: extras)
         separator(in: extras)
         // Installing needs no Accessibility, so this section never dims.
         heading("CLI", in: extras, dims: false)

@@ -106,6 +106,7 @@ gksdud source             # 현재 입력 소스 ID
 | `separate-source` | `<입력 소스>`, `none` | 입력 소스 추가 → 입력 소스 |
 | `compatibility` | `on`, `off` | 입력 소스 추가 → 호환성 모드 |
 | `escape` | `on`, `off` | ESC 누를 시 영소문자로 변경 |
+| `universal-control` | `on`, `off` | 추가기능 → 유니버설 컨트롤 호환 모드 (기본값: 끔) |
 | `keyboard.<키보드>.mode` | `on`, `default`, `off` | 고급 설정 → 키보드별 적용 |
 | `keyboard.<키보드>.keys` | `<키>,...`, `default` | 고급 설정 → 키보드별 한영 키 |
 
@@ -113,6 +114,8 @@ gksdud source             # 현재 입력 소스 ID
 - `<키보드>`: `gksdud keyboards`에 나오는 ID 앞부분(4자 이상), 이름, 이름 일부. `*`는 모든 키보드입니다. 이름이 같은 키보드는 함께 바뀝니다. 이름에 공백이 있으면 전체를 따옴표로 감싸 주세요: `"keyboard.Magic Keyboard.mode=off"`
 - `<입력 소스>`: `gksdud sources`의 ID, 이름, ID 끝부분이나 일부. `ko`·`en`은 최근에 쓴 한국어·영어 입력 소스입니다.
 - on/off 대신 `true`/`false`, `yes`/`no`, `1`/`0`도 가능합니다.
+
+`universal-control=on`은 유니버설 컨트롤로 받는 한영 키를 다시 생성하지 않고 시스템에 전달합니다. 두 Mac의 내부 전환 키가 같아야 하며, 길게 눌러 대소문자 전환 또는 입력 소스 추가를 사용 중이면 기존 방식으로 동작합니다. 직접 연결한 키보드에는 적용하지 않습니다.
 
 ```sh
 gksdud set keys=right-command,caps-lock      # 한영 키 두 개

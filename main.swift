@@ -154,6 +154,7 @@ final class Engine {
     var koreanCapsLock: Bool { defaults.bool(forKey: "koreanCapsLock") && !capsLockSwitches() }
     var escapeToEnglish: Bool { defaults.bool(forKey: "escapeToEnglish") }
     var swapBackquote: Bool { defaults.bool(forKey: "swapBackquote") }
+    var universalControlCompatibility: Bool { defaults.bool(forKey: "universalControlCompatibility") }
     // A Caps Lock chosen as a Korean/English key reaches macOS as the reserved F-key, never as Caps Lock; so does the separate key.
     // `fallback` checks default keys before they are saved.
     func capsLockSwitches(_ fallback: [UInt64]? = nil) -> Bool {
@@ -668,6 +669,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     let preserveCapsSwitch = NSButton(checkboxWithTitle: "한영 전환시 대소문자 보존", target: nil, action: nil)
     let koreanCapsSwitch = NSButton(checkboxWithTitle: "한글 상태에서도 Caps Lock으로 대소문자 전환", target: nil, action: nil)
     let escapeSwitch = NSButton(checkboxWithTitle: "ESC 누를 시 영소문자로 변경", target: nil, action: nil)
+    let universalControlSwitch = NSButton(checkboxWithTitle: "유니버설 컨트롤 호환 모드", target: nil, action: nil)
     let backquoteSwitch = NSButton(checkboxWithTitle: "한글 상태에서 ₩와 ` 반전", target: nil, action: nil)
     var backquote = BackquoteSwap()
     let installCLI = NSButton(title: "CLI 설치", target: nil, action: nil)
@@ -782,6 +784,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                     if decision.switchNow { _ = owner.switchSeparate(event) }
                     return decision.consume ? nil : Unmanaged.passUnretained(event)
                 }
+                // The sending Mac already mapped this key. Keep both native edges
+                // instead of consuming them and reposting a shortcut on this Mac.
+                if owner.passesThroughRemoteSwitch(event) {
+                    if type == .keyDown && !repeated { owner.rememberCapsBeforeSwitch(event) }
+                    return Unmanaged.passUnretained(event)
+                }
                 if owner.engine.active && type == .keyDown && !repeated && code == Int64(owner.engine.target.keyCode) {
                     owner.tapTargetDown = ProcessInfo.processInfo.systemUptime
                     owner.rememberCapsBeforeSwitch(event)
@@ -818,6 +826,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         CFRunLoopAddSource(CFRunLoopGetMain(), keyTapSource, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
         updatePressAccess()
+    }
+    func passesThroughRemoteSwitch(_ event: CGEvent) -> Bool {
+        guard engine.universalControlCompatibility, engine.active, !engine.paused,
+              !engine.longPressCapsLock, !addedSourcesActive,
+              event.type == .keyDown || event.type == .keyUp,
+              event.getIntegerValueField(.keyboardEventKeycode) == Int64(engine.target.keyCode) else { return false }
+        return remoteKeyboards.sentFromOtherMac(event)
     }
     // With Universal Control in front, the keys go to another Mac. Only with a keyboard mapped here: others have nothing to
     // carry the lock there, and Input Monitoring would be asked for nothing.
@@ -857,6 +872,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         escapeSwitch.state = trusted && engine.escapeToEnglish ? .on : .off
         escapeSwitch.isEnabled = trusted
         escapeSwitch.toolTip = trusted ? switchErrors[escapeSwitch] : accessibilityHint
+        universalControlSwitch.state = engine.universalControlCompatibility ? .on : .off
+        universalControlSwitch.isEnabled = trusted
+        universalControlSwitch.toolTip = trusted
+            ? "다른 Mac의 키보드로 한영 전환이 누락되거나 두 번 눌러야 할 때 켜세요. 두 Mac의 내부 전환 키가 같아야 합니다. 길게 눌러 대소문자 전환 또는 입력 소스 추가를 사용 중이면 기존 방식으로 동작합니다."
+            : accessibilityHint
         backquoteSwitch.state = trusted && engine.swapBackquote ? .on : .off
         backquoteSwitch.isEnabled = trusted
         backquoteSwitch.toolTip = trusted ? switchErrors[backquoteSwitch] : accessibilityHint
@@ -867,7 +887,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     @objc func toggleFeature(_ sender: NSButton) {
         let keys: [NSButton: String] = [longPressSwitch: "longPressCapsLock",
             preserveCapsSwitch: "preserveCapsLock", koreanCapsSwitch: "koreanCapsLock", escapeSwitch: "escapeToEnglish",
-            backquoteSwitch: "swapBackquote"]
+            backquoteSwitch: "swapBackquote", universalControlSwitch: "universalControlCompatibility"]
         guard let key = keys[sender] else { return }
         cancelLongPress()
         switchErrors[sender] = nil

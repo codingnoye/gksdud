@@ -48,6 +48,11 @@ func runCommandTests() {
     func results(_ reply: CommandReply) -> [[String: Any]] { reply.json["results"] as? [[String: Any]] ?? [] }
 
     precondition(run("get", "long-press").text == "off" && run("get", "keys").text == "right-command", "One value alone")
+    precondition(run("get", "universal-control").text == "off", "Universal Control compatibility is opt-in")
+    precondition(run("set", "universal-control=on").exit == CLI.Exit.ok && engine.universalControlCompatibility
+        && delegate.universalControlSwitch.state == .on, "CLI and checkbox share the setting")
+    precondition(run("toggle", "universal-control").exit == CLI.Exit.ok && !engine.universalControlCompatibility
+        && delegate.universalControlSwitch.state == .off)
     precondition((run("get").json["settings"] as? [String: Any])?.count == CLI.settings.count && run("get", "--json").exit == CLI.Exit.ok)
     var reply = run("set", "long-press=on", "escape=on")
     precondition(reply.exit == CLI.Exit.ok && reply.json["succeeded"] as? Int == 2 && engine.longPressCapsLock && engine.escapeToEnglish)

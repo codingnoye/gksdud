@@ -50,6 +50,7 @@ enum CLI {
         Setting(name: "separate-source", kind: .source, title: "분리로 전환할 입력 소스"),
         Setting(name: "compatibility", kind: .bool, title: "입력 소스 추가 호환성 모드"),
         Setting(name: "escape", kind: .bool, title: "ESC 누를 시 영소문자로 변경"),
+        Setting(name: "universal-control", kind: .bool, title: "유니버설 컨트롤 호환 모드"),
     ]
     // keyboard.<keyboard>.mode and keyboard.<keyboard>.keys.
     static let keyboardSettings: [Setting] = [
