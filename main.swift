@@ -153,6 +153,7 @@ final class Engine {
     // The saved choice waits while Caps Lock is a Korean/English key, however that key was saved.
     var koreanCapsLock: Bool { defaults.bool(forKey: "koreanCapsLock") && !capsLockSwitches() }
     var escapeToEnglish: Bool { defaults.bool(forKey: "escapeToEnglish") }
+    var swapBackquote: Bool { defaults.bool(forKey: "swapBackquote") }
     // A Caps Lock chosen as a Korean/English key reaches macOS as the reserved F-key, never as Caps Lock; so does the separate key.
     // `fallback` checks default keys before they are saved.
     func capsLockSwitches(_ fallback: [UInt64]? = nil) -> Bool {
@@ -667,6 +668,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     let preserveCapsSwitch = NSButton(checkboxWithTitle: "한영 전환시 대소문자 보존", target: nil, action: nil)
     let koreanCapsSwitch = NSButton(checkboxWithTitle: "한글 상태에서도 Caps Lock으로 대소문자 전환", target: nil, action: nil)
     let escapeSwitch = NSButton(checkboxWithTitle: "ESC 누를 시 영소문자로 변경", target: nil, action: nil)
+    let backquoteSwitch = NSButton(checkboxWithTitle: "한글 상태에서 ₩와 ` 반전", target: nil, action: nil)
+    var backquote = BackquoteSwap()
     let installCLI = NSButton(title: "CLI 설치", target: nil, action: nil)
     var commandPort: CFMessagePort?
     var commandSession: CommandSession?
@@ -705,7 +708,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         if let tap = keyTap { CFMachPortInvalidate(tap) }
         releaseHeldKeys()
         keyTapSource = nil; keyTap = nil; pressGate.held.removeAll(); spaceGate = SpaceComboGate()
-        separateGate.held.removeAll(); observedCaps = nil
+        separateGate.held.removeAll(); observedCaps = nil; backquote.reset()
     }
     func ensureKeyTap() {
         defer { updateRemoteHold() }
@@ -772,6 +775,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                     owner.holdKey(event)
                     return nil
                 }
+                owner.swapBackquote(event)
                 // The separate key's F-key only switches, on press like the Korean/English key.
                 if owner.takesSeparateKey(code) {
                     let decision = owner.separateGate.handle(code: code, down: type == .keyDown, repeatKey: repeated, active: true, target: code)
@@ -853,13 +857,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         escapeSwitch.state = trusted && engine.escapeToEnglish ? .on : .off
         escapeSwitch.isEnabled = trusted
         escapeSwitch.toolTip = trusted ? switchErrors[escapeSwitch] : accessibilityHint
+        backquoteSwitch.state = trusted && engine.swapBackquote ? .on : .off
+        backquoteSwitch.isEnabled = trusted
+        backquoteSwitch.toolTip = trusted ? switchErrors[backquoteSwitch] : accessibilityHint
         pressAccess.toolTip = trusted && engine.active && !ready ? "권한 반영을 기다리는 중입니다. 계속 전환되지 않으면 앱을 다시 실행하세요."
             : "키를 누르는 순간 전환하려면 접근성 권한이 필요합니다."
     }
     // Each checkbox saves its own preference; the tap starts or stops with them.
     @objc func toggleFeature(_ sender: NSButton) {
         let keys: [NSButton: String] = [longPressSwitch: "longPressCapsLock",
-            preserveCapsSwitch: "preserveCapsLock", koreanCapsSwitch: "koreanCapsLock", escapeSwitch: "escapeToEnglish"]
+            preserveCapsSwitch: "preserveCapsLock", koreanCapsSwitch: "koreanCapsLock", escapeSwitch: "escapeToEnglish",
+            backquoteSwitch: "swapBackquote"]
         guard let key = keys[sender] else { return }
         cancelLongPress()
         switchErrors[sender] = nil

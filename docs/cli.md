@@ -98,6 +98,7 @@ gksdud source             # 현재 입력 소스 ID
 | `preserve-case` | `on`, `off` | 한영 전환시 대소문자 보존 |
 | `korean-caps-lock` | `on`, `off` | 한글 상태에서도 Caps Lock으로 대소문자 전환 |
 | `special-chars` | `off`, `english`, `block` | 특수문자 (끔, 영어처럼 특수문자 입력, Option 문자 입력 차단) |
+| `backquote` | `on`, `off` | 한글 상태에서 ₩와 ` 반전 |
 | `added-sources` | `on`, `off` | 입력 소스 추가 → 활성화 |
 | `added-mode` | `cycle`, `separate` | 입력 소스 추가 → 전환 방식 (순회, 분리) |
 | `cycle` | `<입력 소스>,...` | 입력 소스 추가 → 순서 |

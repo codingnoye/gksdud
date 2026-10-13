@@ -170,6 +170,9 @@ extension AppDelegate {
             button.tag = index + 1; specialButtons.append(button); symbols.addArrangedSubview(button)
             hint(index == 0 ? "한글 상태에서도 ⌥8 → • 처럼 입력합니다." : "⌥+문자를 일반 문자로 입력합니다.", in: symbols)
         }
+        backquoteSwitch.target = self; backquoteSwitch.action = #selector(toggleFeature(_:))
+        symbols.addArrangedSubview(backquoteSwitch)
+        hint("한글 상태에서도 영어처럼 ₩ 대신 `를 입력하고, ⌥+₩로 ₩를 입력합니다.", in: symbols)
         specialStatus.font = .systemFont(ofSize: 11); specialStatus.textColor = .secondaryLabelColor
         full(specialStatus, in: symbols)
         let extras = tabPanels[3]

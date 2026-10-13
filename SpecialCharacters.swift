@@ -25,6 +25,30 @@ struct OptionKeyPolicy {
     }
 }
 
+// In Korean, ₩ and ` trade places as in English: the key alone types `, with Option ₩. Only the Option flag changes, and
+// the Korean input method types both (Option+₩ is ` there), so a composition ends as with any symbol. Shift (~) and
+// shortcuts stay.
+struct BackquoteSwap {
+    private(set) var swapping = false
+    static let leftOption = CGEventFlags(rawValue: 0x20), anyOption = CGEventFlags(rawValue: CGEventFlags.maskAlternate.rawValue | 0x60)
+    // 3-set final types * on that key, with ` under Option; no ₩ to trade.
+    static func swaps(_ source: InputSourceIdentity?) -> Bool {
+        guard let id = source?.id else { return false }
+        return id.hasPrefix("com.apple.inputmethod.Korean") && id != "com.apple.inputmethod.Korean.3SetKorean"
+    }
+    // Repeats and the release follow their press, even when the source changed meanwhile.
+    mutating func handle(code: Int64, down: Bool, repeated: Bool, flags: inout CGEventFlags, korean: () -> Bool) {
+        guard code == Int64(kVK_ANSI_Grave) else { return }
+        if down && !repeated {
+            swapping = flags.intersection([.maskShift, .maskCommand, .maskControl, .maskSecondaryFn]).isEmpty && korean()
+        }
+        guard swapping else { return }
+        if !down { swapping = false }
+        if flags.contains(.maskAlternate) { flags.remove(Self.anyOption) } else { flags.insert([.maskAlternate, Self.leftOption]) }
+    }
+    mutating func reset() { swapping = false }
+}
+
 final class OptionInputController {
     struct Environment {
         var current: () -> InputSourceIdentity?
@@ -229,6 +253,16 @@ extension AppDelegate {
     func refreshSpecialMode() {
         for button in specialButtons { button.state = button.tag == specialMode.rawValue ? .on : .off }
         showSpecialStatus("")
+    }
+    // Held keys go through here as they are let go, in the source they land on.
+    func swapBackquote(_ event: CGEvent) {
+        guard event.type == .keyDown || event.type == .keyUp else { return }
+        var flags = event.flags
+        backquote.handle(code: event.getIntegerValueField(.keyboardEventKeycode), down: event.type == .keyDown,
+            repeated: event.getIntegerValueField(.keyboardEventAutorepeat) != 0, flags: &flags) {
+            engine.active && engine.swapBackquote && BackquoteSwap.swaps(currentSource)
+        }
+        if flags != event.flags { event.flags = flags }
     }
     // Empty, it takes no room between the sections.
     func showSpecialStatus(_ text: String) { specialStatus.stringValue = text; specialStatus.isHidden = text.isEmpty }

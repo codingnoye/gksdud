@@ -55,6 +55,8 @@ func runCommandTests() {
     precondition(run("toggle", "long-press").exit == CLI.Exit.ok && !engine.longPressCapsLock)
     reply = run("set", "escape=on")
     precondition(reply.exit == CLI.Exit.ok && results(reply).first?["changed"] as? Bool == false, "Already so is a success")
+    precondition(run("get", "backquote").text == "off" && run("set", "backquote=on").exit == CLI.Exit.ok && engine.swapBackquote
+        && delegate.backquoteSwitch.state == .on && run("toggle", "backquote").exit == CLI.Exit.ok && !engine.swapBackquote)
     precondition(run("get", "icon-case").text == "off" && run("set", "icon-case=on").exit == CLI.Exit.ok && delegate.showsIconCase
         && delegate.iconCaseSwitch.state == .on && run("toggle", "icon-case").exit == CLI.Exit.ok && !delegate.showsIconCase)
     precondition(run("set", "menubar=off").exit == CLI.Exit.ok && run("set", "icon-case=on").exit == CLI.Exit.failed

@@ -42,6 +42,7 @@ enum CLI {
         Setting(name: "preserve-case", kind: .bool, title: "한영 전환시 대소문자 보존"),
         Setting(name: "korean-caps-lock", kind: .bool, title: "한글 상태에서도 Caps Lock으로 대소문자 전환"),
         Setting(name: "special-chars", kind: .choice(specialNames), title: "특수문자 (끔, 영어처럼 입력, Option 문자 입력 차단)"),
+        Setting(name: "backquote", kind: .bool, title: "한글 상태에서 ₩와 ` 반전"),
         Setting(name: "added-sources", kind: .bool, title: "입력 소스 추가"),
         Setting(name: "added-mode", kind: .choice(["cycle", "separate"]), title: "입력 소스 추가 전환 방식 (순회, 분리)"),
         Setting(name: "cycle", kind: .sources, title: "순회 순서"),

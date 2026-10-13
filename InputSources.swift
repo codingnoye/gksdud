@@ -279,6 +279,7 @@ extension AppDelegate {
         for key in keys {
             // With the lock as it is now, as a key pressed now would have it.
             key.flags = capsFlags(key.flags, caps: caps)
+            swapBackquote(key)
             key.setIntegerValueField(.eventSourceUserData, value: nativePulseMarker); key.post(tap: .cghidEventTap)
         }
     }

@@ -133,6 +133,37 @@ func runEnglishSwitchTests() {
     for modifier: CGEventFlags in [.maskCommand, .maskControl, .maskAlternate, .maskShift] {
         featureCheck(!escape(.keyDown, "ko", modifier), "Modified ESC stays a shortcut")
     }
+    do {
+        let grave = Int64(kVK_ANSI_Grave), leftOption = CGEventFlags([.maskAlternate]).union(BackquoteSwap.leftOption)
+        var swap = BackquoteSwap()
+        func press(_ flags: CGEventFlags, korean: Bool = true, code: Int64 = grave, down: Bool = true, repeated: Bool = false) -> CGEventFlags {
+            var result = flags; swap.handle(code: code, down: down, repeated: repeated, flags: &result) { korean }; return result
+        }
+        featureCheck(press([]) == leftOption && press([], down: false) == leftOption && !swap.swapping, "₩ alone types ` in Korean")
+        featureCheck(press(leftOption) == [] && press(leftOption, down: false) == [], "Option+₩ types ₩ in Korean")
+        featureCheck(press([.maskAlternate, BackquoteSwap.anyOption]) == [], "Either Option key's device bit goes too")
+        featureCheck(press(.maskAlphaShift) == leftOption.union(.maskAlphaShift), "Caps Lock stays")
+        for kept: CGEventFlags in [.maskShift, .maskCommand, .maskControl, .maskSecondaryFn, [.maskShift, .maskAlternate]] {
+            featureCheck(press(kept) == kept && press(kept, down: false) == kept, "Shift and shortcuts stay")
+        }
+        featureCheck(press([], korean: false) == [] && press([], korean: false, down: false) == [], "Other input sources stay")
+        featureCheck(press([], code: Int64(kVK_ANSI_A)) == [] && press([], code: 10) == [], "Only the ₩ key")
+        _ = press([])
+        featureCheck(press([], korean: false, repeated: true) == leftOption && press([], korean: false, down: false) == leftOption,
+            "Repeats and the release follow their press")
+        _ = press([], korean: false)
+        featureCheck(press([], repeated: true) == [] && press([], down: false) == [], "Even when the source became Korean meanwhile")
+        featureCheck(press([], down: false) == [], "A release without its press stays")
+        _ = press([]); swap.reset()
+        featureCheck(press([], down: false) == [], "A stopped tap forgets the press")
+        featureCheck(BackquoteSwap.swaps(InputSourceIdentity(id: "com.apple.inputmethod.Korean.2SetKorean", language: "ko"))
+            && BackquoteSwap.swaps(InputSourceIdentity(id: "com.apple.inputmethod.Korean.390Sebulshik", language: "ko"))
+            && BackquoteSwap.swaps(InputSourceIdentity(id: "com.apple.inputmethod.Korean.HNCRomaja", language: "ko"))
+            && !BackquoteSwap.swaps(InputSourceIdentity(id: "com.apple.inputmethod.Korean.3SetKorean", language: "ko"))
+            && !BackquoteSwap.swaps(InputSourceIdentity(id: "org.youknowone.inputmethod.Gureum.han2", language: "ko"))
+            && !BackquoteSwap.swaps(InputSourceIdentity(id: "com.apple.keylayout.ABC", language: "en")) && !BackquoteSwap.swaps(nil),
+            "Apple Korean input modes with ₩ on that key only")
+    }
     for initial in [false, true] {
         for korean in [false, true] {
             var caps = EnglishCapsState()
@@ -168,7 +199,7 @@ func runEnglishSwitchTests() {
     let keyboard = TestKeyboard("english-switch-1", name: "Keyboard", serial: "english-switch")
     let engine = Engine(defaults: defaults, discover: { [keyboard] })
     _ = engine.keyboards.reconcile(sources: engine.defaultSources, target: f19, active: true)
-    featureCheck(!engine.koreanCapsLock && !engine.escapeToEnglish, "Both keys are opt-in")
+    featureCheck(!engine.koreanCapsLock && !engine.escapeToEnglish && !engine.swapBackquote, "These keys are opt-in")
     featureCheck(!engine.capsLockSwitches())
     engine.defaultSources = [sources[0], sources[2]]
     featureCheck(engine.capsLockSwitches(), "Caps Lock among default Korean/English keys")
