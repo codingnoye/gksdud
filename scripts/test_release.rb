@@ -10,8 +10,13 @@ class ReleaseTests < Minitest::Test
   ROOT = File.expand_path('..', __dir__)
 
   def test_tag_must_match_numeric_app_version
-    %w[main v1.2.1 pre-v.1.2.1 pre-v1.2.1 pre-v1.2.0-beta.1 pre-v.1.2.0-beta.1 ../1.2.0].each do |tag|
+    %w[main v1.2.1 pre-v.1.2.1 pre-v1.2.1 pre-v1.2.0 pre-v1.2.0-beta.1 pre-v.1.2.0-beta.1 ../1.2.0].each do |tag|
       assert_raises(ArgumentError) { ReleaseMetadata.new('1.2.0', tag) }
+    end
+    # A prerelease has four fields, the fourth from 1; stable and canary releases have three.
+    assert_equal 'pre', ReleaseMetadata.new('1.2.0.1', 'pre-v1.2.0.1').channel
+    [%w[1.2.0.0 pre-v1.2.0.0], %w[1.2.0.01 pre-v1.2.0.01], %w[1.2.0.1 v1.2.0.1], %w[1.2.0.1 canary-v1.2.0.1], %w[1.2.0.1.1 pre-v1.2.0.1.1]].each do |version, tag|
+      assert_raises(ArgumentError) { ReleaseMetadata.new(version, tag) }
     end
     ["1.2.0\n", '1.2', '1.2.0-beta.1', '01.2.0', '1.02.0', '1.2.00'].each do |version|
       assert_raises(ArgumentError) { ReleaseMetadata.new(version) }
@@ -20,13 +25,14 @@ class ReleaseTests < Minitest::Test
 
   def test_stable_and_prerelease_assets_are_separate
     stable = ReleaseMetadata.new('1.2.0', 'v1.2.0')
-    pre = ReleaseMetadata.new('1.2.0', 'pre-v1.2.0')
+    pre = ReleaseMetadata.new('1.2.0.1', 'pre-v1.2.0.1')
     canary = ReleaseMetadata.new('1.2.0', 'canary-v1.2.0')
     refute stable.prerelease?
     assert pre.prerelease?
     assert canary.prerelease?
     assert_equal 'gksdud-1.2.0.zip', stable.filename
-    assert_equal 'gksdud-1.2.0-pre.zip', pre.filename
+    # The name an app takes for the version it updates to.
+    assert_equal 'gksdud-1.2.0.1.zip', pre.filename
     assert_equal 'gksdud-dev-1.2.0.zip', canary.filename
     # Apps up to 1.7.1 download the old name, which holds the self-signed copy while they move to Developer ID.
     assert ReleaseMetadata::SELF_SIGNED_COPY
@@ -46,7 +52,7 @@ class ReleaseTests < Minitest::Test
     workflow = YAML.load_file("#{ROOT}/.github/workflows/release.yml")
     triggers = workflow.fetch('on') { workflow.fetch(true) }
     patterns = triggers.fetch('push').fetch('tags')
-    assert patterns.any? { |pattern| File.fnmatch?(pattern, 'pre-v1.2.0') }, 'No push trigger for pre-v1.2.0'
+    assert patterns.any? { |pattern| File.fnmatch?(pattern, 'pre-v1.2.0.1') }, 'No push trigger for pre-v1.2.0.1'
     assert patterns.any? { |pattern| File.fnmatch?(pattern, 'canary-v1.2.0') }, 'No push trigger for canary-v1.2.0'
     refute patterns.any? { |pattern| File.fnmatch?(pattern, 'v1.2.0') }, 'Stable tags must use manual release'
   end
@@ -71,12 +77,13 @@ class ReleaseTests < Minitest::Test
 
   def test_pushed_tags_must_match_source_version
     with_release_repository do |selection, _, _|
-      %w[v1.2.0 pre-v1.2.0].each do |tag|
-        result = selection.resolve(event: 'push', tag: tag, version: '', source: '', summary: '')
-        assert_equal '1.2.0', result.fetch(:version)
-        assert_equal tag.start_with?('pre-v'), result.fetch(:prerelease)
-      end
+      result = selection.resolve(event: 'push', tag: 'v1.2.0', version: '', source: '', summary: '')
+      assert_equal ['1.2.0', false], result.values_at(:version, :prerelease)
       assert_raises(ArgumentError) { selection.resolve(event: 'push', tag: 'v9.0.0', version: '', source: '', summary: '') }
+      # A prerelease's version is its tag's, after the source's stable version.
+      result = selection.resolve(event: 'push', tag: 'pre-v1.2.0.1', version: '', source: '', summary: '')
+      assert_equal ['1.2.0.1', 'pre', true], result.values_at(:version, :channel, :prerelease)
+      assert_raises(ArgumentError) { selection.resolve(event: 'push', tag: 'pre-v1.2.0', version: '', source: '', summary: '') }
       # A canary's version is its tag's, ahead of the source.
       result = selection.resolve(event: 'push', tag: 'canary-v9.0.0', version: '', source: '', summary: '')
       assert_equal ['9.0.0', 'canary', true], result.values_at(:version, :channel, :prerelease)
@@ -154,7 +161,7 @@ class ReleaseTests < Minitest::Test
   # Run the actual publication shell block against a fake gh command. No network
   # or signing secrets are used, and no tag or release is created.
   def release_arguments(tag, tag_type: 'commit', message: '')
-    metadata = ReleaseMetadata.new('1.2.0', tag)
+    metadata = ReleaseMetadata.new(tag.sub(/\A(pre-|canary-)?v/, ''), tag)
     workflow = YAML.load_file("#{ROOT}/.github/workflows/release.yml")
     step = workflow.fetch('jobs').fetch('release').fetch('steps').find do |item|
       item.fetch('name', '').start_with?('Create stable draft')
@@ -192,16 +199,20 @@ class ReleaseTests < Minitest::Test
     assert_includes args, '--verify-tag'
   end
 
-  def test_prerelease_is_published_without_changing_latest
-    args, = release_arguments('pre-v1.2.0')
-    assert_equal ['release', 'create', 'pre-v1.2.0'], args.first(3)
+  def test_prerelease_is_published_with_the_tag_message_without_changing_latest
+    message = "### 요약\n- 프리릴리즈 항목"
+    args, notes = release_arguments('pre-v1.2.0.1', tag_type: 'tag', message: message)
+    assert_equal ['release', 'create', 'pre-v1.2.0.1'], args.first(3)
     assert_includes args, '--prerelease'
     assert_includes args, '--latest=false'
     refute_includes args, '--draft'
-    assert_equal ['release-source/outputs/gksdud-1.2.0-pre.zip', 'release-source/outputs/release-1.2.0-pre/SHA256SUMS'], args[3, 2]
-    assert_includes args, '.github/PRERELEASE_NOTES.md'
+    assert_includes args, 'gksdud 1.2.0.1 Pre-release'
+    assert_equal ['release-source/outputs/gksdud-1.2.0.1.zip', 'release-source/outputs/release-1.2.0.1-pre/SHA256SUMS'], args[3, 2]
     assert_includes args, '--generate-notes'
     assert_includes args, '--verify-tag'
+    assert notes.start_with?("#{message}\n\n### 테스트용"), notes
+    _, notes = release_arguments('pre-v1.2.0.1')
+    assert_equal File.read("#{ROOT}/.github/PRERELEASE_NOTES.md"), notes, 'A lightweight tag has no message'
   end
 
   def test_canary_is_published_with_the_tag_message_without_changing_latest

@@ -6,11 +6,15 @@ class ReleaseMetadata
 
   attr_reader :version, :tag
 
+  # A prerelease numbers a fourth field on the stable version it follows (pre-v2.3.0.1), so a newer stable release updates it.
   def initialize(version, tag = "v#{version}")
-    raise ArgumentError, 'Expected numeric release version' unless version.match?(/\A(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)\z/)
+    number = '(0|[1-9]\d*)'
+    stable = /\A#{number}\.#{number}\.#{number}\z/
+    raise ArgumentError, 'Expected numeric release version' unless version.match?(stable) || version.match?(/\A#{number}\.#{number}\.#{number}\.[1-9]\d*\z/)
     unless ["v#{version}", "pre-v#{version}", "canary-v#{version}"].include?(tag)
       raise ArgumentError, 'Tag must be vVERSION, pre-vVERSION or canary-vVERSION and match the release version'
     end
+    raise ArgumentError, 'A prerelease version has four fields, such as 2.3.0.1' if tag.start_with?('pre-v') == version.match?(stable)
     @version = version
     @tag = tag
   end
@@ -38,7 +42,7 @@ class ReleaseMetadata
   end
 
   def filename
-    channel == 'canary' ? "#{app}-#{version}.zip" : "gksdud-#{asset_version}.zip"
+    "#{app}-#{version}.zip"
   end
 
   # The name apps up to 1.7.1 download; prereleases were never their updates.

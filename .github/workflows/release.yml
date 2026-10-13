@@ -138,14 +138,6 @@ jobs:
           GKSDUD_SELF_SIGNED_COPY: ${{ steps.version.outputs.self_signed_filename != '' && '1' || '' }}
         run: bash build.sh
 
-      - name: Name prerelease archive
-        if: steps.version.outputs.channel == 'pre'
-        working-directory: release-source
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-          FILENAME: ${{ steps.version.outputs.filename }}
-        run: mv "outputs/gksdud-$VERSION.zip" "outputs/$FILENAME"
-
       - name: Verify archive and prepare release metadata
         env:
           GKSDUD_RELEASE_TAG: ${{ steps.version.outputs.tag }}
@@ -206,13 +198,16 @@ jobs:
         run: |
           set -euo pipefail
           options=(--draft --title "gksdud $VERSION" --notes-file .github/RELEASE_NOTES.md)
-          if [[ "$CHANNEL" == pre ]]; then
-            options=(--prerelease --latest=false --title "gksdud $VERSION Pre-release" --notes-file .github/PRERELEASE_NOTES.md --generate-notes)
-          elif [[ "$CHANNEL" == canary ]]; then
-            # The annotated tag's message goes above the canary notes: the app shows its ### 요약 and confirms its ### 경고.
-            notes=$(mktemp "${RUNNER_TEMP:-/tmp}/gksdud-canary-notes.XXXXXX")
+          if [[ "$CHANNEL" != stable ]]; then
+            # The annotated tag's message goes above the notes: the app shows its ### 요약 and confirms its ### 경고.
+            notes=$(mktemp "${RUNNER_TEMP:-/tmp}/gksdud-$CHANNEL-notes.XXXXXX")
             read -r type sha < <(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq '.object.type + " " + .object.sha')
             if [[ "$type" == tag ]]; then gh api "repos/$GITHUB_REPOSITORY/git/tags/$sha" --jq .message > "$notes"; printf '\n' >> "$notes"; fi
+          fi
+          if [[ "$CHANNEL" == pre ]]; then
+            cat .github/PRERELEASE_NOTES.md >> "$notes"
+            options=(--prerelease --latest=false --title "gksdud $VERSION Pre-release" --notes-file "$notes" --generate-notes)
+          elif [[ "$CHANNEL" == canary ]]; then
             cat .github/CANARY_NOTES.md >> "$notes"
             options=(--prerelease --latest=false --title "gksdud-dev $VERSION Canary" --notes-file "$notes")
           fi
