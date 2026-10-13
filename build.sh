@@ -81,7 +81,7 @@ fi
 cp LICENSE "$stage/$app.app/Contents/Resources/LICENSE"
 cp Resources/github.svg Resources/fairy.svg Resources/OCTICONS-LICENSE "$stage/$app.app/Contents/Resources/"
 if [[ -n "${GKSDUD_APP_VERSION:-}" ]]; then
-  [[ "$GKSDUD_APP_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
+  [[ "$GKSDUD_APP_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || exit 1
   /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $GKSDUD_APP_VERSION" "$stage/$app.app/Contents/Info.plist"
 fi
 if [[ -n "${GKSDUD_BUILD_NUMBER:-}" ]]; then

@@ -10,9 +10,12 @@ struct ReleaseVersion: Comparable {
         parts = fields.map { Int($0)! } + Array(repeating: 0, count: 4 - fields.count)
     }
     static func < (lhs: Self, rhs: Self) -> Bool { lhs.parts.lexicographicallyPrecedes(rhs.parts) }
+    // Prereleases number a fourth field on the stable version they follow: pre-v2.3.0.1 comes after 2.3.0, before 2.3.1.
+    var prerelease: Bool { parts[3] != 0 }
 }
 
 // The canary build is a separate app, gksdud-dev, that updates only from canary releases (canary-vX.Y.Z prereleases).
+// Prereleases (pre-vX.Y.Z.N) are builds of the stable app.
 enum UpdateChannel: String {
     case stable, canary
     static let current: UpdateChannel = Bundle.main.object(forInfoDictionaryKey: "GKSDUDChannel") as? String == "canary" ? .canary : .stable
@@ -34,18 +37,24 @@ struct AppRelease: Codable {
               url.path.hasPrefix("/codingnoye/gksdud/releases/tag/") else { return nil }
         return url
     }
-    var channel: UpdateChannel? { tag_name.hasPrefix("canary-v") ? .canary : tag_name.hasPrefix("v") ? .stable : nil }
-    var versionString: String { String(tag_name.dropFirst(channel?.tagPrefix.count ?? 0)) }
+    var preview: Bool { tag_name.hasPrefix("pre-v") }
+    var channel: UpdateChannel? { tag_name.hasPrefix("canary-v") ? .canary : tag_name.hasPrefix("v") || preview ? .stable : nil }
+    var versionString: String { String(tag_name.dropFirst(preview ? 5 : channel?.tagPrefix.count ?? 0)) }
     // The Apple-signed <app>-<version>.zip when the release has one, so this app moves to it on its next update; otherwise the
     // self-signed -macos-universal.zip, the only name apps up to 1.7.1 take.
     var appleSigned: Bool { assets?.contains { $0.name == "\(archiveBase).zip" } == true }
     var archiveName: String { appleSigned ? "\(archiveBase).zip" : "\(archiveBase)-macos-universal.zip" }
     private var archiveBase: String { "\(channel?.appName ?? "gksdud")-\(versionString)" }
-    // Canary releases are prereleases, so the stable app and Homebrew never see them.
-    var eligible: Bool { !draft && channel != nil && prerelease == (channel == .canary) && pageURL != nil && ReleaseVersion(versionString) != nil }
+    // Canary releases and prereleases are GitHub prereleases, so Homebrew never sees them. A prerelease has a fourth field.
+    var eligible: Bool {
+        !draft && channel != nil && prerelease == (channel == .canary || preview) && pageURL != nil
+            && ReleaseVersion(versionString).map { $0.prerelease == preview } == true
+    }
+    // Prereleases only update a prerelease, which also takes a newer stable release.
     func isNewer(than installed: String) -> Bool {
         guard eligible,
-              let candidate = ReleaseVersion(versionString), let current = ReleaseVersion(installed) else { return false }
+              let candidate = ReleaseVersion(versionString), let current = ReleaseVersion(installed),
+              !preview || current.prerelease else { return false }
         return candidate > current
     }
     // A self-signed app (what apps up to 1.7.1 update to) also moves to the Apple-signed build of the version it already runs.

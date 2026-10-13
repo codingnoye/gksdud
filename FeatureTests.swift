@@ -798,19 +798,43 @@ func runPrereleaseTests() {
     let suite = "io.gksdud.channel-tests.\(UUID().uuidString)"
     let defaults = UserDefaults(suiteName: suite)!
     defer { defaults.removePersistentDomain(forName: suite) }
-    let tag = "pre-v1.3.0"
-    let preview = AppRelease(tag_name: tag, html_url: "https://github.com/codingnoye/gksdud/releases/tag/\(tag)", body: nil, draft: false, prerelease: true)
-    featureCheck(!preview.isNewer(than: "1.2.0"))
+    func release(_ tag: String, pre: Bool = true, draft: Bool = false) -> AppRelease {
+        AppRelease(tag_name: tag, html_url: "https://github.com/codingnoye/gksdud/releases/tag/\(tag)", body: "### 요약\n- \(tag)", draft: draft, prerelease: pre,
+                   assets: [ReleaseAsset(name: "gksdud-\(tag.drop { !$0.isNumber }).zip", browser_download_url: "", size: 1)])
+    }
+    let preview = release("pre-v1.3.0.1")
+    featureCheck(preview.channel == .stable && preview.versionString == "1.3.0.1" && preview.archiveName == "gksdud-1.3.0.1.zip")
+    featureCheck(!preview.isNewer(than: "1.2.0") && !preview.isNewer(than: "1.3.0"), "A stable app never takes a prerelease")
+    featureCheck(preview.isNewer(than: "1.2.0.3") && !preview.isNewer(than: "1.3.0.1"))
+    featureCheck(!release("pre-v1.3.0.1", pre: false).isNewer(than: "1.2.0.1") && !release("pre-v1.3.0").isNewer(than: "1.2.0.1")
+        && !release("v1.3.0.1", pre: false).isNewer(than: "1.2.0.1") && !release("canary-v1.3.0.1").isNewer(than: "1.2.0.1"),
+        "A prerelease is a GitHub prerelease with four fields")
     var completion: ((Data?, URLResponse?, Error?) -> Void)?
-    let checker = UpdateChecker(defaults: defaults, installedVersion: "1.2.0", channel: .stable, fetch: { request, done in
-        featureCheck(request.url?.path == "/repos/codingnoye/gksdud/releases" && request.url?.query == "per_page=100")
-        completion = done
-    })
-    checker.check()
-    completion?(try! JSONEncoder().encode([preview]), HTTPURLResponse(url: URL(string: "https://api.github.com")!, statusCode: 200, httpVersion: nil, headerFields: nil), nil)
-    RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.01))
-    featureCheck(checker.available == nil && checker.error == nil, "Prereleases are skipped")
-    print("PASS: release list endpoint and prerelease skipping")
+    func checker(_ installed: String) -> UpdateChecker {
+        UpdateChecker(defaults: defaults, installedVersion: installed, channel: .stable, developerID: true, fetch: { request, done in
+            featureCheck(request.url?.path == "/repos/codingnoye/gksdud/releases" && request.url?.query == "per_page=100")
+            completion = done
+        })
+    }
+    func respond(_ checker: UpdateChecker, _ releases: [AppRelease]) {
+        checker.check(force: true)
+        completion?(try! JSONEncoder().encode(releases), HTTPURLResponse(url: URL(string: "https://api.github.com")!, statusCode: 200, httpVersion: nil, headerFields: nil), nil)
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.01))
+    }
+    let all = [release("v1.3.1", pre: false), release("pre-v1.3.0.2"), release("pre-v1.3.0.1"), release("v1.3.0", pre: false),
+               release("canary-v1.4.0"), release("pre-v1.2.0")]
+    let stable = checker("1.3.0")
+    respond(stable, all)
+    featureCheck(stable.pending.map(\.tag_name) == ["v1.3.1"] && stable.error == nil, "A stable app skips prereleases")
+    let pre = checker("1.3.0.1")
+    respond(pre, all)
+    featureCheck(pre.pending.map(\.tag_name) == ["v1.3.1", "pre-v1.3.0.2"] && pre.available?.tag_name == "v1.3.1",
+        "A prerelease takes the higher of a newer prerelease and stable release")
+    respond(pre, [release("pre-v1.3.0.2"), release("v1.3.0", pre: false)])
+    featureCheck(pre.available?.tag_name == "pre-v1.3.0.2" && pre.available?.archiveName == "gksdud-1.3.0.2.zip", "Then the next prerelease")
+    respond(pre, [release("v1.3.0", pre: false), release("pre-v1.3.0.1")])
+    featureCheck(pre.available == nil && pre.error == nil, "Never back to the stable release it follows")
+    print("PASS: release list endpoint, prereleases only for prereleases, which also take newer stable releases")
     runCanaryTests()
 }
 
@@ -821,7 +845,7 @@ func runCanaryTests() {
     let canary = release("canary-v1.3.0")
     featureCheck(canary.channel == .canary && canary.versionString == "1.3.0" && canary.archiveName == "gksdud-dev-1.3.0-macos-universal.zip")
     featureCheck(canary.isNewer(than: "1.2.0") && !release("canary-v1.3.0", pre: false).isNewer(than: "1.2.0"), "Canary releases are prereleases")
-    featureCheck(release("v1.3.0", pre: false).channel == .stable && !release("v1.3.0").isNewer(than: "1.2.0") && release("pre-v1.3.0").channel == nil)
+    featureCheck(release("v1.3.0", pre: false).channel == .stable && !release("v1.3.0").isNewer(than: "1.2.0") && release("pre-v1.3.0").channel == .stable && !release("pre-v1.3.0").isNewer(than: "1.2.0"))
     let suite = "io.gksdud.canary-tests.\(UUID().uuidString)"
     let defaults = UserDefaults(suiteName: suite)!
     defer { defaults.removePersistentDomain(forName: suite) }
