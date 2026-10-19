@@ -113,18 +113,16 @@ final class HIDKeyboardDevice: KeyboardDevice {
         if cache == nil || cache?.keyboards != kernel {
             let client = IOHIDEventSystemClientCreateSimpleClient(kCFAllocatorDefault)
             guard let services = IOHIDEventSystemClientCopyServices(client) as? [IOHIDServiceClient] else { cache = nil; throw KeyboardError.enumeration }
-            let keyboards = services.filter {
-                IOHIDServiceClientConformsTo($0, 1, 6) != 0
-                    && local((IOHIDServiceClientGetRegistryID($0) as? NSNumber)?.uint64Value, kernel: kernel)
-            }
+            let keyboards = services.filter { IOHIDServiceClientConformsTo($0, 1, 6) != 0 }
+                .map { ($0, (IOHIDServiceClientGetRegistryID($0) as? NSNumber)?.uint64Value) }.filter { local($0.1, kernel: kernel) }
             // A keyboard the HID system has not added or removed yet leaves the sets different, so the next call looks again.
-            cache = (Set(keyboards.compactMap { (IOHIDServiceClientGetRegistryID($0) as? NSNumber)?.uint64Value }), client, keyboards)
+            cache = (Set(keyboards.compactMap(\.1)), client, keyboards.map(\.0))
         }
         let current = cache!
         return current.services.map { HIDKeyboardDevice(client: current.client, service: $0) }
     }
-    // Universal Control brings another Mac's keyboards as services hidd keeps, outside the kernel. That Mac maps their
-    // keys before they come, macOS 27 refuses mappings on them, and listed they would never match the kernel's set.
+    // Universal Control brings another Mac's keyboards as services hidd keeps, outside the kernel. Their keys are that
+    // Mac's to map, macOS 27 refuses mappings on them, and listed they would never match the kernel's set.
     static func local(_ id: UInt64?, kernel: Set<UInt64>?) -> Bool {
         guard let kernel else { return true }
         return id.map(kernel.contains) ?? false
