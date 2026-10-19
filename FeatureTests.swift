@@ -1178,6 +1178,9 @@ func runUniversalControlTests() {
                  "A service outside the kernel is another Mac's, looked up once")
     key.setIntegerValueField(RemoteKeyboards.senderField!, value: 4294969256)
     featureCheck(!keyboards.sentFromOtherMac(key), "Posted events and this Mac's keyboards are local")
+    featureCheck(HIDKeyboardDevice.local(4294969256, kernel: [4294969256]) && !HIDKeyboardDevice.local(34407378380128265, kernel: [4294969256])
+                 && !HIDKeyboardDevice.local(nil, kernel: []), "Another Mac's keyboards are not listed for mapping")
+    featureCheck(HIDKeyboardDevice.local(34407378380128265, kernel: nil), "Without the kernel's list, every keyboard stays")
     // The other Mac's key-up right after a long press here, still in the switching window, is not learned from; the next
     // press from there sets the case straight whatever the lock here did meanwhile.
     for upper in [false, true] {
