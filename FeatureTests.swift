@@ -1181,6 +1181,84 @@ func runUniversalControlTests() {
     featureCheck(HIDKeyboardDevice.local(4294969256, kernel: [4294969256]) && !HIDKeyboardDevice.local(34407378380128265, kernel: [4294969256])
                  && !HIDKeyboardDevice.local(nil, kernel: []), "Another Mac's keyboards are not listed for mapping")
     featureCheck(HIDKeyboardDevice.local(34407378380128265, kernel: nil), "Without the kernel's list, every keyboard stays")
+    // Remote switch routing must accept both edges of only the forwarded switch key.
+    // No events are posted and no system preferences are written by these checks.
+    let suite = "io.gksdud.universal-control-tests.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+    defaults.set(false, forKey: "preserveCapsLock")
+    let engine = Engine(defaults: defaults, discover: { [] })
+    engine.accessibilityTrusted = { true }
+    let delegate = AppDelegate(engine: engine)
+    delegate.remoteKeyboards.inKernel = { $0 < 1 << 40 }
+    let forwarded = CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(engine.target.keyCode), keyDown: true)!
+    forwarded.setIntegerValueField(RemoteKeyboards.senderField!, value: 34407378380128265)
+    for type in [CGEventType.keyDown, .keyUp] {
+        forwarded.type = type
+        featureCheck(delegate.remoteSwitchEvent(forwarded) === forwarded, "Both remote key edges pass through")
+    }
+    forwarded.type = .keyDown
+    forwarded.setIntegerValueField(.keyboardEventAutorepeat, value: 1)
+    featureCheck(delegate.remoteSwitchEvent(forwarded) === forwarded, "Native repeats stay with the native key pair")
+    forwarded.setIntegerValueField(.keyboardEventAutorepeat, value: 0)
+    for fieldValue in [Int64(0), 4294969256] {
+        forwarded.setIntegerValueField(RemoteKeyboards.senderField!, value: fieldValue)
+        featureCheck(delegate.remoteSwitchEvent(forwarded) == nil, "Local and posted events keep the managed path")
+    }
+    forwarded.setIntegerValueField(RemoteKeyboards.senderField!, value: 34407378380128265)
+    forwarded.setIntegerValueField(.keyboardEventKeycode, value: 0)
+    featureCheck(delegate.remoteSwitchEvent(forwarded) == nil, "Ordinary remote typing is outside remote switch routing")
+    forwarded.setIntegerValueField(.keyboardEventKeycode, value: Int64(engine.target.keyCode))
+    forwarded.type = .flagsChanged
+    featureCheck(delegate.remoteSwitchEvent(forwarded) == nil, "Modifier events are outside remote switch routing")
+    forwarded.type = .keyDown
+    for feature in ["longPressCapsLock", "addedSources"] {
+        defaults.set(true, forKey: feature)
+        featureCheck(delegate.remoteSwitchEvent(forwarded) == nil, "Advanced switching keeps its existing path")
+        defaults.set(false, forKey: feature)
+    }
+    defaults.set(false, forKey: "active")
+    featureCheck(delegate.remoteSwitchEvent(forwarded) == nil, "Inactive apps do not claim the remote switch path")
+    defaults.set(true, forKey: "active"); engine.paused = true
+    featureCheck(delegate.remoteSwitchEvent(forwarded) == nil, "Paused apps do not claim the remote switch path")
+    engine.paused = false
+    defaults.set("F20", forKey: "target")
+    featureCheck(delegate.remoteSwitchEvent(forwarded) == nil, "A former switch key is no longer claimed")
+    forwarded.setIntegerValueField(.keyboardEventKeycode, value: Int64(engine.target.keyCode))
+    featureCheck(delegate.remoteSwitchEvent(forwarded) === forwarded, "The selected internal switch key is used")
+    // Exercise the production receiver with a native pair, not just its routing predicate.
+    // Do not post to macOS: this tests the handler, not Universal Control transport or input-source switching.
+    defaults.set(true, forKey: "escapeToEnglish")
+    forwarded.flags = [.maskAlphaShift, .maskSecondaryFn, .maskNumericPad]
+    forwarded.timestamp = 123456789
+    let original = forwarded.data! as Data
+    featureCheck(delegate.remoteSwitchEvent(forwarded) === forwarded, "The receiver returns the original key-down object")
+    featureCheck(forwarded.data! as Data == original, "Native fields and flags are not rewritten")
+    guard let pending = delegate.sentSwitch else {
+        featureCheck(false, "A native switch must be recorded for ESC before the input source changes")
+        return
+    }
+    featureCheck(pending.inFlight(now: pending.at + 0.01, language: pending.from), "ESC can observe the pending native switch")
+    // A deterministic timestamp distinguishes a new switch from repeats and release.
+    delegate.sentSwitch = SentSwitch(from: "en", at: 42)
+    forwarded.setIntegerValueField(.keyboardEventAutorepeat, value: 1)
+    featureCheck(delegate.remoteSwitchEvent(forwarded) === forwarded && delegate.sentSwitch?.at == 42,
+                 "A native repeat is forwarded without starting another switch")
+    forwarded.setIntegerValueField(.keyboardEventAutorepeat, value: 0)
+    forwarded.type = .keyUp
+    featureCheck(delegate.remoteSwitchEvent(forwarded) === forwarded && delegate.sentSwitch?.at == 42,
+                 "The native release is forwarded without starting another switch")
+    featureCheck(delegate.pressGate.held.isEmpty && delegate.longPressEvent == nil && delegate.queuedSwitch == nil,
+                 "The native pair does not claim a managed press, long press or queued switch")
+    forwarded.type = .keyDown
+    forwarded.setIntegerValueField(.eventSourceUserData, value: delegate.nativePulseMarker)
+    featureCheck(delegate.remoteSwitchEvent(forwarded) == nil && delegate.sentSwitch?.at == 42,
+                 "Our replayed event cannot start a second native switch")
+    let reconnected = CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(engine.target.keyCode), keyDown: true)!
+    reconnected.setIntegerValueField(RemoteKeyboards.senderField!, value: 34407378380128266)
+    featureCheck(delegate.remoteSwitchEvent(reconnected) === reconnected && delegate.sentSwitch?.at != 42,
+                 "A new remote service is classified and its next press is recorded")
+    print("PASS: simulated remote receiver, original event identity and contents, native pair, repeats, ESC bookkeeping and new service")
     // The other Mac's key-up right after a long press here, still in the switching window, is not learned from; the next
     // press from there sets the case straight whatever the lock here did meanwhile.
     for upper in [false, true] {

@@ -782,6 +782,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                     if decision.switchNow { _ = owner.switchSeparate(event) }
                     return decision.consume ? nil : Unmanaged.passUnretained(event)
                 }
+                // The sending Mac already mapped this key. Keep both native edges
+                // instead of consuming them and reposting a shortcut on this Mac.
+                if let native = owner.remoteSwitchEvent(event) {
+                    return Unmanaged.passUnretained(native)
+                }
                 if owner.engine.active && type == .keyDown && !repeated && code == Int64(owner.engine.target.keyCode) {
                     owner.tapTargetDown = ProcessInfo.processInfo.systemUptime
                     owner.rememberCapsBeforeSwitch(event)
@@ -818,6 +823,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         CFRunLoopAddSource(CFRunLoopGetMain(), keyTapSource, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
         updatePressAccess()
+    }
+    // Nil leaves the event on the managed path; otherwise return the same native event.
+    func remoteSwitchEvent(_ event: CGEvent) -> CGEvent? {
+        guard engine.active, !engine.paused,
+              !engine.longPressCapsLock, !addedSourcesActive,
+              event.type == .keyDown || event.type == .keyUp,
+              event.getIntegerValueField(.eventSourceUserData) != nativePulseMarker,
+              event.getIntegerValueField(.keyboardEventKeycode) == Int64(engine.target.keyCode),
+              remoteKeyboards.sentFromOtherMac(event) else { return nil }
+        if event.type == .keyDown && event.getIntegerValueField(.keyboardEventAutorepeat) == 0 {
+            rememberCapsBeforeSwitch(event)
+            // ESC must see the native shortcut in flight just as it sees a posted pulse.
+            noteSwitchSent()
+        }
+        return event
     }
     // With Universal Control in front, the keys go to another Mac. Only with a keyboard mapped here: others have nothing to
     // carry the lock there, and Input Monitoring would be asked for nothing.
