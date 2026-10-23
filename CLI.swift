@@ -58,6 +58,7 @@ enum CLI {
     static let sourceSettings: [Setting] = [
         Setting(name: "enabled", kind: .bool, title: "입력 소스별 활성화 (입력 소스 관리)"),
         Setting(name: "key", kind: .key, title: "입력 소스별 전용 전환 키"),
+        Setting(name: "internal-key", kind: .choice(["auto"] + targetNames), title: "입력 소스별 내부 키 (단일 전용 전환 키가 보내는 F-키)"),
     ]
 
     // A setting the arguments name: a global one, one of the keyboards a selector picks, or an input source's.

@@ -184,9 +184,24 @@ final class Engine {
         set { defaults.set(newValue.isEmpty ? nil : newValue.mapValues { NSNumber(value: $0) }, forKey: "sourceKeys") }
     }
     func setSourceKey(_ key: UInt64?, for id: String) {
-        var keys = sourceKeys.filter { $0.key != id && $0.value != key }
+        let old = sourceKeys
+        var keys = old.filter { $0.key != id && $0.value != key }
         if let key { keys[id] = key }
         sourceKeys = keys
+        // A source that loses its key starts over on an automatic F-key when it gets one again.
+        let dropped = Set(old.keys).subtracting(keys.keys)
+        if !dropped.isEmpty { manualInternalKeys = manualInternalKeys.filter { !dropped.contains($0.key) } }
+    }
+    // F-keys chosen by hand for sources' keys, by name; the others are assigned automatically.
+    var manualInternalKeys: [String: String] {
+        get { defaults.dictionary(forKey: "sourceInternalKeys") as? [String: String] ?? [:] }
+        set { defaults.set(newValue.isEmpty ? nil : newValue, forKey: "sourceInternalKeys") }
+    }
+    // nil goes back to automatic. A key chosen for another source moves here, and that one goes back to automatic.
+    func setInternalKey(_ name: String?, for id: String) {
+        var manual = manualInternalKeys.filter { $0.key != id && $0.value != name }
+        if let name { manual[id] = name }
+        manualInternalKeys = manual
     }
     // Pressed again in its source, a source's key goes back to the source before it. Off until chosen.
     var sourceKeyReturns: Bool { defaults.bool(forKey: "sourceKeyReturns") }
@@ -201,12 +216,25 @@ final class Engine {
     }
     // Each single key's own F-key, so the tap tells them from the Korean/English key and each other. The tap takes every
     // press of them, so they are ones no system shortcut uses on their own while there are enough.
-    var sourceKeyTargets: [UInt64: TargetKey] {
-        let order = [18, 17, 16, 20, 19, 15, 14, 13].map { targets[$0 - 13] }.filter { $0.name != target.name }
+    // One chosen by hand comes first, unless it is the Korean/English key's own.
+    var sourceKeyTargets: [UInt64: TargetKey] { internalKeys().mapValues(\.target) }
+    // `ignoring` shows where a source's key would go back to automatically.
+    func internalKeys(ignoring: String? = nil) -> [UInt64: (target: TargetKey, automatic: Bool)] {
+        let used = usedSourceKeys, manual = manualInternalKeys.filter { $0.key != ignoring }
+        var result: [UInt64: (target: TargetKey, automatic: Bool)] = [:]
+        for key in sources where used.values.contains(key) {
+            guard let id = used.first(where: { $0.value == key })?.key, let name = manual[id],
+                  let chosen = targets.first(where: { $0.name == name }), chosen.name != target.name else { continue }
+            result[key] = (chosen, false)
+        }
+        let taken = Set(result.values.map(\.target.name))
+        let order = [18, 17, 16, 20, 19, 15, 14, 13].map { targets[$0 - 13] }.filter { $0.name != target.name && !taken.contains($0.name) }
         let free = order.filter { !systemFKeys.contains($0.keyCode) } + order.filter { systemFKeys.contains($0.keyCode) }
-        let keys = sources.filter(Set(usedSourceKeys.values).contains)
-        return Dictionary(uniqueKeysWithValues: zip(keys, free))
+        for (key, target) in zip(sources.filter { used.values.contains($0) && result[$0] == nil }, free) { result[key] = (target, true) }
+        return result
     }
+    // The F-key a source's key goes to, nil without a single key in use.
+    func internalKey(for id: String) -> (target: TargetKey, automatic: Bool)? { usedSourceKeys[id].flatMap { internalKeys()[$0] } }
     // Read when settings change, not on every key.
     private(set) var systemFKeys: Set<Int> = []
     func refreshSystemFKeys() {

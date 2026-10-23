@@ -1012,6 +1012,22 @@ func runSourceKeyTests() {
     engine.setSourceKey(control, for: "com.apple.keylayout.ABC")
     precondition(engine.sourceKeyMappings.map(\.target) == [f17, f18] && engine.sourceKeyTargets[option]?.name == "F18"
         && engine.sourceKeyTargets[control]?.name == "F17", "Each key its own F-key, in the keys' order")
+    let abc = "com.apple.keylayout.ABC", pinyin = "com.apple.inputmethod.SCIM.ITABC"
+    precondition(engine.internalKey(for: abc).map { $0.target.name == "F17" && $0.automatic } == true && engine.manualInternalKeys.isEmpty)
+    engine.setInternalKey("F16", for: abc)
+    precondition(engine.sourceKeyTargets[control]?.name == "F16" && engine.internalKey(for: abc)?.automatic == false
+        && engine.sourceKeyTargets[option]?.name == "F18" && engine.internalKeys(ignoring: abc)[control]?.target.name == "F17", "Chosen by hand")
+    engine.setInternalKey("F18", for: abc)
+    precondition(engine.sourceKeyTargets[control]?.name == "F18" && engine.sourceKeyTargets[option]?.name == "F17" && engine.internalKey(for: abc)?.automatic == false,
+        "A hand choice stays one, and the automatic ones step aside")
+    engine.setInternalKey("F18", for: pinyin)
+    precondition(engine.manualInternalKeys == [pinyin: "F18"] && engine.internalKey(for: abc)?.automatic == true, "Chosen for another source, it moves there")
+    engineDefaults.set("F18", forKey: "target")
+    precondition(engine.internalKey(for: pinyin).map { $0.automatic && $0.target.name != "F18" } == true, "Never the Korean/English key's own")
+    engineDefaults.removeObject(forKey: "target")
+    engine.setSourceKey(nil, for: pinyin)
+    precondition(engine.manualInternalKeys.isEmpty && engine.internalKey(for: pinyin) == nil, "A key added again starts automatic")
+    engine.setSourceKey(option, for: pinyin)
     trusted = false
     precondition(engine.sourceKeyMappings.isEmpty, "Without the tap the keys keep their function")
     trusted = true

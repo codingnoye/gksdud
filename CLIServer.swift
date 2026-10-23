@@ -101,6 +101,7 @@ extension AppDelegate {
     func commandValue(_ name: String, keyboard: SavedKeyboard? = nil, source: String? = nil) -> CLI.Value {
         if let source {
             if name == "enabled" { return .bool(!engine.disabledSources.contains(source)) }
+            if name == "internal-key" { return .text(engine.manualInternalKeys[source] ?? "auto") }
             return engine.sourceKeys[source].map { .text(keyNames([$0])[0]) } ?? .none
         }
         if let keyboard {
@@ -245,7 +246,14 @@ extension AppDelegate {
         let section = addedSources
         if let id = item.source {
             guard section.edit.isEnabled else { return trusted ? "입력 소스 관리를 켜야 쓸 수 있습니다." : accessibilityHint }
-            if item.setting.name == "enabled" { section.setSource(id, on: on) } else { section.setKey(text.map { keyIDs([$0]) }?.first, for: id) }
+            switch item.setting.name {
+            case "enabled": section.setSource(id, on: on)
+            case "key": section.setKey(text.map { keyIDs([$0]) }?.first, for: id)
+            default:
+                guard engine.internalKey(for: id) != nil else { return "단일 키를 전용 전환 키로 쓸 때만 바꿀 수 있습니다." }
+                guard text != engine.target.name else { return "\(engine.target.name)은 한영 키의 내부 전환 키입니다." }
+                section.setInternalKey(text == "auto" ? nil : text, for: id)
+            }
             return nil
         }
         switch item.setting.name {
@@ -473,6 +481,7 @@ extension AppDelegate {
             guard added else { return line }
             let flags = disabled.contains(source.id) ? ["off"]
                 : (cycle.contains(source.id) ? ["cycle"] : []) + (keys[source.id].map { ["key=\(keyNames([$0])[0])"] } ?? [])
+                    + (engine.internalKey(for: source.id).map { ["internal=\($0.target.name)\($0.automatic ? "(auto)" : "")"] } ?? [])
             if !flags.isEmpty { line += "  [\(flags.joined(separator: " "))]" }
             return line
         }
@@ -480,6 +489,7 @@ extension AppDelegate {
             var entry = describe(source); entry["current"] = source.id == current
             entry["enabled"] = !disabled.contains(source.id); entry["cycle"] = cycle.contains(source.id)
             entry["key"] = keys[source.id].map { keyNames([$0])[0] as Any } ?? NSNull()
+            entry["internal_key"] = engine.internalKey(for: source.id).map { ["name": $0.target.name, "automatic": $0.automatic] as Any } ?? NSNull()
             return entry
         }])
     }

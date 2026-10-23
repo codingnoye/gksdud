@@ -148,6 +148,11 @@ func runCommandTests() {
     precondition(withSources("set", "source.\(japanese).key=opt-space").exit == CLI.Exit.ok && engine.sourceKeys == [japanese: spaceCombos[2]],
         "A key moves from one source to another")
     precondition(withSources("toggle", "source.\(abc).enabled").exit == CLI.Exit.ok && engine.disabledSources.isEmpty)
+    precondition(withSources("set", "source.\(japanese).internal-key=F16").exit == CLI.Exit.failed, "A Space combination has no F-key")
+    precondition(withSources("set", "source.\(japanese).key=right-option", "source.\(japanese).internal-key=16").exit == CLI.Exit.ok
+        && engine.manualInternalKeys == [japanese: "F16"] && withSources("get", "source.\(japanese).internal-key").text == "F16")
+    precondition(withSources("set", "source.\(japanese).internal-key=\(engine.target.name)").exit == CLI.Exit.failed, "Not the Korean/English key's own")
+    precondition(withSources("set", "source.\(japanese).internal-key=auto").exit == CLI.Exit.ok && engine.manualInternalKeys.isEmpty)
     precondition(withSources("set", "source.\(japanese).key=none", "added-sources=off").exit == CLI.Exit.ok && engine.sourceKeys.isEmpty)
     engine.cycleSources = nil; delegate.sourceCache = nil
     print("PASS: errors and notices in a window by default, only in the result with --no-alert; sources' keys, turning them off, the cycle")

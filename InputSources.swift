@@ -448,6 +448,7 @@ func movedCycle(_ order: [String], visible: [String], moving id: String, to inde
 
 private final class SourceCheckbox: NSButton { var sourceID = "" }
 private final class SourceKeyPicker: NSPopUpButton { var sourceID = "" }
+private final class InternalKeyPicker: NSPopUpButton { var sourceID = "" }
 
 // The 입력 소스 추가 section of the extras tab, and its sheet: each source in use or not, in the cycle or not, and its key.
 final class AddedSourcesSettings: NSObject, NSTableViewDataSource, NSTableViewDelegate {
@@ -457,7 +458,7 @@ final class AddedSourcesSettings: NSObject, NSTableViewDataSource, NSTableViewDe
     let enable = NSButton(checkboxWithTitle: "활성화", target: nil, action: nil)
     let edit = NSButton(title: "입력 소스 설정", target: nil, action: nil)
     let warning = NSTextField(wrappingLabelWithString: "")
-    let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 470), styleMask: [.titled], backing: .buffered, defer: false)
+    let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 720, height: 490), styleMask: [.titled], backing: .buffered, defer: false)
     let table = NSTableView()
     let returns = NSButton(checkboxWithTitle: "전용 전환 키를 한 번 더 누를 시 직전 입력 소스로 전환", target: nil, action: nil)
     let compatible = NSButton(checkboxWithTitle: "호환성 모드", target: nil, action: nil)
@@ -498,7 +499,7 @@ final class AddedSourcesSettings: NSObject, NSTableViewDataSource, NSTableViewDe
             return label
         }
         let dragHint = hint("드래그로 순환 순서를 변경할 수 있어요.")
-        for (id, name, width) in [("name", "입력 소스", 0.0), ("enabled", "활성화", 60.0), ("cycle", "한영 키로 순환", 100.0), ("key", "전용 전환 키", 170.0)] {
+        for (id, name, width) in [("name", "입력 소스", 0.0), ("enabled", "활성화", 60.0), ("cycle", "한영 키로 순환", 100.0), ("key", "전용 전환 키", 170.0), ("internal", "내부 키", 110.0)] {
             let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(id))
             column.title = name
             if width > 0 {
@@ -587,6 +588,7 @@ final class AddedSourcesSettings: NSObject, NSTableViewDataSource, NSTableViewDe
         parts += [owner.enabledSources().map(\.id).joined(separator: ","), engine.defaultSources.map(String.init).joined(separator: ",")]
         parts += [engine.keyboards.result.blockedTargets.sorted().map(String.init).joined(separator: ","), String(owner.iconStyle), error ?? ""]
         parts += [String(engine.addedSourcesCompatible), String(engine.target.keyCode)]
+        parts += [engine.internalKeys().sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value.target.name)\($0.value.automatic)" }.joined(separator: ",")]
         let state = parts.joined(separator: "|")
         guard force || state != signature else { return }
         signature = state
@@ -661,6 +663,32 @@ final class AddedSourcesSettings: NSObject, NSTableViewDataSource, NSTableViewDe
             box.sourceID = id; box.state = owner.cycleOrder.contains(id) ? .on : .off
             box.isEnabled = live; box.setAccessibilityLabel("\(name) 한영 키로 순환")
             return center(box)
+        case "internal":
+            // The F-key a single key goes to; a Space combination is caught as it is.
+            let picker = InternalKeyPicker(frame: .zero, pullsDown: false)
+            picker.sourceID = id; picker.controlSize = .small; picker.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+            picker.autoenablesItems = false
+            if let assigned = engine.internalKey(for: id), let key = engine.usedSourceKeys[id] {
+                let automatic = engine.internalKeys(ignoring: id)[key]?.target ?? assigned.target
+                picker.addItem(withTitle: "\(automatic.name) (자동)")
+                picker.menu?.addItem(.separator())
+                for target in targets {
+                    picker.addItem(withTitle: target.name); picker.lastItem?.representedObject = target.name
+                    // The Korean/English key's own.
+                    picker.lastItem?.isEnabled = target.name != engine.target.name
+                }
+                if assigned.automatic { picker.selectItem(at: 0) } else { picker.selectItem(withTitle: assigned.target.name) }
+                picker.isEnabled = live
+            } else {
+                picker.addItem(withTitle: "—"); picker.isEnabled = false
+            }
+            picker.target = self; picker.action = #selector(changeInternalKey(_:))
+            picker.setAccessibilityLabel("\(name) 내부 키")
+            picker.translatesAutoresizingMaskIntoConstraints = false; cell.addSubview(picker)
+            NSLayoutConstraint.activate([picker.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+                                         picker.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 8),
+                                         picker.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -12)])
+            return cell
         case "key":
             let picker = SourceKeyPicker(frame: .zero, pullsDown: false)
             picker.sourceID = id; picker.controlSize = .small; picker.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
@@ -755,6 +783,11 @@ final class AddedSourcesSettings: NSObject, NSTableViewDataSource, NSTableViewDe
         save { if on { engine.disabledSources.remove(id) } else { engine.disabledSources.insert(id) } }
         return true
     }
+    @objc private func changeInternalKey(_ sender: InternalKeyPicker) {
+        setInternalKey(sender.selectedItem?.representedObject as? String, for: sender.sourceID)
+    }
+    // nil goes back to automatic.
+    func setInternalKey(_ name: String?, for id: String) { save { engine.setInternalKey(name, for: id) } }
     @objc private func changeKey(_ sender: SourceKeyPicker) {
         let key = (sender.selectedItem?.representedObject as? NSNumber)?.uint64Value
         if !setKey(key, for: sender.sourceID) { refresh(force: true) }

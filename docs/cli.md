@@ -109,6 +109,7 @@ gksdud source             # 현재 입력 소스 ID
 | `keyboard.<키보드>.keys` | `<키>,...`, `default` | 고급 설정 → 키보드별 한영 키 |
 | `source.<입력 소스>.enabled` | `on`, `off` | 입력 소스 설정 → 활성화 |
 | `source.<입력 소스>.key` | `<키>`, `none` | 입력 소스 설정 → 전용 전환 키 |
+| `source.<입력 소스>.internal-key` | `auto`, `F13` ~ `F20` | 입력 소스 설정 → 내부 키 |
 
 - `<키>`: `right-command`, `right-option`, `caps-lock`, `right-control`, `ctrl-space`, `cmd-space`, `opt-space`, `shift-space`. 키보드별 한영 키는 앞의 네 개(단일키)만 가능합니다.
 - `<키보드>`: `gksdud keyboards`에 나오는 ID 앞부분(4자 이상), 이름, 이름 일부. `*`는 모든 키보드입니다. 이름이 같은 키보드는 함께 바뀝니다. 이름에 공백이 있으면 전체를 따옴표로 감싸 주세요: `"keyboard.Magic Keyboard.mode=off"`
