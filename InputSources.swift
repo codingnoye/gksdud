@@ -421,8 +421,8 @@ extension AppDelegate {
     // A Korean/English key can also be a source's key; it stays a Korean/English key once confirmed. False keeps the old keys.
     func confirmSourceKeys(_ keys: [UInt64]? = nil) -> Bool {
         guard let (id, key) = engine.sourceKeysAmongHangulKeys(keys).min(by: { $0.value < $1.value }) else { return true }
-        let alert = NSAlert(); alert.messageText = "\(sourceName(key))은 \(Self.sourceTitle(id))의 고유 키입니다."
-        alert.informativeText = "한영 키로 바꾸면 고유 키가 해제됩니다."
+        let alert = NSAlert(); alert.messageText = "\(sourceName(key))은 \(Self.sourceTitle(id))의 전용 전환 키입니다."
+        alert.informativeText = "한영 키로 바꾸면 전용 전환 키가 해제됩니다."
         alert.addButton(withTitle: "변경"); alert.addButton(withTitle: "취소")
         return runAlert(alert) == .alertFirstButtonReturn
     }
@@ -459,7 +459,7 @@ final class AddedSourcesSettings: NSObject, NSTableViewDataSource, NSTableViewDe
     let warning = NSTextField(wrappingLabelWithString: "")
     let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 470), styleMask: [.titled], backing: .buffered, defer: false)
     let table = NSTableView()
-    let returns = NSButton(checkboxWithTitle: "고유 키를 한 번 더 누를 시 직전 입력 소스로 전환", target: nil, action: nil)
+    let returns = NSButton(checkboxWithTitle: "전용 전환 키를 한 번 더 누를 시 직전 입력 소스로 전환", target: nil, action: nil)
     let compatible = NSButton(checkboxWithTitle: "호환성 모드", target: nil, action: nil)
     let sheetWarning = NSTextField(wrappingLabelWithString: "")
     enum Group { case cycle, other, off }
@@ -478,9 +478,9 @@ final class AddedSourcesSettings: NSObject, NSTableViewDataSource, NSTableViewDe
     func install(in panel: NSStackView) {
         enable.target = self; enable.action = #selector(toggle)
         edit.target = self; edit.action = #selector(showSheet); edit.bezelStyle = .rounded
-        let top = NSStackView(views: [enable, edit]); top.spacing = 12; top.alignment = .centerY
         warning.font = .systemFont(ofSize: 11); warning.textColor = .systemOrange
-        let section = NSStackView(views: [top, warning]); section.orientation = .vertical; section.alignment = .leading; section.spacing = 8
+        let section = NSStackView(views: [enable, edit, warning]); section.orientation = .vertical; section.alignment = .leading; section.spacing = 8
+        section.setCustomSpacing(10, after: enable)
         warning.widthAnchor.constraint(equalTo: section.widthAnchor).isActive = true
         panel.addArrangedSubview(section)
         section.widthAnchor.constraint(equalTo: panel.widthAnchor).isActive = true
@@ -493,7 +493,12 @@ final class AddedSourcesSettings: NSObject, NSTableViewDataSource, NSTableViewDe
         let content = window.contentView!
         let title = NSTextField(labelWithString: "입력 소스 설정")
         title.font = .systemFont(ofSize: 17, weight: .semibold)
-        for (id, name, width) in [("name", "입력 소스", 0.0), ("enabled", "활성화", 60.0), ("cycle", "순환", 60.0), ("key", "고유 키", 170.0)] {
+        func hint(_ text: String) -> NSTextField {
+            let label = NSTextField(labelWithString: text); label.font = .systemFont(ofSize: 11); label.textColor = .secondaryLabelColor
+            return label
+        }
+        let dragHint = hint("드래그로 순환 순서를 변경할 수 있어요.")
+        for (id, name, width) in [("name", "입력 소스", 0.0), ("enabled", "활성화", 60.0), ("cycle", "한영 키로 순환", 100.0), ("key", "전용 전환 키", 170.0)] {
             let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(id))
             column.title = name
             if width > 0 {
@@ -533,17 +538,22 @@ final class AddedSourcesSettings: NSObject, NSTableViewDataSource, NSTableViewDe
         ])
         returns.target = self; returns.action = #selector(toggleReturns)
         compatible.target = self; compatible.action = #selector(toggleCompatible)
-        compatible.toolTip = "WeChat 입력기 등 서드파티 입력기 사용 중 전환이 다른 입력 소스로 가면 켜주세요."
+        let compatibleHint = hint("WeChat 입력기 등 서드파티 입력기 사용 중 전환이 다른 입력 소스로 가면 켜주세요.")
         sheetWarning.font = .systemFont(ofSize: 11); sheetWarning.textColor = .systemOrange
-        let options = NSStackView(views: [returns, compatible, sheetWarning])
+        let compatibleRow = NSStackView(views: [compatible, compatibleHint])
+        compatibleRow.orientation = .vertical; compatibleRow.alignment = .leading; compatibleRow.spacing = 2
+        let options = NSStackView(views: [returns, compatibleRow, sheetWarning])
         options.orientation = .vertical; options.alignment = .leading; options.spacing = 8
         let done = NSButton(title: "완료", target: self, action: #selector(closeSheet))
         done.bezelStyle = .rounded; done.keyEquivalent = "\r"
-        for view in [title, list, options, done] { view.translatesAutoresizingMaskIntoConstraints = false; content.addSubview(view) }
+        for view in [title, dragHint, list, options, done] { view.translatesAutoresizingMaskIntoConstraints = false; content.addSubview(view) }
         NSLayoutConstraint.activate([
             title.topAnchor.constraint(equalTo: content.topAnchor, constant: 22),
             title.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 24),
-            list.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 14),
+            dragHint.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 4),
+            dragHint.leadingAnchor.constraint(equalTo: title.leadingAnchor),
+            compatibleHint.leadingAnchor.constraint(equalTo: compatible.leadingAnchor, constant: 20),
+            list.topAnchor.constraint(equalTo: dragHint.bottomAnchor, constant: 12),
             list.leadingAnchor.constraint(equalTo: title.leadingAnchor),
             list.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -24),
             options.topAnchor.constraint(equalTo: list.bottomAnchor, constant: 14),
@@ -605,10 +615,10 @@ final class AddedSourcesSettings: NSObject, NSTableViewDataSource, NSTableViewDe
         for label in [warning, sheetWarning] { label.stringValue = text; label.isHidden = text.isEmpty }
     }
     private func currentWarning() -> String {
-        if !engine.sourceKeysAmongHangulKeys().isEmpty { return "고유 키가 한영 키와 겹칩니다. 다른 키를 선택해주세요." }
+        if !engine.sourceKeysAmongHangulKeys().isEmpty { return "전용 전환 키가 한영 키와 겹칩니다. 다른 키를 선택해주세요." }
         if let blocked = engine.sourceKeyTargets.values.sorted(by: { $0.keyCode < $1.keyCode })
             .first(where: { engine.keyboards.result.blockedTargets.contains($0.usage) }) {
-            return "\(blocked.name)이 다른 키 매핑에서 사용 중이라 고유 키를 적용하지 못했습니다."
+            return "\(blocked.name)이 다른 키 매핑에서 사용 중이라 전용 전환 키를 적용하지 못했습니다."
         }
         return ""
     }
@@ -649,7 +659,7 @@ final class AddedSourcesSettings: NSObject, NSTableViewDataSource, NSTableViewDe
         case "cycle":
             let box = SourceCheckbox(checkboxWithTitle: "", target: self, action: #selector(toggleCycle(_:)))
             box.sourceID = id; box.state = owner.cycleOrder.contains(id) ? .on : .off
-            box.isEnabled = live; box.setAccessibilityLabel("\(name) 순환")
+            box.isEnabled = live; box.setAccessibilityLabel("\(name) 한영 키로 순환")
             return center(box)
         case "key":
             let picker = SourceKeyPicker(frame: .zero, pullsDown: false)
@@ -662,7 +672,7 @@ final class AddedSourcesSettings: NSObject, NSTableViewDataSource, NSTableViewDe
             if let key = engine.sourceKeys[id] { picker.selectItem(withTitle: sourceName(key)) } else { picker.selectItem(at: 0) }
             picker.target = self; picker.action = #selector(changeKey(_:))
             picker.isEnabled = live
-            picker.setAccessibilityLabel("\(name) 고유 키")
+            picker.setAccessibilityLabel("\(name) 전용 전환 키")
             picker.translatesAutoresizingMaskIntoConstraints = false; cell.addSubview(picker)
             NSLayoutConstraint.activate([picker.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
                                          picker.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 8),
@@ -766,10 +776,10 @@ final class AddedSourcesSettings: NSObject, NSTableViewDataSource, NSTableViewDe
     // Caps Lock stops being Caps Lock, a system shortcut on the same Space combination stops working, and another app's
     // mapping of the key is replaced. False keeps the old key.
     private func confirmKey(_ key: UInt64) -> Bool {
-        guard owner.confirmCapsLockKey(key == sources[2], as: "고유 키") else { return false }
+        guard owner.confirmCapsLockKey(key == sources[2], as: "전용 전환 키") else { return false }
         if engine.systemShortcutUses(key) {
             let alert = NSAlert(); alert.messageText = "\(sourceName(key))은 시스템 단축키에서 사용 중입니다."
-            alert.informativeText = "고유 키로 쓰면 그 단축키는 동작하지 않습니다."
+            alert.informativeText = "전용 전환 키로 쓰면 그 단축키는 동작하지 않습니다."
             alert.addButton(withTitle: "변경"); alert.addButton(withTitle: "취소")
             guard owner.runAlert(alert) == .alertFirstButtonReturn else { return false }
         }

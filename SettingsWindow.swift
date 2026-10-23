@@ -176,7 +176,7 @@ extension AppDelegate {
         specialStatus.font = .systemFont(ofSize: 11); specialStatus.textColor = .secondaryLabelColor
         full(specialStatus, in: symbols)
         let extras = tabPanels[3]
-        heading("입력 소스 추가 (beta)", in: extras)
+        heading("입력 소스 관리", in: extras)
         addedSources.install(in: extras)
         separator(in: extras)
         heading("기타", in: extras)

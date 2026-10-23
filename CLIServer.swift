@@ -244,7 +244,7 @@ extension AppDelegate {
         }
         let section = addedSources
         if let id = item.source {
-            guard section.edit.isEnabled else { return trusted ? "입력 소스 추가를 켜야 쓸 수 있습니다." : accessibilityHint }
+            guard section.edit.isEnabled else { return trusted ? "입력 소스 관리를 켜야 쓸 수 있습니다." : accessibilityHint }
             if item.setting.name == "enabled" { section.setSource(id, on: on) } else { section.setKey(text.map { keyIDs([$0]) }?.first, for: id) }
             return nil
         }
@@ -284,7 +284,7 @@ extension AppDelegate {
             button.state = mode == 0 ? .off : .on; changeSpecialMode(button)
         case "added-sources": return flip(section.enable) { section.toggle() }
         default:
-            guard section.edit.isEnabled else { return trusted ? "입력 소스 추가를 켜야 쓸 수 있습니다." : accessibilityHint }
+            guard section.edit.isEnabled else { return trusted ? "입력 소스 관리를 켜야 쓸 수 있습니다." : accessibilityHint }
             switch item.setting.name {
             case "cycle": section.setCycle(list ?? [])
             case "source-key-return": return flip(section.returns) { section.toggleReturns() }

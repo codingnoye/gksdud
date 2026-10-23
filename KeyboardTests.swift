@@ -766,7 +766,7 @@ func renderKeyboardUI(to directory: String) throws {
         delegate.addedSources.window.orderOut(nil)
     }
     engine.setSourceKey(engine.mappedSources.first, for: pinyin.id); delegate.addedSources.refresh(force: true)
-    precondition(delegate.addedSources.warning.stringValue == "고유 키가 한영 키와 겹칩니다. 다른 키를 선택해주세요.", "A source's key that is a Korean/English key is shown")
+    precondition(delegate.addedSources.warning.stringValue == "전용 전환 키가 한영 키와 겹칩니다. 다른 키를 선택해주세요.", "A source's key that is a Korean/English key is shown")
     try save(delegate.window.contentView!, "added-section-conflict.png")
     for key in ["addedSources", "cycleSources", "sourceKeys", "disabledSources"] { defaults.removeObject(forKey: key) }
     engine.defaultSources = savedKeys
@@ -1114,7 +1114,7 @@ func runSourceKeyWarningTests() {
     precondition(warnings.isEmpty && engine.sourceKeys == [abc: sources[1]], "Moved from another source, it was confirmed there")
     choose(sources[1])
     // From the Korean/English side: cancel keeps both, confirm clears the source's key.
-    let sourceWarning = "\(sourceNames[1])은 \(AppDelegate.sourceTitle(pinyin))의 고유 키입니다."
+    let sourceWarning = "\(sourceNames[1])은 \(AppDelegate.sourceTitle(pinyin))의 전용 전환 키입니다."
     answers = []; warnings = []
     delegate.picker.selectItem(withTitle: sourceNames[1])
     precondition(delegate.picker.sendAction(delegate.picker.action, to: delegate.picker.target))
@@ -1145,14 +1145,14 @@ func runSourceKeyWarningTests() {
     // Caps Lock stops being Caps Lock, so Caps Lock in Korean asks first.
     defaults.set(true, forKey: "koreanCapsLock")
     choose(sources[2])
-    precondition(warnings == ["Caps Lock을 고유 키로 사용합니다."] && engine.sourceKeys.isEmpty && engine.koreanCapsLock, "Cancel keeps Caps Lock in Korean")
+    precondition(warnings == ["Caps Lock을 전용 전환 키로 사용합니다."] && engine.sourceKeys.isEmpty && engine.koreanCapsLock, "Cancel keeps Caps Lock in Korean")
     choose(sources[2], [.alertFirstButtonReturn])
     precondition(engine.sourceKeys == [pinyin: sources[2]] && !engine.koreanCapsLock, "Confirming turns Caps Lock in Korean off")
     // A source turned off and back on asks again for its key.
     defaults.set(true, forKey: "koreanCapsLock")
     precondition(delegate.addedSources.setSource(pinyin, on: false) && engine.disabledSources == [pinyin] && engine.koreanCapsLock)
     warnings = []; answers = []
-    precondition(!delegate.addedSources.setSource(pinyin, on: true) && warnings == ["Caps Lock을 고유 키로 사용합니다."] && engine.disabledSources == [pinyin],
+    precondition(!delegate.addedSources.setSource(pinyin, on: true) && warnings == ["Caps Lock을 전용 전환 키로 사용합니다."] && engine.disabledSources == [pinyin],
         "Cancel keeps it off")
     answers = [.alertFirstButtonReturn]
     precondition(delegate.addedSources.setSource(pinyin, on: true) && engine.disabledSources.isEmpty && !engine.koreanCapsLock)
