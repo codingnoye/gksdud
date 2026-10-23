@@ -1020,6 +1020,42 @@ func runSourceKeyTests() {
     precondition(moving.keyboards.result.blockedTargets == [f18], "A hand choice stays, with its warning")
     movingDefaults.set(false, forKey: "active"); _ = try? moving.reconcile()
 
+    // The input menu's next-source shortcut goes on an F-key of its own while added sources are on, and back after.
+    let nextSuite = "io.gksdud.next-shortcut-tests.\(UUID().uuidString)", nextDefaults = UserDefaults(suiteName: nextSuite)!
+    defer { nextDefaults.removePersistentDomain(forName: nextSuite) }
+    let userNext: [String: Any] = ["enabled": true, "value": ["type": "standard", "parameters": [32, 49, 786432]]]
+    var hotkeys: [String: Any] = ["61": userNext], activations = 0
+    let next = Engine(defaults: nextDefaults, discover: { [] },
+                      shortcutPreferences: ShortcutPreferences(read: { hotkeys }, write: { hotkeys = $0 }, activate: { activations += 1 }))
+    next.accessibilityTrusted = { true }
+    try? next.updateNextShortcut()
+    precondition(activations == 0 && next.liveNextTarget == nil && NSDictionary(dictionary: hotkeys["61"] as! [String: Any]).isEqual(to: userNext),
+        "Off, the user's shortcut stays")
+    nextDefaults.set(true, forKey: "addedSources")
+    try? next.updateNextShortcut()
+    precondition(Engine.ownsShortcut(hotkeys["61"], keyCode: targets[3].keyCode) && next.liveNextTarget?.name == "F16" && activations == 1,
+        "On, it goes to F16")
+    try? next.updateNextShortcut()
+    precondition(activations == 1, "Unchanged, nothing is written again")
+    next.refreshSystemFKeys()
+    precondition(!next.systemFKeys.contains(targets[3].keyCode) && next.nextTarget?.name == "F16", "Its own F-key is not taken for another shortcut's")
+    next.setSourceKey(sources[1], for: "com.apple.inputmethod.SCIM.ITABC")
+    next.setSourceKey(sources[2], for: "com.apple.keylayout.ABC"); next.setSourceKey(sources[3], for: "com.apple.keylayout.Dvorak")
+    precondition(next.sourceKeyTargets.mapValues(\.name) == [sources[1]: "F18", sources[2]: "F17", sources[3]: "F20"], "Sources' keys keep clear of it")
+    nextDefaults.set("F16", forKey: "target"); try? next.updateNextShortcut()
+    precondition(Engine.ownsShortcut(hotkeys["61"], keyCode: targets[0].keyCode) && next.liveNextTarget?.name == "F13", "Never the Korean/English key's own")
+    nextDefaults.removeObject(forKey: "target")
+    nextDefaults.set(false, forKey: "addedSources"); try? next.updateNextShortcut()
+    precondition(NSDictionary(dictionary: hotkeys["61"] as! [String: Any]).isEqual(to: userNext) && next.liveNextTarget == nil
+        && nextDefaults.object(forKey: "nextShortcutBackedUp") == nil, "Off again, the user's shortcut comes back")
+    nextDefaults.set(true, forKey: "addedSources"); try? next.updateNextShortcut()
+    let edited: [String: Any] = ["enabled": false, "value": ["type": "standard", "parameters": [32, 49, 786432]]]
+    hotkeys["61"] = edited
+    try? next.restoreSystem()
+    precondition(NSDictionary(dictionary: hotkeys["61"] as! [String: Any]).isEqual(to: edited), "A change made meanwhile is the user's and stays")
+    precondition(nextInMenu(["us", "ko", "zh"], after: "zh") == "us" && nextInMenu(["us", "ko"], after: "us") == "ko"
+        && nextInMenu(["us"], after: "us") == nil && nextInMenu(["us", "ko"], after: "ja") == nil, "The menu's next source, round the end")
+
     // Settings: single keys of sources turned on map while the tap can act on them.
     let engineSuite = "io.gksdud.source-key-engine-tests.\(UUID().uuidString)"
     let engineDefaults = UserDefaults(suiteName: engineSuite)!

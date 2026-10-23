@@ -99,6 +99,12 @@ func defaultCycle(_ enabled: [InputSourceIdentity]) -> [String] {
     (enabled.filter(isKorean) + enabled.filter(isEnglish) + enabled.filter { !isKorean($0) && !isEnglish($0) }).map(\.id)
 }
 
+// macOS's next-source shortcut goes round the sources it offers in their order.
+func nextInMenu(_ ids: [String], after id: String) -> String? {
+    guard ids.count > 1, let index = ids.firstIndex(of: id) else { return nil }
+    return ids[(index + 1) % ids.count]
+}
+
 // Where the Korean/English key goes round the cycle; nil leaves it to the system shortcut alone. `enabled` are the sources
 // in use now, so saved ones that are gone or turned off are skipped.
 func cycleTarget(current: InputSourceIdentity, cycle: [String], enabled: [InputSourceIdentity], history: SourceHistory) -> InputSourceIdentity? {
@@ -233,8 +239,17 @@ extension AppDelegate {
     // wherever the sources selected so far point.
     @discardableResult
     func switchSource(to target: InputSourceIdentity, from current: InputSourceIdentity, pulse: (CGEvent, CGEvent)) -> Bool {
-        if let landing = switchLanding {
-            if target.id == landing { queuedSwitch = nil; return true }
+        if switchLanding == target.id { queuedSwitch = nil; return true }
+        if switchLanding == nil && target.id == current.id { return true }
+        // The input menu's next source is one shortcut away, as the previous one is: nothing is selected first.
+        if queuedSwitch == nil, let next = engine.liveNextTarget, nextInMenu(enabledSources().map(\.id), after: current.id) == target.id,
+           Self.sourceForID(target.id) != nil, let nextPulse = nativeSwitchPulse(keyCode: next.keyCode, marker: nativePulseMarker) {
+            postSwitchPulse(nextPulse)
+            sourceHistory.note(target.id)
+            expectLanding(target, origin: current.id)
+            return true
+        }
+        if switchLanding != nil {
             guard queuedSwitch == nil, plannedSwitch(to: target, from: current).selections.isEmpty else {
                 queuedSwitch = (target, pulse); holdKeys = true; return true
             }
@@ -243,7 +258,6 @@ extension AppDelegate {
             expectLanding(target, origin: current.id)
             return true
         }
-        guard target.id != current.id else { return true }
         let plan = plannedSwitch(to: target, from: current)
         let waits = plan.selections.count > 1
             && waitsBetweenSelections(bundles: ([current.id] + plan.selections).map(Self.bundleID), always: engine.addedSourcesCompatible)
@@ -434,6 +448,7 @@ extension AppDelegate {
     func addedSourcesChanged() {
         cancelLongPress(); sourceCache = nil; seedSourceHistory(); engine.refreshSystemFKeys()
         ensureKeyTap(); repair()
+        do { try engine.updateNextShortcut() } catch { addedSources.showError(error.localizedDescription) }
         releaseKoreanCapsLock()
         addedSources.refresh(force: true)
         updateInputIndicator()

@@ -227,7 +227,7 @@ final class Engine {
                   let chosen = targets.first(where: { $0.name == name }), chosen.name != target.name else { continue }
             result[key] = (chosen, false)
         }
-        let taken = Set(result.values.map(\.target.name)), foreign = keyboards.result.foreignTargets
+        let taken = Set(result.values.map(\.target.name) + [nextTarget?.name].compactMap { $0 }), foreign = keyboards.result.foreignTargets
         let order = [18, 17, 16, 20, 19, 15, 14, 13].map { targets[$0 - 13] }.filter { $0.name != target.name && !taken.contains($0.name) }
         // F-keys a system shortcut or another mapping uses come last.
         let free = order.filter { !systemFKeys.contains($0.keyCode) && !foreign.contains($0.usage) }
@@ -245,7 +245,8 @@ final class Engine {
     // Keys of the enabled system shortcuts, except the one this app manages.
     func systemShortcutKeys() -> [(keyCode: Int, modifiers: Int)] {
         shortcutPreferences.read().compactMap { id, raw in
-            guard id != "60", let entry = raw as? [String: Any], (entry["enabled"] as? NSNumber)?.boolValue == true,
+            guard id != "60", id != "61" || !defaults.bool(forKey: "nextShortcutBackedUp"), let entry = raw as? [String: Any],
+                  (entry["enabled"] as? NSNumber)?.boolValue == true,
                   let value = entry["value"] as? [String: Any], let parameters = value["parameters"] as? [NSNumber], parameters.count == 3 else { return nil }
             return (parameters[1].intValue, parameters[2].intValue)
         }
@@ -341,7 +342,7 @@ final class Engine {
         settingsUpdateDepth += 1
         defer { settingsUpdateDepth -= 1 }
         var keys = shortcutPreferences.read()
-        for (id, raw) in keys where id != "60" {
+        for (id, raw) in keys where id != "60" && (id != "61" || !defaults.bool(forKey: "nextShortcutBackedUp")) {
             guard let entry = raw as? [String: Any], (entry["enabled"] as? NSNumber)?.boolValue == true,
                   let value = entry["value"] as? [String: Any], let params = value["parameters"] as? [NSNumber], params.count == 3 else { continue }
             if params[1].intValue == target.keyCode && params[2].intValue == 0 {
@@ -370,6 +371,7 @@ final class Engine {
         defaults.set(true, forKey: "active")
         let count = try reconcile()
         try updateSystemInputMenu()
+        try updateNextShortcut()
         return count
     }
     func setSystemInputMenu(_ value: CFPropertyList?) throws {
@@ -419,6 +421,7 @@ final class Engine {
         // The shortcut must not be restored while some keys still emit our target.
         try restoreMappings()
         try restoreSystemInputMenu()
+        try restoreNextShortcut()
         try restoreShortcut()
     }
     // Applies again what restoreSystem undoes besides the mappings, which repair keeps: at launch,
@@ -427,6 +430,59 @@ final class Engine {
         guard !isUpdatingSettings, active, accessibilityTrusted() else { return }
         try shortcut(target: target)
         try updateSystemInputMenu()
+        try updateNextShortcut()
+    }
+    // The input menu's next-source shortcut (61), on an F-key of its own while added sources are on: a step of the cycle to
+    // the menu's next source then needs no selections before it, as a step back to the previous one does not.
+    var nextTarget: TargetKey? {
+        guard active, addedSourcesEnabled else { return nil }
+        let manual = Set(manualInternalKeys.values), foreign = keyboards.result.foreignTargets
+        // macOS takes a system shortcut on these alone; F14, F15 and F20 did not switch.
+        let free = [16, 13, 17, 18].map { targets[$0 - 13] }.filter {
+            $0.name != target.name && !manual.contains($0.name) && !systemFKeys.contains($0.keyCode) && !foreign.contains($0.usage)
+        }
+        // The one set stays while it is free, so the shortcut is not written again.
+        let managed = defaults.bool(forKey: "nextShortcutBackedUp") ? (defaults.object(forKey: "managedNextShortcutKeyCode") as? NSNumber)?.intValue : nil
+        return free.first { $0.keyCode == managed } ?? free.first
+    }
+    // Set once the shortcut is written and active, so a pulse on that F-key switches.
+    private(set) var liveNextTarget: TargetKey?
+    func updateNextShortcut() throws {
+        guard let next = nextTarget else { try restoreNextShortcut(); return }
+        var keys = shortcutPreferences.read()
+        let backedUp = defaults.bool(forKey: "nextShortcutBackedUp")
+        if backedUp && Self.ownsShortcut(keys["61"], keyCode: next.keyCode) {
+            if liveNextTarget?.name != next.name { liveNextTarget = next }
+            return
+        }
+        settingsUpdateDepth += 1
+        defer { settingsUpdateDepth -= 1 }
+        let managed = (defaults.object(forKey: "managedNextShortcutKeyCode") as? NSNumber)?.intValue
+        if !backedUp || !Self.ownsShortcut(keys["61"], keyCode: managed ?? -1) {
+            defaults.set(keys["61"], forKey: "originalNextShortcut")
+            defaults.set(true, forKey: "nextShortcutBackedUp")
+        }
+        liveNextTarget = nil
+        keys["61"] = ["enabled": true, "value": ["type": "standard", "parameters": [65535, next.keyCode, 0]]] as [String: Any]
+        defaults.set(next.keyCode, forKey: "managedNextShortcutKeyCode")
+        try shortcutPreferences.write(keys)
+        try shortcutPreferences.activate()
+        liveNextTarget = next
+    }
+    // Gives the user's own next-source shortcut back, unless it was changed since.
+    func restoreNextShortcut() throws {
+        liveNextTarget = nil
+        guard defaults.bool(forKey: "nextShortcutBackedUp") else { return }
+        settingsUpdateDepth += 1
+        defer { settingsUpdateDepth -= 1 }
+        var keys = shortcutPreferences.read()
+        let managed = (defaults.object(forKey: "managedNextShortcutKeyCode") as? NSNumber)?.intValue ?? -1
+        if Self.ownsShortcut(keys["61"], keyCode: managed) {
+            keys["61"] = defaults.object(forKey: "originalNextShortcut")
+            try shortcutPreferences.write(keys)
+            try shortcutPreferences.activate()
+        }
+        for key in ["nextShortcutBackedUp", "originalNextShortcut", "managedNextShortcutKeyCode"] { defaults.removeObject(forKey: key) }
     }
     func restoreShortcut() throws {
         settingsUpdateDepth += 1
