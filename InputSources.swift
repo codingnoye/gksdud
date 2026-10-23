@@ -770,9 +770,12 @@ final class AddedSourcesSettings: NSObject, NSTableViewDataSource, NSTableViewDe
         let item = NSPasteboardItem(); item.setString(id, forType: Self.rowType)
         return item
     }
+    // Below the cycle, a row goes to its end.
     func tableView(_ tableView: NSTableView, validateDrop info: NSDraggingInfo, proposedRow row: Int,
                    proposedDropOperation dropOperation: NSTableView.DropOperation) -> NSDragOperation {
-        dropOperation == .above && row <= cycleCount && info.draggingPasteboard.string(forType: Self.rowType) != nil ? .move : []
+        guard info.draggingPasteboard.string(forType: Self.rowType) != nil else { return [] }
+        if row > cycleCount || dropOperation != .above { tableView.setDropRow(min(row, cycleCount), dropOperation: .above) }
+        return .move
     }
     // A drag dropped nowhere shows its rows again.
     func tableView(_ tableView: NSTableView, draggingSession session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
