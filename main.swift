@@ -188,8 +188,8 @@ final class Engine {
         if let key { keys[id] = key }
         sourceKeys = keys
     }
-    // Pressed again in its source, a source's key goes back to the source before it.
-    var sourceKeyReturns: Bool { defaults.object(forKey: "sourceKeyReturns") == nil || defaults.bool(forKey: "sourceKeyReturns") }
+    // Pressed again in its source, a source's key goes back to the source before it. Off until chosen.
+    var sourceKeyReturns: Bool { defaults.bool(forKey: "sourceKeyReturns") }
     // The input sources macOS offers, set by the app; nil counts every saved one. A source removed in System Settings keeps
     // its settings for when it comes back, but its key goes back to the keyboard meanwhile.
     var availableSources: () -> Set<String>? = { nil }
@@ -253,6 +253,8 @@ final class Engine {
             cycleSources = defaultCycle(enabled).filter { id in enabled.contains { $0.id == id && (isKorean($0) || isEnglish($0)) } }
             if let id = defaults.string(forKey: "separateSource"), let key = (defaults.object(forKey: "separateKey") as? NSNumber)?.uint64Value,
                hangulKeys.contains(key) { setSourceKey(key, for: id) }
+            // The separate key went there and back.
+            defaults.set(true, forKey: "sourceKeyReturns")
         }
         for key in ["addedSourceMode", "separateSource", "separateKey"] { defaults.removeObject(forKey: key) }
     }

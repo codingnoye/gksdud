@@ -1048,15 +1048,18 @@ func runAddedSourceTests() {
     defer { migrateDefaults.removePersistentDomain(forName: migrateSuite) }
     let migrating = Engine(defaults: migrateDefaults, discover: { [] })
     migrating.accessibilityTrusted = { true }
+    featureCheck(!migrating.sourceKeyReturns, "Going back with a source's key is off until chosen")
     migrateDefaults.set(1, forKey: "addedSourceMode"); migrateDefaults.set("zh", forKey: "separateSource")
     migrateDefaults.set(NSNumber(value: spaceCombos[2]), forKey: "separateKey")
     migrating.migrateAddedSources(enabled: enabled + [us])
     featureCheck(migrating.cycleSources == ["ko2", "abc", "us"] && migrating.sourceKeys == ["zh": spaceCombos[2]] && migrating.sourceKeyReturns
         && ["addedSourceMode", "separateSource", "separateKey"].allSatisfy { migrateDefaults.object(forKey: $0) == nil }, "Separate becomes a cycle and a key")
+    migrateDefaults.removeObject(forKey: "sourceKeyReturns")
     migrateDefaults.set(0, forKey: "addedSourceMode"); migrateDefaults.set("ja", forKey: "separateSource")
     migrating.migrateAddedSources(enabled: enabled)
     featureCheck(migrating.cycleSources == ["ko2", "abc", "us"] && migrating.sourceKeys == ["zh": spaceCombos[2]]
-        && migrateDefaults.object(forKey: "separateSource") == nil, "Cycling keeps its cycle and drops the unused separate settings")
+        && migrateDefaults.object(forKey: "separateSource") == nil && !migrating.sourceKeyReturns,
+        "Cycling keeps its cycle and drops the unused separate settings; going back stays off")
     migrating.migrateAddedSources(enabled: [])
     featureCheck(migrating.cycleSources == ["ko2", "abc", "us"], "Once only")
     migrating.setSourceKey(spaceCombos[2], for: "ja")
@@ -1168,7 +1171,8 @@ func probeInputSources() throws {
     }
     let (g, k, a) = (kVK_ANSI_G, kVK_ANSI_K, kVK_ANSI_A), space = kVK_Space
     saved.set(true, forKey: "addedSources"); saved.set(false, forKey: "longPressCapsLock"); saved.set(false, forKey: "preserveCapsLock")
-    for key in ["sourceKeys", "disabledSources", "sourceKeyReturns"] { saved.removeObject(forKey: key) }
+    for key in ["sourceKeys", "disabledSources"] { saved.removeObject(forKey: key) }
+    saved.set(true, forKey: "sourceKeyReturns")
     saved.set([ko.id, en.id, foreign.id], forKey: "cycleSources"); pump(1.2)
     try start(korean); try type([g])
     try press(target.keyCode); try type([k, a])
@@ -1213,7 +1217,7 @@ func probeInputSources() throws {
     saved.set(false, forKey: "sourceKeyReturns"); pump(0.3)
     text.inputContext?.discardMarkedText(); text.string = ""; try press(space, .maskAlternate); try type([k, a])
     expect("key: pressed again with going back off stays", foreign, foreignText)
-    saved.removeObject(forKey: "sourceKeyReturns")
+    saved.set(true, forKey: "sourceKeyReturns")
     // A Korean source's key goes there from anywhere, and back.
     saved.set([ko.id: NSNumber(value: spaceCombos[2])], forKey: "sourceKeys"); saved.set([en.id, foreign.id], forKey: "cycleSources"); pump(1.2)
     try start(english); try press(space, .maskAlternate); try type([g, k])
