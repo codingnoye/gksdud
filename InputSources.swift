@@ -196,9 +196,7 @@ extension AppDelegate {
         guard addedSourcesActive, let current = logicalSource,
               let pulse = nativeSwitchPulse(keyCode: engine.target.keyCode, marker: nativePulseMarker) else { return false }
         let enabled = activeSources()
-        guard enabled.contains(where: { $0.id == id }) else {
-            sourceCache = nil; addedSources.showError(AddedSourcesSettings.unavailable); return false
-        }
+        guard enabled.contains(where: { $0.id == id }) else { return false }
         guard let target = keySourceTarget(id, current: current, returns: engine.sourceKeyReturns, enabled: enabled, history: sourceHistory) else { return true }
         rememberCapsBeforeSwitch(key)
         switchSource(to: target, from: current, pulse: pulse)
@@ -329,7 +327,6 @@ extension AppDelegate {
     }
     // Each source's own icon, in settings only; the menu bar and the menu keep sourceIcon().
     func nativeSourceIcon(_ id: String) -> NSImage? {
-        // Saved but unavailable sources too, so a row shows what it was.
         let list = TISCreateInputSourceList([kTISPropertyInputSourceID as String: id] as CFDictionary, true)?.takeRetainedValue() as? [TISInputSource]
         guard let source = list?.first, let pointer = TISGetInputSourceProperty(source, kTISPropertyIconImageURL) else { return nil }
         let url = Unmanaged<CFURL>.fromOpaque(pointer).takeUnretainedValue() as URL
@@ -382,15 +379,13 @@ extension AppDelegate {
         return sourceDisplayTitle(name, provider: provider)
     }
     // The settings' order: the cycle, then the other sources in use, then the ones turned off, each as macOS lists them
-    // but the cycle. Saved sources macOS no longer offers come last, where their settings can still be cleared.
-    func sourceGroups() -> (cycle: [InputSourceIdentity], other: [InputSourceIdentity], off: [InputSourceIdentity], missing: [String]) {
+    // but the cycle. Saved sources macOS no longer offers are left out until they come back.
+    func sourceGroups() -> (cycle: [InputSourceIdentity], other: [InputSourceIdentity], off: [InputSourceIdentity]) {
         let enabled = enabledSources(), active = activeSources(), order = cycleOrder
         let cycle = order.compactMap { id in active.first { $0.id == id } }
         let other = active.filter { source in !cycle.contains(source) }
         let off = enabled.filter { source in !active.contains(source) }
-        var missing: [String] = []
-        for id in order + engine.sourceKeys.keys.sorted() where !enabled.contains(where: { $0.id == id }) && !missing.contains(id) { missing.append(id) }
-        return (cycle, other, off, missing)
+        return (cycle, other, off)
     }
     // The 한국어 and 영어 menu items: with added sources, the first source of that language in use.
     func menuLanguageSource(_ prefix: String) -> InputSourceIdentity? {
@@ -431,9 +426,10 @@ extension AppDelegate {
         alert.addButton(withTitle: "변경"); alert.addButton(withTitle: "취소")
         return runAlert(alert) == .alertFirstButtonReturn
     }
-    // Only once the key is saved as a Korean/English key, so a later warning that cancels the change keeps it.
+    // Only once the key is saved as a Korean/English key, so a later warning that cancels the change keeps it. Saved keys of
+    // sources that are gone go too, so they do not come back as Korean/English keys.
     func releaseSourceKeys() {
-        let taken = engine.sourceKeysAmongHangulKeys()
+        let taken = engine.sourceKeys.filter { engine.defaultSources.contains($0.value) || engine.keyboards.maps($0.value, default: engine.defaultSources) }
         guard !taken.isEmpty else { return }
         for id in taken.keys { engine.setSourceKey(nil, for: id) }
         addedSources.refresh(force: true)
@@ -455,7 +451,6 @@ private final class SourceKeyPicker: NSPopUpButton { var sourceID = "" }
 
 // The 입력 소스 추가 section of the extras tab, and its sheet: each source in use or not, in the cycle or not, and its key.
 final class AddedSourcesSettings: NSObject, NSTableViewDataSource, NSTableViewDelegate {
-    static let unavailable = "고유 키를 지정한 입력 소스를 사용할 수 없습니다. 시스템 설정에서 추가해주세요."
     private static let rowType = NSPasteboard.PasteboardType("io.gksdud.cycle-source")
     unowned let owner: AppDelegate
     private var engine: Engine { owner.engine }
@@ -467,7 +462,7 @@ final class AddedSourcesSettings: NSObject, NSTableViewDataSource, NSTableViewDe
     let returns = NSButton(checkboxWithTitle: "고유 키를 한 번 더 누를 시 직전 입력 소스로 전환", target: nil, action: nil)
     let compatible = NSButton(checkboxWithTitle: "호환성 모드", target: nil, action: nil)
     let sheetWarning = NSTextField(wrappingLabelWithString: "")
-    enum Group { case cycle, other, off, missing }
+    enum Group { case cycle, other, off }
     // A source, or the gap between two groups.
     enum Row: Equatable { case source(String, Group), gap }
     private(set) var rows: [Row] = []
@@ -595,8 +590,7 @@ final class AddedSourcesSettings: NSObject, NSTableViewDataSource, NSTableViewDe
         for control in [returns, compatible] { control.isEnabled = usable }
         identities = Dictionary(owner.enabledSources().map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         var next: [Row] = []
-        for (group, ids) in [(Group.cycle, groups.cycle.map(\.id)), (.other, groups.other.map(\.id)), (.off, groups.off.map(\.id)), (.missing, groups.missing)]
-        where !ids.isEmpty {
+        for (group, ids) in [(Group.cycle, groups.cycle.map(\.id)), (.other, groups.other.map(\.id)), (.off, groups.off.map(\.id))] where !ids.isEmpty {
             if !next.isEmpty { next.append(.gap) }
             next += ids.map { .source($0, group) }
         }
@@ -607,12 +601,11 @@ final class AddedSourcesSettings: NSObject, NSTableViewDataSource, NSTableViewDe
         englishIcons = []
         table.reloadData()
         // Only states the user has to act on.
-        let text = !usable ? "" : error ?? currentWarning(missing: groups.missing)
+        let text = !usable ? "" : error ?? currentWarning()
         for label in [warning, sheetWarning] { label.stringValue = text; label.isHidden = text.isEmpty }
     }
-    private func currentWarning(missing: [String]) -> String {
+    private func currentWarning() -> String {
         if !engine.sourceKeysAmongHangulKeys().isEmpty { return "고유 키가 한영 키와 겹칩니다. 다른 키를 선택해주세요." }
-        if engine.usedSourceKeys.keys.contains(where: missing.contains) { return Self.unavailable }
         if let blocked = engine.sourceKeyTargets.values.sorted(by: { $0.keyCode < $1.keyCode })
             .first(where: { engine.keyboards.result.blockedTargets.contains($0.usage) }) {
             return "\(blocked.name)이 다른 키 매핑에서 사용 중이라 고유 키를 적용하지 못했습니다."
@@ -638,7 +631,7 @@ final class AddedSourcesSettings: NSObject, NSTableViewDataSource, NSTableViewDe
             return cell
         }
         let source = identities[id], name = titles[id] ?? id
-        let live = usable && group != .off && group != .missing
+        let live = usable && group != .off
         let cell = NSView()
         func center(_ view: NSView) -> NSView {
             view.translatesAutoresizingMaskIntoConstraints = false; cell.addSubview(view)
@@ -648,13 +641,13 @@ final class AddedSourcesSettings: NSObject, NSTableViewDataSource, NSTableViewDe
         switch column {
         case "enabled":
             let box = SourceCheckbox(checkboxWithTitle: "", target: self, action: #selector(toggleSource(_:)))
-            box.sourceID = id; box.state = group == .off || group == .missing ? .off : .on
-            box.isEnabled = usable && group != .missing; box.setAccessibilityLabel("\(name) 활성화")
+            box.sourceID = id; box.state = group == .off ? .off : .on
+            box.isEnabled = usable; box.setAccessibilityLabel("\(name) 활성화")
             return center(box)
         case "cycle":
             let box = SourceCheckbox(checkboxWithTitle: "", target: self, action: #selector(toggleCycle(_:)))
             box.sourceID = id; box.state = owner.cycleOrder.contains(id) ? .on : .off
-            box.isEnabled = live || usable && group == .missing && box.state == .on; box.setAccessibilityLabel("\(name) 순환")
+            box.isEnabled = live; box.setAccessibilityLabel("\(name) 순환")
             return center(box)
         case "key":
             let picker = SourceKeyPicker(frame: .zero, pullsDown: false)
@@ -666,7 +659,7 @@ final class AddedSourcesSettings: NSObject, NSTableViewDataSource, NSTableViewDe
             }
             if let key = engine.sourceKeys[id] { picker.selectItem(withTitle: sourceName(key)) } else { picker.selectItem(at: 0) }
             picker.target = self; picker.action = #selector(changeKey(_:))
-            picker.isEnabled = live || usable && group == .missing && engine.sourceKeys[id] != nil
+            picker.isEnabled = live
             picker.setAccessibilityLabel("\(name) 고유 키")
             picker.translatesAutoresizingMaskIntoConstraints = false; cell.addSubview(picker)
             NSLayoutConstraint.activate([picker.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
@@ -682,7 +675,7 @@ final class AddedSourcesSettings: NSObject, NSTableViewDataSource, NSTableViewDe
             let label = NSTextField(labelWithString: name)
             label.lineBreakMode = .byTruncatingTail; label.textColor = live ? .labelColor : .disabledControlTextColor
             label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-            label.toolTip = group == .missing ? "시스템 설정에서 사용할 수 없는 입력 소스입니다." : name
+            label.toolTip = name
             var views: [NSView] = [icon, label]
             // Only the cycle's order is dragged.
             if group == .cycle {
@@ -726,8 +719,9 @@ final class AddedSourcesSettings: NSObject, NSTableViewDataSource, NSTableViewDe
     @objc func toggle() {
         if enable.state == .on {
             // The keys take keys away from the keyboard, so the same warnings as choosing them apply.
-            let disabled = engine.disabledSources
-            for key in engine.sourceKeys.filter({ !disabled.contains($0.key) }).values.sorted() where !confirmKey(key) { refresh(force: true); return }
+            let disabled = engine.disabledSources, available = engine.availableSources()
+            for key in engine.sourceKeys.filter({ !disabled.contains($0.key) && available?.contains($0.key) != false }).values.sorted()
+            where !confirmKey(key) { refresh(force: true); return }
         }
         save { engine.defaults.set(enable.state == .on, forKey: "addedSources") }
     }

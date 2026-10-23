@@ -190,11 +190,14 @@ final class Engine {
     }
     // Pressed again in its source, a source's key goes back to the source before it.
     var sourceKeyReturns: Bool { defaults.object(forKey: "sourceKeyReturns") == nil || defaults.bool(forKey: "sourceKeyReturns") }
-    // The keys of the sources turned on.
+    // The input sources macOS offers, set by the app; nil counts every saved one. A source removed in System Settings keeps
+    // its settings for when it comes back, but its key goes back to the keyboard meanwhile.
+    var availableSources: () -> Set<String>? = { nil }
+    // The keys of the sources turned on that macOS offers.
     var usedSourceKeys: [String: UInt64] {
         guard addedSourcesEnabled else { return [:] }
-        let disabled = disabledSources
-        return sourceKeys.filter { !disabled.contains($0.key) }
+        let disabled = disabledSources, available = availableSources()
+        return sourceKeys.filter { !disabled.contains($0.key) && available?.contains($0.key) != false }
     }
     // Each single key's own F-key, so the tap tells them from the Korean/English key and each other. The tap takes every
     // press of them, so they are ones no system shortcut uses on their own while there are enough.
@@ -1168,6 +1171,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         NSApp.mainMenu = mainMenu
         if askForPermission { keepActivationUntilTrusted() }
         engine.migrateAddedSources(enabled: enabledSources())
+        engine.availableSources = { [weak self] in self.map { Set($0.enabledSources().map(\.id)) } }
         buildWindow()
         updateMenu()
         updates.onChange = { [weak self] in self?.refreshUpdates() }
@@ -1383,8 +1387,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             self.updateInputIndicator()
         }
     }
+    // A source's key maps or goes back to the keyboard as its source comes and goes.
     @objc func enabledSourcesChanged() {
-        RunLoop.main.perform(inModes: [.common]) { [weak self] in self?.sourceCache = nil; self?.addedSources.refresh(force: true) }
+        RunLoop.main.perform(inModes: [.common]) { [weak self] in self?.sourceCache = nil; self?.repair(); self?.addedSources.refresh(force: true) }
     }
     func updateInputIndicator() {
         // The Option-character round trip selects English for a moment; didFinish refreshes afterwards. Meanwhile the source

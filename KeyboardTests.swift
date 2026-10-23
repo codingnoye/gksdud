@@ -753,9 +753,11 @@ func renderKeyboardUI(to directory: String) throws {
     engine.setSourceKey(sources[1], for: pinyin.id); engine.setSourceKey(spaceCombos[2], for: korean.id)
     engine.setSourceKey(sources[3], for: "com.example.inputmethod.Removed")
     delegate.addedSources.refresh(force: true)
+    engine.availableSources = { Set(delegate.enabledSources().map(\.id)) }
     precondition(delegate.addedSources.rows == [.source(korean.id, .cycle), .source(abc.id, .cycle), .source(japanese.id, .cycle), .gap, .source(pinyin.id, .other), .gap,
-                          .source(dvorak.id, .off), .gap, .source("com.example.inputmethod.Removed", .missing)], "Cycle, others, off, missing")
-    precondition(delegate.addedSources.warning.stringValue == AddedSourcesSettings.unavailable, "A key on a source that is gone is shown")
+                          .source(dvorak.id, .off)], "Cycle, others, off; a saved source macOS no longer offers is left out")
+    precondition(delegate.addedSources.warning.isHidden && engine.usedSourceKeys == [pinyin.id: sources[1], korean.id: spaceCombos[2]],
+        "and its key goes back to the keyboard without a warning")
     for (name, appearance) in [("light", NSAppearance.Name.aqua), ("dark", NSAppearance.Name.darkAqua)] {
         delegate.window.appearance = NSAppearance(named: appearance); delegate.selectTab(3)
         try save(delegate.window.contentView!, "added-section-\(name).png")
@@ -763,13 +765,12 @@ func renderKeyboardUI(to directory: String) throws {
         try save(delegate.addedSources.window.contentView!, "added-sources-\(name).png")
         delegate.addedSources.window.orderOut(nil)
     }
-    engine.setSourceKey(nil, for: "com.example.inputmethod.Removed")
     engine.setSourceKey(engine.mappedSources.first, for: pinyin.id); delegate.addedSources.refresh(force: true)
     precondition(delegate.addedSources.warning.stringValue == "고유 키가 한영 키와 겹칩니다. 다른 키를 선택해주세요.", "A source's key that is a Korean/English key is shown")
     try save(delegate.window.contentView!, "added-section-conflict.png")
     for key in ["addedSources", "cycleSources", "sourceKeys", "disabledSources"] { defaults.removeObject(forKey: key) }
     engine.defaultSources = savedKeys
-    delegate.sourceCache = nil
+    delegate.sourceCache = nil; engine.availableSources = { nil }
     delegate.addedSources.refresh(force: true)
     // Caps Lock chosen as a Korean/English key while Caps Lock in Korean is on: the warning, then the tab once confirmed.
     // runCapsLockKeyTests checks the answers.
@@ -1017,6 +1018,9 @@ func runSourceKeyTests() {
     engine.setSourceKey(spaceCombos[2], for: "com.apple.keylayout.ABC")
     precondition(engine.sourceKeyMappings == [ExtraKey(source: option, target: f18)] && engine.sourceKeys["com.apple.keylayout.ABC"] == spaceCombos[2],
         "A Space combination is not mapped")
+    engine.availableSources = { ["com.apple.keylayout.ABC"] }
+    precondition(engine.sourceKeyMappings.isEmpty && engine.sourceKeys.count == 2, "A source macOS no longer offers keeps its key saved but unmapped")
+    engine.availableSources = { nil }
     engineDefaults.set(["x": NSNumber(value: 99)], forKey: "sourceKeys")
     precondition(engine.sourceKeys.isEmpty, "An unknown saved key is no key")
     engine.setSourceKey(capsLock, for: "com.apple.inputmethod.SCIM.ITABC")
@@ -1131,6 +1135,13 @@ func runSourceKeyWarningTests() {
     engine.keyboards.setSources([sources[1]], for: key)
     precondition(delegate.confirmKeyboardChange([key]) && engine.sourceKeys.isEmpty, "One keyboard's key is enough to clear it")
     engine.keyboards.setSources(nil, for: key)
+    // A key saved for a source macOS no longer offers asks nothing, and goes once it is a Korean/English key.
+    engine.setSourceKey(sources[1], for: "com.example.Removed"); engine.availableSources = { [pinyin, abc] }
+    answers = []; warnings = []
+    delegate.picker.selectItem(withTitle: sourceNames[1])
+    precondition(delegate.picker.sendAction(delegate.picker.action, to: delegate.picker.target))
+    precondition(warnings.isEmpty && engine.defaultSources == [sources[1]] && engine.sourceKeys.isEmpty, "A removed source's key is cleared quietly")
+    engine.defaultSources = [sources[0]]; delegate.resetSelection(); engine.availableSources = { nil }
     // Caps Lock stops being Caps Lock, so Caps Lock in Korean asks first.
     defaults.set(true, forKey: "koreanCapsLock")
     choose(sources[2])
