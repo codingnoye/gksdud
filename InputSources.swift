@@ -638,6 +638,8 @@ final class AddedSourcesSettings: NSObject, NSTableViewDataSource, NSTableViewDe
             NSLayoutConstraint.activate([view.centerXAnchor.constraint(equalTo: cell.centerXAnchor), view.centerYAnchor.constraint(equalTo: cell.centerYAnchor)])
             return cell
         }
+        // Turned off, only its checkbox shows, so the row reads as one to turn back on; its other settings wait.
+        if group == .off && column != "enabled" && column != "name" { return cell }
         switch column {
         case "enabled":
             let box = SourceCheckbox(checkboxWithTitle: "", target: self, action: #selector(toggleSource(_:)))
