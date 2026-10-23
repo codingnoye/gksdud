@@ -125,3 +125,33 @@ struct RemoteKeyboards {
         return found
     }
 }
+
+// Universal Control compatibility, off by default: the other Mac's switch key goes on as it came, and macOS's own shortcut
+// switches with it, on release and not after a hold this long. Decided at the press; its repeats and release follow.
+struct NativeRemoteGate {
+    static let longestSwitch: TimeInterval = 0.4
+    var held: [Int64: TimeInterval] = [:]
+    // `claims` is asked only for a new press. A release tells whether macOS switches with it.
+    mutating func handle(code: Int64, down: Bool, repeatKey: Bool, now: TimeInterval, claims: () -> Bool) -> (pass: Bool, switches: Bool) {
+        if !down {
+            guard let start = held.removeValue(forKey: code) else { return (false, false) }
+            return (true, now - start < Self.longestSwitch)
+        }
+        if repeatKey { return (held[code] != nil, false) }
+        guard claims() else { held[code] = nil; return (false, false) }
+        held[code] = now
+        return (true, false)
+    }
+}
+
+extension AppDelegate {
+    // True when the key goes on untouched. ESC and case preservation hear of the switch when it happens.
+    func passesNatively(_ event: CGEvent, code: Int64, down: Bool, repeated: Bool) -> Bool {
+        let decision = nativeRemote.handle(code: code, down: down, repeatKey: repeated, now: ProcessInfo.processInfo.systemUptime) {
+            engine.universalControlCompat && engine.active && !engine.paused && code == Int64(engine.target.keyCode)
+                && remoteKeyboards.sentFromOtherMac(event)
+        }
+        if decision.switches { rememberCapsBeforeSwitch(event); noteSwitchSent() }
+        return decision.pass
+    }
+}

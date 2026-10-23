@@ -1181,6 +1181,45 @@ func runUniversalControlTests() {
     featureCheck(HIDKeyboardDevice.local(4294969256, kernel: [4294969256]) && !HIDKeyboardDevice.local(34407378380128265, kernel: [4294969256])
                  && !HIDKeyboardDevice.local(nil, kernel: []), "Another Mac's keyboards are not listed for mapping")
     featureCheck(HIDKeyboardDevice.local(34407378380128265, kernel: nil), "Without the kernel's list, every keyboard stays")
+    // Compatibility mode: decided at the press, so repeats and the release follow it; a long hold does not switch.
+    var gate = NativeRemoteGate(), asked = 0
+    func ask(_ answer: Bool) -> () -> Bool { { asked += 1; return answer } }
+    featureCheck(gate.handle(code: 80, down: true, repeatKey: false, now: 1, claims: ask(false)) == (false, false)
+                 && gate.handle(code: 80, down: true, repeatKey: true, now: 1.1, claims: ask(true)) == (false, false)
+                 && gate.handle(code: 80, down: false, repeatKey: false, now: 1.2, claims: ask(true)) == (false, false) && asked == 1,
+                 "An unclaimed press keeps its repeats and release")
+    featureCheck(gate.handle(code: 80, down: true, repeatKey: false, now: 2, claims: ask(true)) == (true, false)
+                 && gate.handle(code: 80, down: true, repeatKey: true, now: 2.1, claims: ask(false)) == (true, false)
+                 && gate.handle(code: 80, down: false, repeatKey: false, now: 2.2, claims: ask(false)) == (true, true) && asked == 2,
+                 "A claimed press passes with its repeats and release, which switches")
+    _ = gate.handle(code: 80, down: true, repeatKey: false, now: 3, claims: ask(true))
+    featureCheck(gate.handle(code: 80, down: false, repeatKey: false, now: 3.5, claims: ask(true)) == (true, false), "A long hold does not switch")
+    _ = gate.handle(code: 80, down: true, repeatKey: false, now: 4, claims: ask(true))
+    featureCheck(gate.handle(code: 80, down: true, repeatKey: false, now: 5, claims: ask(false)) == (false, false) && gate.held.isEmpty,
+                 "A new press after a missed release decides again")
+    let suite = "io.gksdud.universal-control-tests.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+    defaults.set(true, forKey: "escapeToEnglish")
+    let engine = Engine(defaults: defaults, discover: { [] })
+    let delegate = AppDelegate(engine: engine)
+    delegate.remoteKeyboards.inKernel = { $0 < 1 << 40 }
+    let code = Int64(engine.target.keyCode)
+    let remote = CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(code), keyDown: true)!
+    remote.setIntegerValueField(RemoteKeyboards.senderField!, value: 34407378380128265)
+    let local = remote.copy()!; local.setIntegerValueField(RemoteKeyboards.senderField!, value: 4294969256)
+    featureCheck(!delegate.passesNatively(remote, code: code, down: true, repeated: false), "Off by default")
+    defaults.set(true, forKey: "universalControlCompat")
+    featureCheck(!delegate.passesNatively(local, code: code, down: true, repeated: false), "This Mac's keys keep the press switch")
+    featureCheck(!delegate.passesNatively(remote, code: 0, down: true, repeated: false), "Other keys from there are left alone")
+    engine.paused = true
+    featureCheck(!delegate.passesNatively(remote, code: code, down: true, repeated: false), "Paused, nothing is claimed")
+    engine.paused = false
+    featureCheck(delegate.passesNatively(remote, code: code, down: true, repeated: false) && delegate.sentSwitch == nil,
+                 "The other Mac's press goes on as it came, not switching yet")
+    defaults.set(false, forKey: "universalControlCompat")
+    featureCheck(delegate.passesNatively(remote, code: code, down: false, repeated: false) && delegate.sentSwitch != nil,
+                 "Its release follows even after turning it off, and ESC hears of the switch")
     // The other Mac's key-up right after a long press here, still in the switching window, is not learned from; the next
     // press from there sets the case straight whatever the lock here did meanwhile.
     for upper in [false, true] {
@@ -1194,6 +1233,6 @@ func runUniversalControlTests() {
         caps.followSender(upper)
         featureCheck(caps.beforeLongPress(actual: !upper, preserving: true) == upper, "A long press toggles from the sending keyboard's lock")
     }
-    print("PASS: Universal Control long press told from the tap's, other Mac's keys by sending service, its lock followed")
+    print("PASS: Universal Control long press told from the tap's, other Mac's keys by sending service, its lock followed, compatibility mode")
 }
 #endif

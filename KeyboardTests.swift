@@ -1149,7 +1149,7 @@ func runPermissionTests() {
     delegate.buildWindow()
     delegate.updatePressAccess()
     let settings: [NSControl] = [delegate.enabled, delegate.login, delegate.showInMenuBar, delegate.iconPicker, delegate.iconCaseSwitch, delegate.picker,
-                                 delegate.advancedButton, delegate.longPressSwitch, delegate.escapeSwitch, delegate.backquoteSwitch, delegate.addedSources.enable] + delegate.specialButtons
+                                 delegate.advancedButton, delegate.longPressSwitch, delegate.escapeSwitch, delegate.backquoteSwitch, delegate.universalControlSwitch, delegate.addedSources.enable] + delegate.specialButtons
     precondition(settings.allSatisfy { !$0.isEnabled } && delegate.pressAccess.isEnabled, "Only the permission button is left")
     precondition(delegate.settingLabels.allSatisfy { $0.label.textColor == .disabledControlTextColor }, "Titles and hints dim too")
     delegate.picker.show([sources[0], sources[1]])

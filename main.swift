@@ -154,6 +154,7 @@ final class Engine {
     var koreanCapsLock: Bool { defaults.bool(forKey: "koreanCapsLock") && !capsLockSwitches() }
     var escapeToEnglish: Bool { defaults.bool(forKey: "escapeToEnglish") }
     var swapBackquote: Bool { defaults.bool(forKey: "swapBackquote") }
+    var universalControlCompat: Bool { defaults.bool(forKey: "universalControlCompat") }
     // A Caps Lock chosen as a Korean/English key reaches macOS as the reserved F-key, never as Caps Lock; so does the separate key.
     // `fallback` checks default keys before they are saved.
     func capsLockSwitches(_ fallback: [UInt64]? = nil) -> Bool {
@@ -624,6 +625,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     var spaceGate = SpaceComboGate()
     // The separate key's F-key.
     var separateGate = PressGate()
+    var nativeRemote = NativeRemoteGate()
     var sourceHistory = SourceHistory()
     var landingGeneration = 0
     // The source a switch is on its way to, and one that waits for it to land.
@@ -669,6 +671,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     let koreanCapsSwitch = NSButton(checkboxWithTitle: "한글 상태에서도 Caps Lock으로 대소문자 전환", target: nil, action: nil)
     let escapeSwitch = NSButton(checkboxWithTitle: "ESC 누를 시 영소문자로 변경", target: nil, action: nil)
     let backquoteSwitch = NSButton(checkboxWithTitle: "한글 상태에서 ₩와 ` 반전", target: nil, action: nil)
+    let universalControlSwitch = NSButton(checkboxWithTitle: "유니버설 컨트롤 호환 모드", target: nil, action: nil)
     var backquote = BackquoteSwap()
     let installCLI = NSButton(title: "CLI 설치", target: nil, action: nil)
     var commandPort: CFMessagePort?
@@ -707,7 +710,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         if let source = keyTapSource { CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes) }
         if let tap = keyTap { CFMachPortInvalidate(tap) }
         releaseHeldKeys()
-        keyTapSource = nil; keyTap = nil; pressGate.held.removeAll(); spaceGate = SpaceComboGate()
+        keyTapSource = nil; keyTap = nil; pressGate.held.removeAll(); nativeRemote = NativeRemoteGate(); spaceGate = SpaceComboGate()
         separateGate.held.removeAll(); observedCaps = nil; backquote.reset()
     }
     func ensureKeyTap() {
@@ -782,6 +785,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                     if decision.switchNow { _ = owner.switchSeparate(event) }
                     return decision.consume ? nil : Unmanaged.passUnretained(event)
                 }
+                if owner.passesNatively(event, code: code, down: type == .keyDown, repeated: repeated) { return Unmanaged.passUnretained(event) }
                 if owner.engine.active && type == .keyDown && !repeated && code == Int64(owner.engine.target.keyCode) {
                     owner.tapTargetDown = ProcessInfo.processInfo.systemUptime
                     owner.rememberCapsBeforeSwitch(event)
@@ -860,6 +864,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         backquoteSwitch.state = trusted && engine.swapBackquote ? .on : .off
         backquoteSwitch.isEnabled = trusted
         backquoteSwitch.toolTip = trusted ? switchErrors[backquoteSwitch] : accessibilityHint
+        universalControlSwitch.state = trusted && engine.universalControlCompat ? .on : .off
+        universalControlSwitch.isEnabled = trusted
+        universalControlSwitch.toolTip = trusted ? nil : accessibilityHint
         pressAccess.toolTip = trusted && engine.active && !ready ? "권한 반영을 기다리는 중입니다. 계속 전환되지 않으면 앱을 다시 실행하세요."
             : "키를 누르는 순간 전환하려면 접근성 권한이 필요합니다."
     }
@@ -867,7 +874,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     @objc func toggleFeature(_ sender: NSButton) {
         let keys: [NSButton: String] = [longPressSwitch: "longPressCapsLock",
             preserveCapsSwitch: "preserveCapsLock", koreanCapsSwitch: "koreanCapsLock", escapeSwitch: "escapeToEnglish",
-            backquoteSwitch: "swapBackquote"]
+            backquoteSwitch: "swapBackquote", universalControlSwitch: "universalControlCompat"]
         guard let key = keys[sender] else { return }
         cancelLongPress()
         switchErrors[sender] = nil
@@ -1539,7 +1546,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         do { try engine.restore(); lastError = ""; stickyError = ""; repairFailed = false; refreshStatus() } catch { report(error) }
         resetSelection(); syncCapsPreservation(); updatePressAccess(); refreshKeyboardState()
     }
-    func recover() { sourceCache = nil; observedCaps = nil; queuedSwitch = nil; releaseHeldKeys(); optionInput.cancel(); if capsRestoreTasks.isEmpty { englishCaps.switching = false }; cancelLongPress(); longPress = LongPressState(); pressGate.held.removeAll(); spaceGate = SpaceComboGate(); separateGate.held.removeAll(); for delay in [0.5, 2.0, 5.0] { DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.repair() } } }
+    func recover() { sourceCache = nil; observedCaps = nil; queuedSwitch = nil; releaseHeldKeys(); optionInput.cancel(); if capsRestoreTasks.isEmpty { englishCaps.switching = false }; cancelLongPress(); longPress = LongPressState(); pressGate.held.removeAll(); nativeRemote = NativeRemoteGate(); spaceGate = SpaceComboGate(); separateGate.held.removeAll(); for delay in [0.5, 2.0, 5.0] { DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.repair() } } }
     // The tap does not see Caps Lock on another user's login window, and leaves it alone on the lock screen. Coming back
     // with English (or Korean showing the English case) selected, the lock as left there is the English case. A restore on
     // its way finishes first: unlocking can land in Korean while its input method turns the lock off.

@@ -106,6 +106,7 @@ gksdud source             # 현재 입력 소스 ID
 | `separate-source` | `<입력 소스>`, `none` | 입력 소스 추가 → 입력 소스 |
 | `compatibility` | `on`, `off` | 입력 소스 추가 → 호환성 모드 |
 | `escape` | `on`, `off` | ESC 누를 시 영소문자로 변경 |
+| `universal-control` | `on`, `off` | 유니버설 컨트롤 호환 모드 |
 | `keyboard.<키보드>.mode` | `on`, `default`, `off` | 고급 설정 → 키보드별 적용 |
 | `keyboard.<키보드>.keys` | `<키>,...`, `default` | 고급 설정 → 키보드별 한영 키 |
 
