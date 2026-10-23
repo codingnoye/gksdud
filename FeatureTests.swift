@@ -555,7 +555,7 @@ func probeEscape() throws {
     guard AXIsProcessTrusted() else { throw failure(1, "Launch the gksdud bundle with open -n so the probe has its accessibility permission.") }
     // The running app's settings, read only.
     let saved = UserDefaults.standard
-    let target = targets.first { $0.name == saved.string(forKey: "target") } ?? targets[6]
+    let target = switchTargets.first { $0.name == saved.string(forKey: "target") } ?? targets[6]
     guard NSRunningApplication.runningApplications(withBundleIdentifier: UpdateValidation.identifier).contains(where: { $0.processIdentifier != getpid() }),
           saved.object(forKey: "active") == nil || saved.bool(forKey: "active"), saved.bool(forKey: "escapeToEnglish") else {
         throw failure(2, "Run gksdud with ESC to English turned on first.")
@@ -1090,7 +1090,7 @@ func probeInputSources() throws {
     app.setActivationPolicy(.regular); app.finishLaunching()
     guard AXIsProcessTrusted() else { throw failure(1, "Launch the gksdud bundle with open -n so the probe has its accessibility permission.") }
     let saved = UserDefaults.standard
-    let target = targets.first { $0.name == saved.string(forKey: "target") } ?? targets[6]
+    let target = switchTargets.first { $0.name == saved.string(forKey: "target") } ?? targets[6]
     guard NSRunningApplication.runningApplications(withBundleIdentifier: UpdateValidation.identifier).contains(where: { $0.processIdentifier != getpid() }),
           saved.object(forKey: "active") == nil || saved.bool(forKey: "active") else { throw failure(2, "Run gksdud with activation on first.") }
     let suite = "io.gksdud.sources-probe.\(UUID().uuidString)"

@@ -88,7 +88,7 @@ gksdud source             # 현재 입력 소스 ID
 | `paused` | `on`, `off` | (CLI 전용) 일시정지 |
 | `login` | `on`, `off` | 로그인 시 시작 |
 | `keys` | `<키>,...` | 한영 키 |
-| `target` | `F13` ~ `F20` | 고급 설정 → 내부 전환 키 |
+| `target` | `F13` ~ `F19` | 고급 설정 → 내부 전환 키 |
 | `keyboard-default` | `on`, `off` | 고급 설정 → 기본값 |
 | `menubar` | `on`, `off` | 메뉴바에 표시 |
 | `replace-input-menu` | `on`, `off` | Mac 입력기 아이콘 대체 |

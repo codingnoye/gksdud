@@ -24,14 +24,14 @@ enum CLI {
     static let keyNames = ["right-command", "right-option", "caps-lock", "right-control", "ctrl-space", "cmd-space", "opt-space", "shift-space"]
     static let singleKeyNames = Array(keyNames.prefix(4))
     static let iconNames = ["dud", "a", "ko-en", "character"]
-    static let targetNames = (13...20).map { "F\($0)" }
+    static let targetNames = (13...20).map { "F\($0)" }, switchTargetNames = Array(targetNames.dropLast())
     static let specialNames = ["off", "english", "block"]
     static let settings: [Setting] = [
         Setting(name: "active", kind: .bool, title: "활성화"),
         Setting(name: "paused", kind: .bool, title: "일시정지 (앱을 다시 실행하면 풀림)"),
         Setting(name: "login", kind: .bool, title: "로그인 시 시작"),
         Setting(name: "keys", kind: .keys(single: false), title: "한영 키"),
-        Setting(name: "target", kind: .choice(targetNames), title: "내부 전환 키 (고급 설정)"),
+        Setting(name: "target", kind: .choice(switchTargetNames), title: "내부 전환 키 (고급 설정)"),
         Setting(name: "keyboard-default", kind: .bool, title: "키보드 기본값 (고급 설정)"),
         Setting(name: "menubar", kind: .bool, title: "메뉴바에 표시"),
         Setting(name: "replace-input-menu", kind: .bool, title: "Mac 입력기 아이콘 대체"),

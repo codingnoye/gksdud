@@ -8,7 +8,8 @@ func runCommandTests() {
     func change(_ name: String, _ keyboard: String? = nil, _ operation: CLI.Operation = .set, value: CLI.Value) -> CLI.Change {
         CLI.Change(address: CLI.Address(name: name, keyboard: keyboard), operation: operation, value: value)
     }
-    precondition(CLI.keyNames.count == hangulKeys.count && CLI.singleKeyNames.count == sources.count && CLI.targetNames == targets.map(\.name),
+    precondition(CLI.keyNames.count == hangulKeys.count && CLI.singleKeyNames.count == sources.count && CLI.targetNames == targets.map(\.name)
+        && CLI.switchTargetNames == switchTargets.map(\.name),
         "Every key and F-key has a name")
     precondition(parse([])?.command == .help(nil) && parse(["set", "--help"])?.command == .help(nil) && parse(["help", "settings"])?.command == .help("settings"))
     precondition(parse(["--enable"])?.command == .set([change("active", value: .bool(true)), change("paused", value: .bool(false))])

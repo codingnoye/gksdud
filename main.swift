@@ -14,6 +14,8 @@ struct TargetKey {
 let targets = zip(13...20, [105, 107, 113, 106, 64, 79, 80, 90]).map {
     TargetKey(name: "F\($0.0)", usage: 0x700000068 + UInt64($0.0 - 13), keyCode: $0.1)
 }
+// macOS's input source shortcuts never fire on F20, so the Korean/English key's F-key is one of the others.
+let switchTargets = targets.filter { $0.name != "F20" }
 let sources: [UInt64] = [0x7000000e7, 0x7000000e6, 0x700000039, 0x7000000e4]
 let sourceNames = ["우측 Command ⌘", "우측 Option ⌥", "Caps Lock ⇪", "우측 Control ⌃"]
 // Space combinations are caught by the event tap, not mapped in HID, so they apply to every keyboard.
@@ -293,7 +295,7 @@ final class Engine {
         get { defaults.string(forKey: "testInputText") ?? "한dud한dud한dud한dud" }
         set { defaults.set(newValue, forKey: "testInputText") }
     }
-    var target: TargetKey { targets.first { $0.name == defaults.string(forKey: "target") } ?? targets[6] }
+    var target: TargetKey { switchTargets.first { $0.name == defaults.string(forKey: "target") } ?? targets[6] }
     var records: [String: [String: String]] {
         get { keyboards.records }
         set { keyboards.records = newValue }
@@ -1635,7 +1637,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         if enabled.state == .on { applyNow() }
         else {
             if let keys = picker.selection { engine.defaultSources = keys }
-            engine.defaults.set(targets[targetPicker.indexOfSelectedItem].name, forKey: "target")
+            engine.defaults.set(switchTargets[targetPicker.indexOfSelectedItem].name, forKey: "target")
         }
         releaseKoreanCapsLock(); releaseSourceKeys()
     }
@@ -1675,7 +1677,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         guard !engine.isUpdatingSettings else { return }
         defer { resetSelection(); refreshKeyboardState() }
         let keys = picker.selection ?? engine.defaultSources
-        let target = targets[targetPicker.indexOfSelectedItem]
+        let target = switchTargets[targetPicker.indexOfSelectedItem]
         guard confirmMapping(keys, target: target) else { resetSelection(); return }
         do { _ = try engine.apply(sources: keys, target: target); lastError = ""; stickyError = ""; repairFailed = false; ensureKeyTap(); refreshStatus() } catch { report(error); resetSelection() }
     }

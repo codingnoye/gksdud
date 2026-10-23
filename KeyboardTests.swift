@@ -472,7 +472,7 @@ func runRightControlTests() {
     let engine = Engine(defaults: defaults, discover: { [keyboard] })
     precondition(engine.defaultSources == [sources[0]], "The default remains right Command")
     precondition(sources.contains(rightControl), "Right Control must be selectable")
-    for target in targets {
+    for target in switchTargets {
         defaults.set(target.name, forKey: "target")
         defaults.set(String(sources[0]), forKey: "source")
         precondition((try! engine.reconcile()) == 1)
@@ -496,7 +496,9 @@ func runRightControlTests() {
             "Disable restores both original Control mappings")
         defaults.set(true, forKey: "active")
     }
-    print("PASS: right Control across F13-F20, left Control preservation, source changes, saved selection, restart, disable restoration")
+    defaults.set("F20", forKey: "target")
+    precondition(engine.target.name == "F19", "F20, which the system shortcut ignores, falls back to F19")
+    print("PASS: right Control across F13-F19, F20 falling back to F19, left Control preservation, source changes, saved selection, restart, disable restoration")
 }
 
 // The lock screen gets the keyboards' own keys back without turning activation off; unlocking maps them again.

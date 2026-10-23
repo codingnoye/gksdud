@@ -152,7 +152,7 @@ extension AppDelegate {
         englishPreview.setAccessibilityLabel("영어 아이콘 미리보기")
         row("아이콘", [iconPicker, koreanPreview, englishPreview], in: general)
         // Shown in the advanced settings sheet.
-        targetPicker.addItems(withTitles: targets.map(\.name)); targetPicker.selectItem(withTitle: engine.target.name)
+        targetPicker.addItems(withTitles: switchTargets.map(\.name)); targetPicker.selectItem(withTitle: engine.target.name)
         targetPicker.target = self; targetPicker.action = #selector(selectionChanged)
         let caps = tabPanels[1]
         heading("대소문자", in: caps)
