@@ -969,6 +969,10 @@ func runAddedSourceTests() {
     featureCheck(cycle(zh) == "ko2", "or at the first one without history")
     featureCheck(cycle(ko, ["ko2", "gone", "abc"]) == "abc" && cycle(ko, enabled: [ko, ja, zh]) == "ja", "Sources gone or turned off are skipped")
     featureCheck(cycle(ko, ["ko2", "gone"]) == nil && cycle(ko, []) == nil, "Fewer than two leaves the system shortcut alone")
+    let bare = InputSourceIdentity(id: "bare", language: ""), plain = InputSourceIdentity(id: "plain", language: "")
+    featureCheck(cycle(bare, ["ko2", "plain", "abc"], enabled: enabled + [bare, plain], history: history) == "abc"
+        && cycle(plain, ["ko2", "plain", "abc"], enabled: enabled + [bare, plain]) == "abc",
+        "Sources that name no language are not taken for each other")
     var recent = SourceHistory()
     for id in ["abc", "ko2", "us", "zh"] { recent.note(id) }
     func key(_ id: String, _ current: InputSourceIdentity, returns: Bool = true, history: SourceHistory = SourceHistory()) -> String? {

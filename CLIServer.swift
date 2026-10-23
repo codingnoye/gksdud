@@ -527,7 +527,8 @@ extension AppDelegate {
             guard let pulse else { return .failure("gksdud가 꺼져 있어 한영 전환을 할 수 없습니다.") }
             let target = addedSourcesActive ? hangulTarget(from: from)
                 : sourceHistory.previous(of: from.id).flatMap { id in enabled.first { $0.id == id } }
-            rememberCapsBeforeSwitch(); switchHangul(pulse)
+            rememberCapsBeforeSwitch()
+            guard switchHangul(pulse) else { return .failure("입력 소스를 전환하지 못했습니다.") }
             return switched(to: target, method: "shortcut")
         }
         let target = try matchSource(spec)
@@ -536,7 +537,7 @@ extension AppDelegate {
         }
         if let pulse {
             rememberCapsBeforeSwitch()
-            switchSource(to: target, from: from, pulse: pulse)
+            guard switchSource(to: target, from: from, pulse: pulse) else { return .failure("입력 소스를 전환하지 못했습니다.") }
             return switched(to: target, method: "shortcut")
         }
         guard let source = Self.sourceForID(target.id), TISSelectInputSource(source) == noErr else { return .failure("입력 소스를 전환하지 못했습니다.") }

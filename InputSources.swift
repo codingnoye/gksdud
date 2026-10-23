@@ -105,8 +105,10 @@ func cycleTarget(current: InputSourceIdentity, cycle: [String], enabled: [InputS
     let members = cycle.compactMap { id in enabled.first { $0.id == id } }
     guard members.count > 1 else { return nil }
     // Another layout of a listed language takes that one's place; from elsewhere the cycle resumes where it was left.
+    // Sources that name no language share none.
     let exact = members.firstIndex { $0.id == current.id }
-    guard let index = exact ?? members.firstIndex(where: { $0.language == current.language }) else { return history.mostRecent(members) }
+    guard let index = exact ?? members.firstIndex(where: { !current.language.isEmpty && $0.language == current.language })
+    else { return history.mostRecent(members) }
     return members[(index + 1) % members.count]
 }
 // A source's own key goes there, and pressed there again back to the most recent other source when `returns`.
@@ -184,11 +186,12 @@ extension AppDelegate {
         cycleTarget(current: current, cycle: cycleOrder, enabled: activeSources(), history: sourceHistory)
     }
     // The Korean/English key. Without added input sources, or a cycle of fewer than two, it sends the system shortcut alone.
-    func switchHangul(_ pulse: (CGEvent, CGEvent)) {
+    @discardableResult
+    func switchHangul(_ pulse: (CGEvent, CGEvent)) -> Bool {
         guard addedSourcesActive, let current = logicalSource, let target = hangulTarget(from: current) else {
-            postSwitchPulse(pulse); return
+            postSwitchPulse(pulse); return true
         }
-        switchSource(to: target, from: current, pulse: pulse)
+        return switchSource(to: target, from: current, pulse: pulse)
     }
     // A source's own key. False when there is nothing to switch with, so a Space goes back to the app; pressed in its source
     // with nowhere to go back to, it does nothing.
@@ -199,7 +202,7 @@ extension AppDelegate {
         guard enabled.contains(where: { $0.id == id }) else { return false }
         guard let target = keySourceTarget(id, current: current, returns: engine.sourceKeyReturns, enabled: enabled, history: sourceHistory) else { return true }
         rememberCapsBeforeSwitch(key)
-        switchSource(to: target, from: current, pulse: pulse)
+        _ = switchSource(to: target, from: current, pulse: pulse)
         return true
     }
     // The English a long press or ESC goes to: the most recent one in use, or any.
@@ -207,8 +210,7 @@ extension AppDelegate {
         let inUse = activeSources().filter(isEnglish)
         guard let current = logicalSource,
               let english = sourceHistory.mostRecent(inUse.isEmpty ? enabledSources().filter(isEnglish) : inUse) else { return false }
-        switchSource(to: english, from: current, pulse: pulse)
-        return true
+        return switchSource(to: english, from: current, pulse: pulse)
     }
     static func isLayout(_ id: String) -> Bool {
         guard let source = sourceForID(id), let type = TISGetInputSourceProperty(source, kTISPropertyInputSourceType) else { return false }
@@ -227,34 +229,45 @@ extension AppDelegate {
     // Only the system shortcut switches, as without added sources. Sources selected from here first only set where it goes.
     // Pressed again before a switch lands, `current` is where it is headed: the shortcut alone follows it at once, but
     // selections would reorder the recent sources under it, so that switch waits for it to land. Only the last one waits.
-    func switchSource(to target: InputSourceIdentity, from current: InputSourceIdentity, pulse: (CGEvent, CGEvent)) {
+    // False when it could not: the target is gone or a selection failed. The shortcut is then not sent, as it would go
+    // wherever the sources selected so far point.
+    @discardableResult
+    func switchSource(to target: InputSourceIdentity, from current: InputSourceIdentity, pulse: (CGEvent, CGEvent)) -> Bool {
         if let landing = switchLanding {
-            if target.id == landing { queuedSwitch = nil; return }
+            if target.id == landing { queuedSwitch = nil; return true }
             guard queuedSwitch == nil, plannedSwitch(to: target, from: current).selections.isEmpty else {
-                queuedSwitch = (target, pulse); holdKeys = true; return
+                queuedSwitch = (target, pulse); holdKeys = true; return true
             }
             postSwitchPulse(pulse)
             sourceHistory.note(target.id)
             expectLanding(target, origin: current.id)
-            return
+            return true
         }
-        guard target.id != current.id else { return }
+        guard target.id != current.id else { return true }
         let plan = plannedSwitch(to: target, from: current)
         let waits = plan.selections.count > 1
             && waitsBetweenSelections(bundles: ([current.id] + plan.selections).map(Self.bundleID), always: engine.addedSourcesCompatible)
-        var failed = false
-        for (index, id) in plan.selections.enumerated() {
+        var failed = Self.sourceForID(target.id) == nil
+        for (index, id) in plan.selections.enumerated() where !failed {
             if index > 0 && waits { usleep(50_000) }
             guard let source = Self.sourceForID(id), TISSelectInputSource(source) == noErr else { failed = true; break }
             sourceHistory.note(id)
         }
-        addedSources.showError(failed ? "입력 소스를 전환하지 못했습니다." : nil)
+        guard !failed else {
+            // macOS's list may have changed without a notice yet.
+            sourceCache = nil
+            addedSources.showError("입력 소스를 전환하지 못했습니다.")
+            updateInputIndicator()
+            return false
+        }
+        addedSources.showError(nil)
         // The frontmost app can see the selections before the shortcut's switch reaches it.
         if !plan.selections.isEmpty { holdKeys = true }
         postSwitchPulse(pulse)
         // Where it lands, as long as the shortcut switches.
         sourceHistory.note(target.id)
         expectLanding(target, origin: plan.selections.last ?? current.id)
+        return true
     }
     // Until the switch lands the icon keeps showing where it started, not the sources selected on the way. If the shortcut
     // does not switch, a layout selected on the way may already have reached the frontmost app while macOS shows another
@@ -321,11 +334,18 @@ extension AppDelegate {
         let ids = systemHistory(entries, sources: infos), current = currentSource?.id
         sourceHistory = SourceHistory(ids.first == current ? ids : current.map { [$0] } ?? [])
     }
+    // Korean and English show this app's icons, other sources their own, or a badge without one.
     func sourceIcon(_ source: InputSourceIdentity) -> NSImage {
         isKorean(source) || isEnglish(source) ? sourceMenuIcon(korean: isKorean(source), upper: englishCase())
-            : badgeImage(label: sourceBadgeLabel(source.language, position: sourcePosition(source.id)), filled: false)
+            : cachedNativeIcon(source.id) ?? badgeImage(label: sourceBadgeLabel(source.language, position: sourcePosition(source.id)), filled: false)
     }
-    // Each source's own icon, in settings only; the menu bar and the menu keep sourceIcon().
+    func cachedNativeIcon(_ id: String) -> NSImage? {
+        if let cached = nativeIconCache[id] { return cached }
+        let image = nativeSourceIcon(id)
+        nativeIconCache[id] = .some(image)
+        return image
+    }
+    // Each source's own icon, as macOS gives it; Korean's and English's often have no file.
     func nativeSourceIcon(_ id: String) -> NSImage? {
         let list = TISCreateInputSourceList([kTISPropertyInputSourceID as String: id] as CFDictionary, true)?.takeRetainedValue() as? [TISInputSource]
         guard let source = list?.first, let pointer = TISGetInputSourceProperty(source, kTISPropertyIconImageURL) else { return nil }
@@ -718,7 +738,7 @@ final class AddedSourcesSettings: NSObject, NSTableViewDataSource, NSTableViewDe
                                          picker.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -12)])
             return cell
         default:
-            let native = owner.nativeSourceIcon(id)
+            let native = owner.cachedNativeIcon(id)
             let icon = NSImageView(image: native ?? source.map(owner.sourceIcon) ?? owner.badgeImage(label: "", filled: false))
             if native == nil, source.map(isEnglish) == true { englishIcons.append(icon) }
             if icon.image?.isTemplate == true { icon.contentTintColor = live ? .labelColor : .disabledControlTextColor }

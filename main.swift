@@ -1364,6 +1364,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
     // Icons are kept, so the refresh every second finds the one showing and sets nothing.
     private var iconCache: [String: NSImage] = [:]
+    // Input sources' own icons by ID, nil for one without; read again when macOS's sources change.
+    var nativeIconCache: [String: NSImage?] = [:]
     func badgeImage(label: String, filled: Bool) -> NSImage {
         let key = "\(filled)|\(label)"
         if let image = iconCache[key] { return image }
@@ -1419,7 +1421,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
     // A source's key maps or goes back to the keyboard as its source comes and goes.
     @objc func enabledSourcesChanged() {
-        RunLoop.main.perform(inModes: [.common]) { [weak self] in self?.sourceCache = nil; self?.repair(); self?.addedSources.refresh(force: true) }
+        RunLoop.main.perform(inModes: [.common]) { [weak self] in
+            self?.sourceCache = nil; self?.nativeIconCache = [:]; self?.repair(); self?.addedSources.refresh(force: true)
+        }
     }
     func updateInputIndicator() {
         // The Option-character round trip selects English for a moment; didFinish refreshes afterwards. Meanwhile the source
@@ -1441,7 +1445,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         guard let (source, other) = indicator else { return }
         let korean = isKorean(source), english = isEnglish(source)
         // Let the status bar resolve contrast, including its initial appearance and highlighting.
-        let badge = korean || english ? sourceMenuIcon(korean: korean, upper: upper) : badgeImage(label: other, filled: false)
+        let badge = korean || english ? sourceMenuIcon(korean: korean, upper: upper) : cachedNativeIcon(source.id) ?? badgeImage(label: other, filled: false)
         let name = korean ? "한국어" : english ? "영어" : other
         if inputBadge.image !== badge { inputBadge.image = badge; inputBadge.setAccessibilityLabel("현재 입력: \(name)") }
         if tabButtons.first?.image !== badge { tabButtons.first?.image = badge }

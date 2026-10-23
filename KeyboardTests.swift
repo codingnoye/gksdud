@@ -1085,6 +1085,11 @@ func runSourceKeyTapTests() {
     keyboard.mappings.removeAll { $0[srcKey]?.uint64Value == sources[2] }
     reconcile()
     precondition(delegate.takesSourceKey(code), "Freed again, it is taken again")
+    let gone = InputSourceIdentity(id: "io.gksdud.test.gone", language: "ja"), here = InputSourceIdentity(id: "io.gksdud.test.here", language: "ko")
+    delegate.sourceCache = (list: [gone, here], layouts: [])
+    precondition(!delegate.switchSource(to: gone, from: here, pulse: (CGEvent(source: nil)!, CGEvent(source: nil)!))
+        && delegate.switchLanding == nil && delegate.sourceCache?.list.contains(gone) != true,
+        "A source that is gone is not switched to, the shortcut is not sent, and macOS's list is read again")
     engine.disabledSources = [pinyin]
     precondition(!delegate.takesSourceKey(code) || delegate.sourceKeyTarget(code) != pinyin, "Turned off, its key is not taken")
     engine.disabledSources = []
@@ -1318,7 +1323,8 @@ func runPermissionTests() {
         let lower = badge(english, caps: false), upper = badge(english, caps: true)
         precondition(lower !== upper && delegate.englishPreview.image === upper, "On, English and its preview follow Caps Lock")
         precondition(badge(korean, caps: true) === badge(korean, caps: false) && badge(japanese, caps: true) === badge(japanese, caps: false)
-            && delegate.inputBadge.image === delegate.badgeImage(label: "JA", filled: false), "Other sources stay as they were")
+            && delegate.inputBadge.image === (delegate.cachedNativeIcon(japanese.source.id) ?? delegate.badgeImage(label: "JA", filled: false)),
+            "Other sources stay as they were, in their own icons")
         precondition(badge(english, caps: true) === upper, "The same icon is kept, not drawn again")
     }
     // Hiding the menu bar icon keeps the choice but turns it off and dims it, as with replacing the Mac input menu.
