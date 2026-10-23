@@ -449,6 +449,13 @@ func movedCycle(_ order: [String], visible: [String], moving id: String, to inde
 private final class SourceCheckbox: NSButton { var sourceID = "" }
 private final class SourceKeyPicker: NSPopUpButton { var sourceID = "" }
 private final class InternalKeyPicker: NSPopUpButton { var sourceID = "" }
+// Only the cycle's rows start a drag; the table would otherwise hide a row it has nothing to drag for.
+final class SourceTable: NSTableView {
+    var draggable: (Int) -> Bool = { _ in false }
+    override func canDragRows(with rowIndexes: IndexSet, at mouseDownPoint: NSPoint) -> Bool {
+        rowIndexes.allSatisfy(draggable) && super.canDragRows(with: rowIndexes, at: mouseDownPoint)
+    }
+}
 
 // The 입력 소스 추가 section of the extras tab, and its sheet: each source in use or not, in the cycle or not, and its key.
 final class AddedSourcesSettings: NSObject, NSTableViewDataSource, NSTableViewDelegate {
@@ -459,7 +466,7 @@ final class AddedSourcesSettings: NSObject, NSTableViewDataSource, NSTableViewDe
     let edit = NSButton(title: "입력 소스 설정", target: nil, action: nil)
     let warning = NSTextField(wrappingLabelWithString: "")
     let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 720, height: 490), styleMask: [.titled], backing: .buffered, defer: false)
-    let table = NSTableView()
+    let table = SourceTable()
     let returns = NSButton(checkboxWithTitle: "전용 전환 키를 한 번 더 누를 시 직전 입력 소스로 전환", target: nil, action: nil)
     let compatible = NSButton(checkboxWithTitle: "호환성 모드", target: nil, action: nil)
     let sheetWarning = NSTextField(wrappingLabelWithString: "")
@@ -516,6 +523,10 @@ final class AddedSourcesSettings: NSObject, NSTableViewDataSource, NSTableViewDe
         table.allowsColumnReordering = false
         table.allowsColumnResizing = false
         table.dataSource = self; table.delegate = self
+        table.draggable = { [unowned self] row in
+            guard self.usable, self.rows.indices.contains(row), case .source(_, .cycle) = self.rows[row] else { return false }
+            return true
+        }
         table.registerForDraggedTypes([Self.rowType])
         table.draggingDestinationFeedbackStyle = .gap
         table.setDraggingSourceOperationMask(.move, forLocal: true)
@@ -742,6 +753,10 @@ final class AddedSourcesSettings: NSObject, NSTableViewDataSource, NSTableViewDe
     func tableView(_ tableView: NSTableView, validateDrop info: NSDraggingInfo, proposedRow row: Int,
                    proposedDropOperation dropOperation: NSTableView.DropOperation) -> NSDragOperation {
         dropOperation == .above && row <= cycleCount && info.draggingPasteboard.string(forType: Self.rowType) != nil ? .move : []
+    }
+    // A drag dropped nowhere shows its rows again.
+    func tableView(_ tableView: NSTableView, draggingSession session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
+        if operation == [] { tableView.reloadData() }
     }
     func tableView(_ tableView: NSTableView, acceptDrop info: NSDraggingInfo, row: Int, dropOperation: NSTableView.DropOperation) -> Bool {
         guard let id = info.draggingPasteboard.string(forType: Self.rowType) else { return false }
