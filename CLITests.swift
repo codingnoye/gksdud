@@ -20,13 +20,18 @@ func runCommandTests() {
     precondition(parse(["set", "keyboard.Magic Keyboard 2.0.keys-=caps-lock", "keyboard.*.mode=OFF", "keyboard.ab12.keys=default"])?.command == .set([
         change("keys", "Magic Keyboard 2.0", .remove, value: .list(["caps-lock"])), change("mode", "*", value: .text("off")), change("keys", "ab12", value: .none)]),
         "A keyboard's name can hold dots")
+    precondition(parse(["set", "source.com.apple.keylayout.ABC.key=Opt-Space", "source.Japanese.enabled=off", "source.ko.key=none"])?.command == .set([
+        CLI.Change(address: CLI.Address(name: "key", keyboard: nil, source: "com.apple.keylayout.ABC"), operation: .set, value: .text("opt-space")),
+        CLI.Change(address: CLI.Address(name: "enabled", keyboard: nil, source: "Japanese"), operation: .set, value: .bool(false)),
+        CLI.Change(address: CLI.Address(name: "key", keyboard: nil, source: "ko"), operation: .set, value: .none)]), "A source's ID can hold dots")
     precondition(parse(["pause", "--no-alert"])?.options.alert == false && parse(["pause"])?.options.alert == true)
     precondition(parse(["pause"])?.command == .set([change("paused", value: .bool(true))]) && parse(["toggle", "escape"])?.command == .toggle([CLI.Address(name: "escape", keyboard: nil)]))
     for wrong in [["set"], ["set", "nope=on"], ["set", "active"], ["set", "active=maybe"], ["set", "active+=on"], ["toggle", "keys"], ["set", "keys="],
-                  ["set", "keyboard.x.keys=ctrl-space"], ["set", "keyboard..mode=on"], ["get", "keyboard."], ["status", "x"], ["frobnicate"], ["--nope"]] {
+                  ["set", "keyboard.x.keys=ctrl-space"], ["set", "keyboard..mode=on"], ["get", "keyboard."], ["status", "x"], ["frobnicate"], ["--nope"],
+                  ["set", "source.x.key=caps"], ["set", "source..enabled=on"], ["set", "source.x.key+=caps-lock"], ["set", "added-mode=cycle"]] {
         precondition(parse(wrong) == nil, "A usage error: \(wrong)")
     }
-    print("PASS: commands, options, issue #47's flags, list operations, keyboard names with dots, usage errors")
+    print("PASS: commands, options, issue #47's flags, list operations, keyboard and source names with dots, usage errors")
 
     _ = NSApplication.shared
     let suite = "io.gksdud.command-tests.\(UUID().uuidString)"
@@ -94,7 +99,7 @@ func runCommandTests() {
 
     reply = run("set", "long-press=on", "keyboard.nothing.mode=off")
     precondition(reply.exit == CLI.Exit.usage && !engine.longPressCapsLock, "A keyboard not found stops the whole command")
-    precondition(run("set", "separate-source=nothing-like-this").exit == CLI.Exit.usage)
+    precondition(run("set", "source.nothing-like-this.key=right-option").exit == CLI.Exit.usage)
     reply = run("set", "keyboard.keyboard one.mode=off")
     precondition(reply.exit == CLI.Exit.ok && engine.keyboards.known[one.identity.key]?.mode == .off && engine.keyboards.known[two.identity.key]?.mode == .default)
     precondition(run("set", "keyboard.\(two.identity.key.prefix(6)).keys=right-option").exit == CLI.Exit.ok
@@ -120,14 +125,32 @@ func runCommandTests() {
     precondition(run("sources").json["sources"] is [[String: Any]])
     print("PASS: Accessibility, one command at a time, status and sources")
 
-    // What the window shows in a window, such as a separate key that is a Korean/English key, shows there too unless --no-alert.
+    // Sources by exact ID: Korean and English ones can have keys too, and saving reads macOS's list again, so it is set each time.
+    let korean = "com.apple.inputmethod.Korean.2SetKorean", abc = "com.apple.keylayout.ABC", japanese = "com.apple.inputmethod.Kotoeri.RomajiTyping.Japanese"
+    func withSources(_ arguments: String...) -> CommandReply {
+        delegate.sourceCache = (list: [InputSourceIdentity(id: korean, language: "ko"), InputSourceIdentity(id: abc, language: "en"),
+                                       InputSourceIdentity(id: japanese, language: "ja")], layouts: [abc])
+        return delegate.runCommand(arguments)
+    }
+    // What the window shows in a window, such as a source's key that is a Korean/English key, shows there too unless --no-alert.
     // A declined warning was the command's answer, so it shows nothing.
-    precondition(shown.isEmpty && run("set", "added-sources=on", "added-mode=separate").exit == CLI.Exit.ok)
-    precondition(run("set", "separate-key=right-command", "--no-alert").exit == CLI.Exit.failed && shown.isEmpty && engine.separateKey == nil)
-    precondition(run("set", "separate-key=right-command").exit == CLI.Exit.failed && shown.count == 1 && shown[0].count == 1
+    precondition(shown.isEmpty && withSources("set", "added-sources=on").exit == CLI.Exit.ok)
+    precondition(withSources("set", "source.\(abc).key=right-command", "--no-alert").exit == CLI.Exit.failed && shown.isEmpty && engine.sourceKeys.isEmpty)
+    precondition(withSources("set", "source.\(abc).key=right-command").exit == CLI.Exit.failed && shown.count == 1 && shown[0].count == 1
         && shown[0][0].contains("한영 키로 사용 중"), "Once, however often it was tried")
-    precondition(run("set", "added-mode=cycle", "added-sources=off").exit == CLI.Exit.ok)
-    print("PASS: errors and notices in a window by default, only in the result with --no-alert")
+    precondition(withSources("set", "source.\(korean).key=opt-space", "source.\(abc).enabled=off", "cycle=\(japanese)").exit == CLI.Exit.ok
+        && engine.sourceKeys == [korean: spaceCombos[2]] && engine.disabledSources == [abc] && engine.cycleSources == [japanese],
+        "A Korean source's key, a source turned off, and a cycle of one")
+    precondition(withSources("get", "source.\(abc).enabled").text == "off" && withSources("get", "source.\(korean).key").text == "opt-space")
+    let listed = withSources("sources").json["sources"] as? [[String: Any]]
+    precondition(listed?.first { $0["id"] as? String == korean }?["key"] as? String == "opt-space"
+        && listed?.first { $0["id"] as? String == abc }?["enabled"] as? Bool == false, "The source list shows them")
+    precondition(withSources("set", "source.\(japanese).key=opt-space").exit == CLI.Exit.ok && engine.sourceKeys == [japanese: spaceCombos[2]],
+        "A key moves from one source to another")
+    precondition(withSources("toggle", "source.\(abc).enabled").exit == CLI.Exit.ok && engine.disabledSources.isEmpty)
+    precondition(withSources("set", "source.\(japanese).key=none", "added-sources=off").exit == CLI.Exit.ok && engine.sourceKeys.isEmpty)
+    engine.cycleSources = nil; delegate.sourceCache = nil
+    print("PASS: errors and notices in a window by default, only in the result with --no-alert; sources' keys, turning them off, the cycle")
 
     // Paused, keyboards get their own keys back and Space combinations pass, without undoing the shortcut.
     defaults.set(true, forKey: "active")

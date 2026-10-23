@@ -35,9 +35,9 @@ func runSelfTest() {
     runSessionAwayTests()
     runCapsLockKeyTests()
     runAddedSourceTests()
-    runSeparateKeyTests()
-    runSeparateKeyTapTests()
-    runSeparateKeyWarningTests()
+    runSourceKeyTests()
+    runSourceKeyTapTests()
+    runSourceKeyWarningTests()
     runPermissionTests()
     runCommandTests()
     for initial in [false, true] {
@@ -47,7 +47,7 @@ func runSelfTest() {
             caps.willSwitch(english: true, actual: initial, longPress: holdEnabled)
             caps.capsKeyChanged(english: true, actual: !initial)
             precondition(caps.remembered == initial, "Ignore Caps reset during source transition")
-            precondition(caps.target(english: false) == nil, "Never force Caps in Korean or other sources")
+            precondition(caps.target(english: false) == false, "Other sources have the lock off")
             caps.switching = false
             caps.capsKeyChanged(english: false, actual: !initial)
             caps.willSwitch(english: false, actual: false, longPress: holdEnabled)

@@ -957,29 +957,38 @@ func runAddedSourceTests() {
     let enabled = [abc, ko, ja, zh]
     func cycle(_ current: InputSourceIdentity, _ order: [String] = ["ko2", "abc", "ja"], enabled: [InputSourceIdentity] = enabled,
                history: SourceHistory = SourceHistory()) -> String? {
-        addedSourceTarget(separateKey: false, current: current, mode: .cycle, cycle: order, separate: nil, enabled: enabled, history: history)?.id
+        cycleTarget(current: current, cycle: order, enabled: enabled, history: history)?.id
     }
-    featureCheck(cycle(ko) == "abc" && cycle(abc) == "ja" && cycle(ja) == "ko2", "The Korean/English key goes round the list and back")
+    featureCheck(cycle(ko) == "abc" && cycle(abc) == "ja" && cycle(ja) == "ko2", "The Korean/English key goes round the cycle and back")
     featureCheck(cycle(ko3, enabled: enabled + [ko3]) == "abc", "Another Korean layout takes Korean's place")
+    featureCheck(cycle(ko3, ["ko2", "ko3", "abc"], enabled: enabled + [ko3]) == "abc" && cycle(ko, ["ko2", "ko3", "abc"], enabled: enabled + [ko3]) == "ko3",
+        "Korean sources in the cycle go by their own IDs")
     var history = SourceHistory()
     for id in ["abc", "ja", "zh"] { history.note(id) }
-    featureCheck(cycle(zh, history: history) == "ja", "From outside the list it resumes at the most recent entry")
+    featureCheck(cycle(zh, history: history) == "ja", "From outside the cycle it resumes at the most recent entry")
     featureCheck(cycle(zh) == "ko2", "or at the first one without history")
-    featureCheck(cycle(ko, ["ko2", "gone", "abc"]) == "abc", "Sources macOS no longer offers are skipped")
-    featureCheck(cycle(ko, ["ko2", "gone"]) == nil, "Fewer than two leaves the system shortcut alone")
-    featureCheck(addedSourceTarget(separateKey: true, current: ko, mode: .cycle, cycle: ["ko2", "abc"], separate: "zh", enabled: enabled, history: history) == nil)
-    func separate(_ current: InputSourceIdentity, key: Bool, source: String? = "zh", enabled: [InputSourceIdentity] = enabled + [us],
-                  history: SourceHistory = SourceHistory()) -> String? {
-        addedSourceTarget(separateKey: key, current: current, mode: .separate, cycle: [], separate: source, enabled: enabled, history: history)?.id
-    }
+    featureCheck(cycle(ko, ["ko2", "gone", "abc"]) == "abc" && cycle(ko, enabled: [ko, ja, zh]) == "ja", "Sources gone or turned off are skipped")
+    featureCheck(cycle(ko, ["ko2", "gone"]) == nil && cycle(ko, []) == nil, "Fewer than two leaves the system shortcut alone")
     var recent = SourceHistory()
     for id in ["abc", "ko2", "us", "zh"] { recent.note(id) }
-    featureCheck(separate(ko, key: false, history: recent) == "us" && separate(abc, key: false, history: recent) == "ko2",
-        "The Korean/English key goes between the most recent Korean and English")
-    featureCheck(separate(zh, key: false, history: recent) == "us", "and from the added source back to the most recent of them")
-    featureCheck(separate(ko, key: true) == "zh" && separate(abc, key: true) == "zh" && separate(ja, key: true) == "zh", "The separate key goes to its source")
-    featureCheck(separate(zh, key: true, history: recent) == "us", "and back to the most recent Korean or English")
-    featureCheck(separate(ko, key: true, source: "gone") == nil && separate(ko, key: true, source: nil) == nil, "A source that is gone does nothing")
+    func key(_ id: String, _ current: InputSourceIdentity, returns: Bool = true, history: SourceHistory = SourceHistory()) -> String? {
+        keySourceTarget(id, current: current, returns: returns, enabled: enabled + [us], history: history)?.id
+    }
+    featureCheck(key("zh", ko) == "zh" && key("zh", abc) == "zh" && key("zh", ja) == "zh", "A source's key goes to its source")
+    featureCheck(key("ko2", abc) == "ko2" && key("abc", ko) == "abc", "Korean and English sources have keys too")
+    featureCheck(key("zh", zh, history: recent) == "us" && key("ko2", ko, history: recent) == "zh", "Pressed there again, back to the source before it")
+    featureCheck(key("zh", zh, returns: false, history: recent) == nil, "or nothing with that off")
+    featureCheck(key("gone", ko) == nil, "A source that is gone or turned off does nothing")
+    func toggle(_ current: InputSourceIdentity) -> String? { languageToggleTarget(current: current, enabled: enabled + [us], history: recent)?.id }
+    featureCheck(toggle(ko) == "us" && toggle(abc) == "ko2" && toggle(zh) == "us", "Without added sources Korean and English go back and forth")
+    featureCheck(movedCycle(["a", "off", "b", "c"], visible: ["a", "b", "c"], moving: "c", to: 0) == ["c", "off", "a", "b"],
+        "Dragged to the top; a source turned off keeps its place")
+    featureCheck(movedCycle(["a", "b", "c"], visible: ["a", "b", "c"], moving: "a", to: 3) == ["b", "c", "a"]
+        && movedCycle(["a", "b", "c"], visible: ["a", "b", "c"], moving: "a", to: 1) == ["a", "b", "c"]
+        && movedCycle(["a", "b", "c"], visible: ["a", "b", "c"], moving: "x", to: 0) == ["a", "b", "c"], "Dropped below itself, or not a member")
+    featureCheck(sourceDisplayTitle("두벌식", provider: "구름 입력기") == "두벌식 · 구름 입력기"
+        && sourceDisplayTitle("ABC", provider: nil) == "ABC" && sourceDisplayTitle("ABC", provider: "")  == "ABC"
+        && sourceDisplayTitle("Gureum Han2", provider: "gureum") == "Gureum Han2", "An input method's name follows its mode's, once")
     var capped = SourceHistory()
     for index in 0..<20 { capped.note("s\(index)") }
     capped.note("s19"); capped.note("s18")
@@ -1034,13 +1043,40 @@ func runAddedSourceTests() {
                                     ["KeyboardLayout Name": "ABC – AZERTY"], ["KeyboardLayout Name": "Removed"], ["KeyboardLayout Name": "U.S."]]
     featureCheck(systemHistory(entries, sources: infos) == ["com.apple.inputmethod.Korean.2SetKorean", "com.apple.keylayout.US",
         "com.apple.inputmethod.Kotoeri.RomajiTyping.Japanese", "com.apple.keylayout.ABC-AZERTY"], "Entries map to sources until one does not")
-    print("PASS: added input sources: cycle order, other layouts, outside the list, missing sources, separate key and back, history, badges, switch plans, landing, notifications, system history")
+    // The earlier cycle-or-separate choice: separate kept Korean and English on the Korean/English key, and its source's key.
+    let migrateSuite = "io.gksdud.added-migrate-tests.\(UUID().uuidString)", migrateDefaults = UserDefaults(suiteName: migrateSuite)!
+    defer { migrateDefaults.removePersistentDomain(forName: migrateSuite) }
+    let migrating = Engine(defaults: migrateDefaults, discover: { [] })
+    migrating.accessibilityTrusted = { true }
+    migrateDefaults.set(1, forKey: "addedSourceMode"); migrateDefaults.set("zh", forKey: "separateSource")
+    migrateDefaults.set(NSNumber(value: spaceCombos[2]), forKey: "separateKey")
+    migrating.migrateAddedSources(enabled: enabled + [us])
+    featureCheck(migrating.cycleSources == ["ko2", "abc", "us"] && migrating.sourceKeys == ["zh": spaceCombos[2]] && migrating.sourceKeyReturns
+        && ["addedSourceMode", "separateSource", "separateKey"].allSatisfy { migrateDefaults.object(forKey: $0) == nil }, "Separate becomes a cycle and a key")
+    migrateDefaults.set(0, forKey: "addedSourceMode"); migrateDefaults.set("ja", forKey: "separateSource")
+    migrating.migrateAddedSources(enabled: enabled)
+    featureCheck(migrating.cycleSources == ["ko2", "abc", "us"] && migrating.sourceKeys == ["zh": spaceCombos[2]]
+        && migrateDefaults.object(forKey: "separateSource") == nil, "Cycling keeps its cycle and drops the unused separate settings")
+    migrating.migrateAddedSources(enabled: [])
+    featureCheck(migrating.cycleSources == ["ko2", "abc", "us"], "Once only")
+    migrating.setSourceKey(spaceCombos[2], for: "ja")
+    featureCheck(migrating.sourceKeys == ["ja": spaceCombos[2]], "One source per key")
+    migrating.setSourceKey(sources[1], for: "ja"); migrating.setSourceKey(sources[3], for: "abc")
+    featureCheck(migrating.sourceKeys == ["ja": sources[1], "abc": sources[3]] && migrating.usedSourceKeys.isEmpty, "Unused while added sources are off")
+    migrateDefaults.set(true, forKey: "addedSources"); migrating.disabledSources = ["abc"]
+    featureCheck(migrating.usedSourceKeys == ["ja": sources[1]] && migrating.sourceKeyTargets.mapValues(\.name) == [sources[1]: "F18"],
+        "A source turned off leaves its key unused")
+    migrating.disabledSources = []
+    featureCheck(migrating.sourceKeyTargets.mapValues(\.name) == [sources[1]: "F18", sources[3]: "F17"] && migrating.sourceKeyMappings.count == 2,
+        "Each single key on an F-key of its own")
+    print("PASS: added input sources: cycle order, other layouts, exact IDs, outside the cycle, missing and turned-off sources, sources' keys and back, history, badges, switch plans, landing, notifications, system history, earlier settings")
 }
 // Drives the running gksdud with its switch keys, then reads the input source and what this probe's text view receives.
 // Launch the test app from build.sh, signed like the installed one, so it has gksdud's Accessibility permission:
 // open -n -W --stdout <file> <test app> --args --probe-input-sources
-// Needs Korean, English and one more input source. It turns added sources on in the running app's settings, which this
-// probe shares, and puts them back afterwards. Letters go only to this probe; switch keys go only while it is frontmost.
+// Needs Korean, English and one more input source. It turns added sources, long press and case preservation on in the
+// running app's settings, which this probe shares, and puts them back afterwards. Letters go only to this probe; switch keys
+// go only while it is frontmost.
 func probeInputSources() throws {
     func failure(_ code: Int, _ message: String) -> NSError { NSError(domain: "probe", code: code, userInfo: [NSLocalizedDescriptionKey: message]) }
     let app = NSApplication.shared
@@ -1056,10 +1092,11 @@ func probeInputSources() throws {
     let enabled = delegate.enabledSources()
     guard let ko = enabled.first(where: isKorean), let en = enabled.first(where: isEnglish),
           let foreign = enabled.first(where: { !isKorean($0) && !isEnglish($0) }),
-          let korean = AppDelegate.sourceForID(ko.id), let english = AppDelegate.sourceForID(en.id) else {
+          let korean = AppDelegate.sourceForID(ko.id), let english = AppDelegate.sourceForID(en.id),
+          let other = AppDelegate.sourceForID(foreign.id) else {
         defaults.removePersistentDomain(forName: suite); throw failure(3, "Korean, English and one more input source are required.")
     }
-    let keys = ["addedSources", "addedSourceMode", "cycleSources", "separateSource", "separateKey"]
+    let keys = ["addedSources", "cycleSources", "sourceKeys", "disabledSources", "sourceKeyReturns", "longPressCapsLock", "preserveCapsLock"]
     let backup = keys.map { saved.object(forKey: $0) }
     let panel = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 140), styleMask: [.titled], backing: .buffered, defer: false)
     panel.title = "gksdud 입력 소스 추가 실험"
@@ -1073,13 +1110,16 @@ func probeInputSources() throws {
             if let event = app.nextEvent(matching: .any, until: Date(timeIntervalSinceNow: 0.005), inMode: .default, dequeue: true) { app.sendEvent(event) }
         }
     }
+    let savedCaps = CGEventSource.flagsState(.combinedSessionState).contains(.maskAlphaShift)
     defer {
         for (key, value) in zip(keys, backup) { saved.set(value, forKey: key) }
+        try? setCapsLock(savedCaps)
         text.inputContext?.discardMarkedText(); _ = TISSelectInputSource(savedSource); pump(0.3)
         panel.orderOut(nil); previousApp?.activate(options: [])
         defaults.removePersistentDomain(forName: suite)
     }
-    panel.makeKeyAndOrderFront(nil); panel.makeFirstResponder(text); app.activate(ignoringOtherApps: true); pump(0.5)
+    // Right after this app launches, a switch after the sources are reordered can miss it, so it waits a little.
+    panel.makeKeyAndOrderFront(nil); panel.makeFirstResponder(text); app.activate(ignoringOtherApps: true); pump(5)
     func frontmost() -> Bool { panel.isKeyWindow && NSWorkspace.shared.frontmostApplication?.processIdentifier == getpid() }
     func focus() throws {
         guard !frontmost() else { return }
@@ -1103,22 +1143,32 @@ func probeInputSources() throws {
         for code in codes { for down in [true, false] { CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(code), keyDown: down)!.postToPid(getpid()) }; pump(0.06) }
         pump(0.2)
     }
+    // Held past the long press.
+    func hold(_ code: Int) throws {
+        try focus()
+        CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(code), keyDown: true)!.post(tap: .cghidEventTap); pump(0.8)
+        CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(code), keyDown: false)!.post(tap: .cghidEventTap); pump(0.6)
+    }
     // This app's own selection reaches its input, unlike one from the background.
     func start(_ source: TISInputSource) throws {
         try focus(); text.inputContext?.discardMarkedText(); text.string = ""
         _ = TISSelectInputSource(source == english ? korean : english); pump(0.3)
         _ = TISSelectInputSource(source); pump(0.5)
     }
+    var caps: Bool { CGEventSource.flagsState(.combinedSessionState).contains(.maskAlphaShift) }
     var passed = 0, total = 0
     func expect(_ name: String, _ source: InputSourceIdentity, _ typed: (String) -> Bool) {
         let current = delegate.currentSource?.id ?? "", ok = current == source.id && typed(text.string)
         total += 1; if ok { passed += 1 }
         print("PROBE \(ok ? "PASS" : "FAIL"): \(name), expected=\(source.id), actual=\(current) text=\(text.string.debugDescription)")
     }
-    // Typing in the added source gives neither plain letters nor Hangul.
-    func foreignText(_ text: String) -> Bool { !text.hasSuffix("ka") && !text.unicodeScalars.contains { (0x3131...0xD7A3).contains($0.value) } }
+    // Typing in the added source gives neither plain letters nor Hangul; pinyin's letters are still being composed.
+    func foreignText(_ typed: String) -> Bool {
+        (!typed.hasSuffix("ka") || text.hasMarkedText()) && !typed.unicodeScalars.contains { (0x3131...0xD7A3).contains($0.value) }
+    }
     let (g, k, a) = (kVK_ANSI_G, kVK_ANSI_K, kVK_ANSI_A), space = kVK_Space
-    saved.set(true, forKey: "addedSources"); saved.set(AddedSourceMode.cycle.rawValue, forKey: "addedSourceMode")
+    saved.set(true, forKey: "addedSources"); saved.set(false, forKey: "longPressCapsLock"); saved.set(false, forKey: "preserveCapsLock")
+    for key in ["sourceKeys", "disabledSources", "sourceKeyReturns"] { saved.removeObject(forKey: key) }
     saved.set([ko.id, en.id, foreign.id], forKey: "cycleSources"); pump(1.2)
     try start(korean); try type([g])
     try press(target.keyCode); try type([k, a])
@@ -1131,19 +1181,19 @@ func probeInputSources() throws {
     try type([g]); try press(target.keyCode); try type([k, a])
     // The next syllable takes ㅎ as its final consonant, and it still goes along.
     expect("cycle: second round, Korean composing -> English", en) { $0 == "핳ka" }
-    saved.set(AddedSourceMode.separate.rawValue, forKey: "addedSourceMode"); saved.set(foreign.id, forKey: "separateSource")
-    saved.set(NSNumber(value: spaceCombos[2]), forKey: "separateKey"); pump(1.2)
+    // Korean and English on the Korean/English key, and the other source on a key of its own.
+    saved.set([ko.id, en.id], forKey: "cycleSources"); saved.set([foreign.id: NSNumber(value: spaceCombos[2])], forKey: "sourceKeys"); pump(1.2)
     try start(korean)
     try press(space, .maskAlternate); try type([k, a])
-    expect("separate: Korean -> \(foreign.id)", foreign, foreignText)
+    expect("key: Korean -> \(foreign.id)", foreign, foreignText)
     text.inputContext?.discardMarkedText(); text.string = ""
     try press(space, .maskAlternate); try type([g, k])
-    expect("separate: back to Korean", ko) { $0 == "하" }
+    expect("key: back to Korean", ko) { $0 == "하" }
     // The way back set English up as the shortcut's previous source, so Korean's syllable in progress goes along.
     text.string = ""; try type([g]); try press(target.keyCode); try type([k, a])
-    expect("separate: Korean composing -> English after it", en) { $0 == "ㅎka" }
+    expect("key: Korean composing -> English after it", en) { $0 == "ㅎka" }
     text.string = ""; try press(space, .maskAlternate); try press(space, .maskAlternate); try type([k, a])
-    expect("separate: there and back to English", en) { $0 == "ka" }
+    expect("key: there and back to English", en) { $0 == "ka" }
     // Pressed again before each switch lands: twice comes back, three times goes.
     func quick(_ times: Int) throws {
         try focus()
@@ -1157,9 +1207,39 @@ func probeInputSources() throws {
         pump(0.8)
     }
     try start(korean); try quick(2); try type([g, k])
-    expect("separate: twice quickly comes back", ko) { $0 == "하" }
+    expect("key: twice quickly comes back", ko) { $0 == "하" }
     text.string = ""; try quick(3); try type([k, a])
-    expect("separate: three times quickly goes", foreign, foreignText)
+    expect("key: three times quickly goes", foreign, foreignText)
+    saved.set(false, forKey: "sourceKeyReturns"); pump(0.3)
+    text.inputContext?.discardMarkedText(); text.string = ""; try press(space, .maskAlternate); try type([k, a])
+    expect("key: pressed again with going back off stays", foreign, foreignText)
+    saved.removeObject(forKey: "sourceKeyReturns")
+    // A Korean source's key goes there from anywhere, and back.
+    saved.set([ko.id: NSNumber(value: spaceCombos[2])], forKey: "sourceKeys"); saved.set([en.id, foreign.id], forKey: "cycleSources"); pump(1.2)
+    try start(english); try press(space, .maskAlternate); try type([g, k])
+    expect("Korean's key: English -> Korean", ko) { $0 == "하" }
+    text.string = ""; try press(target.keyCode); try type([k, a])
+    expect("Korean outside the cycle: back to it at English", en) { $0 == "ka" }
+    text.string = ""; try press(target.keyCode); try press(space, .maskAlternate); try type([g, k])
+    expect("Korean's key: \(foreign.id) -> Korean", ko) { $0 == "하" }
+    // Long press ends in English upper- or lowercase from any source, and case preservation keeps English's case past others.
+    saved.set([ko.id, en.id, foreign.id], forKey: "cycleSources"); saved.removeObject(forKey: "sourceKeys")
+    saved.set(true, forKey: "longPressCapsLock"); saved.set(true, forKey: "preserveCapsLock"); pump(1.2)
+    try? setCapsLock(false); pump(0.2)
+    try start(other); text.string = ""; try hold(target.keyCode); try type([k, a])
+    expect("long press: \(foreign.id) -> English", en) { $0 == (caps ? "KA" : "ka") }
+    // From English the press goes round and the hold comes back.
+    if !caps { text.string = ""; try hold(target.keyCode); try type([k, a]) }
+    expect("long press: English uppercase", en) { $0 == "KA" && caps }
+    text.string = ""; try press(target.keyCode); try type([k, a])
+    expect("preserved: English uppercase -> \(foreign.id) types its own", foreign) { foreignText($0) && !caps }
+    text.inputContext?.discardMarkedText(); text.string = ""; try press(target.keyCode); try type([g, k])
+    expect("preserved: -> Korean", ko) { $0 == "하" && !caps }
+    text.string = ""; try press(target.keyCode); try type([k, a])
+    expect("preserved: back in English uppercase", en) { $0 == "KA" && caps }
+    // Into Korean with the Korean/English key, as typing would.
+    text.string = ""; try press(target.keyCode); try press(target.keyCode); try hold(target.keyCode); try type([k, a])
+    expect("long press: Korean -> English lowercase", en) { $0 == "ka" && !caps }
     print("PROBE RESULT: \(passed)/\(total) added input source cases")
     guard passed == total else { throw failure(7, "Added input source expectations failed.") }
 }

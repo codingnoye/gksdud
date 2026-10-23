@@ -44,7 +44,8 @@ func spaceCombo(flags: CGEventFlags) -> UInt64? {
 func owns(_ record: [String: String]?, _ mapping: Mapping) -> Bool {
     guard let record, let source = mapping[srcKey]?.uint64Value, let target = mapping[dstKey]?.uint64Value else { return false }
     return decodeSources(record["source"]).contains(source)
-        && [record["target"], record["pendingTarget"], record["extraTarget"], record["pendingExtraTarget"]].contains(String(target))
+        && ([record["target"], record["pendingTarget"]].contains(String(target))
+            || (extraTargets(record["extraTarget"]) + extraTargets(record["pendingExtraTarget"])).contains(target))
 }
 
 func targetConflict(_ mappings: [Mapping], sources: [UInt64], target: UInt64, owned: [String: String]?) -> Bool {
@@ -155,35 +156,53 @@ final class Engine {
     var escapeToEnglish: Bool { defaults.bool(forKey: "escapeToEnglish") }
     var swapBackquote: Bool { defaults.bool(forKey: "swapBackquote") }
     var universalControlCompat: Bool { defaults.bool(forKey: "universalControlCompat") }
-    // A Caps Lock chosen as a Korean/English key reaches macOS as the reserved F-key, never as Caps Lock; so does the separate key.
+    // A Caps Lock chosen as a Korean/English key reaches macOS as the reserved F-key, never as Caps Lock; so does a source's key.
     // `fallback` checks default keys before they are saved.
     func capsLockSwitches(_ fallback: [UInt64]? = nil) -> Bool {
-        keyboards.maps(sources[2], default: fallback ?? defaultSources) || usesSeparateKey && separateKey == sources[2]
+        keyboards.maps(sources[2], default: fallback ?? defaultSources) || usedSourceKeys.values.contains(sources[2])
     }
-    // Input sources beside Korean and English: the Korean/English key goes round them (cycle), or a key of their own
-    // switches to one (separate). Off, nothing changes.
+    // Input sources beside Korean and English: the Korean/English key goes round some of them, and a source can have a key
+    // of its own. Off, nothing changes.
     var addedSourcesEnabled: Bool { defaults.bool(forKey: "addedSources") }
-    var addedSourceMode: AddedSourceMode { AddedSourceMode(rawValue: defaults.integer(forKey: "addedSourceMode")) ?? .cycle }
-    var usesSeparateKey: Bool { addedSourcesEnabled && addedSourceMode == .separate }
     var addedSourcesCompatible: Bool { defaults.bool(forKey: "addedSourcesCompatibility") }
-    // Saved once edited; until then every input source macOS offers.
+    // Saved once edited; until then every input source macOS offers. Sources turned off keep their place.
     var cycleSources: [String]? {
         get { defaults.stringArray(forKey: "cycleSources") }
         set { defaults.set(newValue, forKey: "cycleSources") }
     }
-    var separateSource: String? {
-        get { defaults.string(forKey: "separateSource") }
-        set { defaults.set(newValue, forKey: "separateSource") }
+    // Sources this app leaves alone: out of the cycle, without their keys, and never a way back.
+    var disabledSources: Set<String> {
+        get { Set(defaults.stringArray(forKey: "disabledSources") ?? []) }
+        set { defaults.set(newValue.isEmpty ? nil : newValue.sorted(), forKey: "disabledSources") }
     }
-    var separateKey: UInt64? {
-        get { (defaults.object(forKey: "separateKey") as? NSNumber).map(\.uint64Value).flatMap { hangulKeys.contains($0) ? $0 : nil } }
-        set { defaults.set(newValue.map { NSNumber(value: $0) }, forKey: "separateKey") }
+    // A key of a source's own, at most one source per key.
+    var sourceKeys: [String: UInt64] {
+        get {
+            (defaults.dictionary(forKey: "sourceKeys") as? [String: NSNumber] ?? [:])
+                .compactMapValues { hangulKeys.contains($0.uint64Value) ? $0.uint64Value : nil }
+        }
+        set { defaults.set(newValue.isEmpty ? nil : newValue.mapValues { NSNumber(value: $0) }, forKey: "sourceKeys") }
     }
-    // The separate key's own F-key, so the tap tells it from the Korean/English key. The tap takes every press of it,
-    // so it is one no system shortcut uses on its own.
-    var separateTarget: TargetKey {
+    func setSourceKey(_ key: UInt64?, for id: String) {
+        var keys = sourceKeys.filter { $0.key != id && $0.value != key }
+        if let key { keys[id] = key }
+        sourceKeys = keys
+    }
+    // Pressed again in its source, a source's key goes back to the source before it.
+    var sourceKeyReturns: Bool { defaults.object(forKey: "sourceKeyReturns") == nil || defaults.bool(forKey: "sourceKeyReturns") }
+    // The keys of the sources turned on.
+    var usedSourceKeys: [String: UInt64] {
+        guard addedSourcesEnabled else { return [:] }
+        let disabled = disabledSources
+        return sourceKeys.filter { !disabled.contains($0.key) }
+    }
+    // Each single key's own F-key, so the tap tells them from the Korean/English key and each other. The tap takes every
+    // press of them, so they are ones no system shortcut uses on their own while there are enough.
+    var sourceKeyTargets: [UInt64: TargetKey] {
         let order = [18, 17, 16, 20, 19, 15, 14, 13].map { targets[$0 - 13] }.filter { $0.name != target.name }
-        return order.first { !systemFKeys.contains($0.keyCode) } ?? order[0]
+        let free = order.filter { !systemFKeys.contains($0.keyCode) } + order.filter { systemFKeys.contains($0.keyCode) }
+        let keys = sources.filter(Set(usedSourceKeys.values).contains)
+        return Dictionary(uniqueKeysWithValues: zip(keys, free))
     }
     // Read when settings change, not on every key.
     private(set) var systemFKeys: Set<Int> = []
@@ -207,21 +226,32 @@ final class Engine {
     // While the screen is locked or another user's session is in front, keyboards keep their own keys: no key press
     // reaches the tap there, so a mapped Caps Lock could not even turn uppercase off. The app sets this at launch.
     var sessionAway: () -> Bool = { false }
-    // Mapped like a Korean/English key, but only while the tap can act on it. A Space combination stays in the tap.
-    var separateMapping: ExtraKey? {
-        guard active, usesSeparateKey, separateSource != nil, let key = separateKey, sources.contains(key), accessibilityTrusted() else { return nil }
-        return ExtraKey(source: key, target: separateTarget.usage)
+    // Mapped like a Korean/English key, but only while the tap can act on them. Space combinations stay in the tap.
+    var sourceKeyMappings: [ExtraKey] {
+        guard active, accessibilityTrusted() else { return [] }
+        return sourceKeyTargets.map { ExtraKey(source: $0.key, target: $0.value.usage) }.sorted { $0.target < $1.target }
     }
-    // Whether another mapping already changes `key` on a keyboard the separate key would apply to.
-    func separateKeyConflict(_ key: UInt64) -> Bool {
-        services().filter { keyboards.isSelected($0) }.contains { service in
-            mappings(service).contains { $0[srcKey]?.uint64Value == key && $0[dstKey]?.uint64Value != separateTarget.usage && !owns(records[id(service)], $0) }
+    // Whether another mapping already changes `key` on a keyboard the sources' keys would apply to.
+    func sourceKeyConflict(_ key: UInt64) -> Bool {
+        let ours = Set(sourceKeyTargets.values.map(\.usage))
+        return services().filter { keyboards.isSelected($0) }.contains { service in
+            mappings(service).contains { $0[srcKey]?.uint64Value == key && !ours.contains($0[dstKey]?.uint64Value ?? 0) && !owns(records[id(service)], $0) }
         }
     }
-    // A key that is both stays a Korean/English key.
-    func separateKeyIsHangulKey(_ fallback: [UInt64]? = nil) -> Bool {
-        guard let key = separateKey else { return false }
-        return (fallback ?? defaultSources).contains(key) || keyboards.maps(key, default: fallback ?? defaultSources)
+    // Sources' keys that are Korean/English keys too, saved or about to be; such a key stays a Korean/English key.
+    func sourceKeysAmongHangulKeys(_ fallback: [UInt64]? = nil) -> [String: UInt64] {
+        usedSourceKeys.filter { (fallback ?? defaultSources).contains($0.value) || keyboards.maps($0.value, default: fallback ?? defaultSources) }
+    }
+    // Saved settings of the earlier cycle-or-separate choice become the same behavior here: separate kept Korean and English
+    // on the Korean/English key and gave one more source a key that goes there and back.
+    func migrateAddedSources(enabled: [InputSourceIdentity]) {
+        guard let mode = defaults.object(forKey: "addedSourceMode") as? NSNumber else { return }
+        if mode.intValue == 1 {
+            cycleSources = defaultCycle(enabled).filter { id in enabled.contains { $0.id == id && (isKorean($0) || isEnglish($0)) } }
+            if let id = defaults.string(forKey: "separateSource"), let key = (defaults.object(forKey: "separateKey") as? NSNumber)?.uint64Value,
+               hangulKeys.contains(key) { setSourceKey(key, for: id) }
+        }
+        for key in ["addedSourceMode", "separateSource", "separateKey"] { defaults.removeObject(forKey: key) }
     }
     var testInputText: String {
         get { defaults.string(forKey: "testInputText") ?? "한dud한dud한dud한dud" }
@@ -333,7 +363,7 @@ final class Engine {
         defaults.removeObject(forKey: "inputMenuBackedUp")
     }
     func reconcile() throws -> Int {
-        keyboards.reconcile(sources: defaultSources, target: target.usage, active: active, away: sessionAway() || paused, extra: separateMapping).applied
+        keyboards.reconcile(sources: defaultSources, target: target.usage, active: active, away: sessionAway() || paused, extras: sourceKeyMappings).applied
     }
     // Turning off is saved before anything is undone, so a later failure retries the undo instead of reapplying.
     func restore() throws {
@@ -472,7 +502,9 @@ struct EnglishCapsState {
     mutating func lockSeen(english: Bool, actual: Bool) { if english && !switching { remembered = actual } }
     // A key from another Mac carries that Mac's keyboard lock, the case it types here whatever happened to the lock here.
     mutating func followSender(_ caps: Bool) { remembered = caps }
-    func target(english: Bool) -> Bool? { english ? remembered : nil }
+    // Other sources type their own letters with the lock off, as the Korean input method turns it off on the way in;
+    // English gets its case back on the way out.
+    func target(english: Bool) -> Bool? { english ? remembered : remembered.map { _ in false } }
     func beforeLongPress(actual: Bool, preserving: Bool) -> Bool { preserving ? (remembered ?? actual) : actual }
     mutating func committedLongPress(_ desired: Bool) { remembered = desired }
 }
@@ -623,8 +655,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     var keyTapSource: CFRunLoopSource?
     var pressGate = PressGate()
     var spaceGate = SpaceComboGate()
-    // The separate key's F-key.
-    var separateGate = PressGate()
+    // The F-keys of the sources' keys.
+    var sourceKeyGate = PressGate()
     var nativeRemote = NativeRemoteGate()
     var sourceHistory = SourceHistory()
     var landingGeneration = 0
@@ -711,7 +743,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         if let tap = keyTap { CFMachPortInvalidate(tap) }
         releaseHeldKeys()
         keyTapSource = nil; keyTap = nil; pressGate.held.removeAll(); nativeRemote = NativeRemoteGate(); spaceGate = SpaceComboGate()
-        separateGate.held.removeAll(); observedCaps = nil; backquote.reset()
+        sourceKeyGate.held.removeAll(); observedCaps = nil; backquote.reset()
     }
     func ensureKeyTap() {
         defer { updateRemoteHold() }
@@ -773,16 +805,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 let code = event.getIntegerValueField(.keyboardEventKeycode)
                 let repeated = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
                 // Keys typed before a switch with selections lands wait for it, so they reach the source it lands on.
-                if owner.holdKeys && code != Int64(owner.engine.target.keyCode) && code != Int64(owner.engine.separateTarget.keyCode)
-                    && !owner.pressGate.held.contains(code) && !owner.separateGate.held.contains(code) && owner.longPress.key != code {
+                if owner.holdKeys && code != Int64(owner.engine.target.keyCode) && owner.sourceKeyTarget(code) == nil
+                    && !owner.pressGate.held.contains(code) && !owner.sourceKeyGate.held.contains(code) && owner.longPress.key != code {
                     owner.holdKey(event)
                     return nil
                 }
                 owner.swapBackquote(event)
-                // The separate key's F-key only switches, on press like the Korean/English key.
-                if owner.takesSeparateKey(code) {
-                    let decision = owner.separateGate.handle(code: code, down: type == .keyDown, repeatKey: repeated, active: true, target: code)
-                    if decision.switchNow { _ = owner.switchSeparate(event) }
+                // A source's key's F-key only switches, on press like the Korean/English key.
+                if owner.takesSourceKey(code) {
+                    let decision = owner.sourceKeyGate.handle(code: code, down: type == .keyDown, repeatKey: repeated, active: true, target: code)
+                    if decision.switchNow, let id = owner.sourceKeyTarget(code) { _ = owner.switchToKeySource(id, key: event) }
                     return decision.consume ? nil : Unmanaged.passUnretained(event)
                 }
                 if owner.passesNatively(event, code: code, down: type == .keyDown, repeated: repeated) { return Unmanaged.passUnretained(event) }
@@ -885,7 +917,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         if koreanCaps { releaseKoreanCaps() }
     }
     // Caps Lock in Korean works only with preservation, so it goes off with it; left on, it would still warn when Caps Lock
-    // becomes a Korean/English or separate key.
+    // becomes a Korean/English key or a source's key.
     func turnOffUnusedKoreanCaps() {
         if !engine.preserveCapsLock { engine.defaults.set(false, forKey: "koreanCapsLock") }
     }
@@ -923,11 +955,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     // True when the Space belongs to a chosen combination and must reach neither apps nor system shortcuts.
     func handleSpaceCombo(_ event: CGEvent) -> Bool {
         guard event.getIntegerValueField(.keyboardEventKeycode) == Int64(kVK_Space) else { return false }
-        let separate = separateCombo
+        let own = sourceCombos
         let decision = spaceGate.handle(down: event.type == .keyDown,
-            repeatKey: event.getIntegerValueField(.keyboardEventAutorepeat) != 0, flags: event.flags, chosen: engine.chosenCombos + (separate.map { [$0] } ?? []))
-        if decision.switchNow, let separate, spaceCombo(flags: event.flags) == separate {
-            guard switchSeparate(event) else { spaceGate.held = false; return false }
+            repeatKey: event.getIntegerValueField(.keyboardEventAutorepeat) != 0, flags: event.flags, chosen: engine.chosenCombos + own.keys)
+        if decision.switchNow, let id = spaceCombo(flags: event.flags).flatMap({ own[$0] }) {
+            guard switchToKeySource(id, key: event) else { spaceGate.held = false; return false }
         } else if decision.switchNow {
             // Without a pulse, give the Space back instead of swallowing it.
             guard let pulse = nativeSwitchPulse(keyCode: engine.target.keyCode, marker: nativePulseMarker) else { spaceGate.held = false; return false }
@@ -948,7 +980,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     func restoreEnglishCaps() {
         // The lock screen selects U.S. for itself; restoring there would start the password in the remembered case.
         guard !optionInput.busy, capsPreservationActive, pendingCapsState == nil, !engine.sessionAway() else { return }
-        // With Caps Lock in Korean, Korean shows the English case as well; its input method turns Caps Lock off on the way in.
+        // With Caps Lock in Korean, Korean shows the English case as well; its input method turns Caps Lock off on the way in,
+        // and other sources have it turned off here.
         let source = currentSource
         guard let desired = englishCaps.target(english: source?.language.hasPrefix("en") == true || showsEnglishCase(source)),
               currentCaps != desired else { return }
@@ -1134,6 +1167,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         editEntry.submenu = editMenu; mainMenu.addItem(editEntry)
         NSApp.mainMenu = mainMenu
         if askForPermission { keepActivationUntilTrusted() }
+        engine.migrateAddedSources(enabled: enabledSources())
         buildWindow()
         updateMenu()
         updates.onChange = { [weak self] in self?.refreshUpdates() }
@@ -1212,9 +1246,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
     // The keyboard sheet saves a change before this check and undoes it on false.
     func confirmKeyboardChange(_ keyboards: Set<String>) -> Bool {
-        guard confirmCapsLockKey(engine.capsLockSwitches()), confirmSeparateKey(),
+        guard confirmCapsLockKey(engine.capsLockSwitches()), confirmSourceKeys(),
               !engine.active || confirmMapping(engine.defaultSources, target: engine.target, only: keyboards) else { return false }
-        releaseKoreanCapsLock(); releaseSeparateKey()
+        releaseKoreanCapsLock(); releaseSourceKeys()
         return true
     }
     func refreshKeyboardState() {
@@ -1440,8 +1474,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             case #selector(menuEnabled): entry.state = engine.active && !engine.paused ? .on : .off; entry.isEnabled = engine.accessibilityTrusted()
             case #selector(menuLogin): entry.state = login.state; entry.isEnabled = engine.accessibilityTrusted()
             case #selector(menuHidden): entry.state = showInMenuBar.state; entry.isEnabled = engine.accessibilityTrusted()
-            case #selector(selectKorean): entry.isEnabled = availableSource("ko") != nil
-            case #selector(selectEnglish): entry.isEnabled = availableSource("en") != nil
+            case #selector(selectKorean): entry.isEnabled = menuLanguageSource("ko") != nil
+            case #selector(selectEnglish): entry.isEnabled = menuLanguageSource("en") != nil
             default: break
             }
         }
@@ -1451,7 +1485,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         menuInputTimer?.invalidate()
         menuInputTimer = nil
     }
-    func selectLanguage(_ prefix: String) { if let source = availableSource(prefix) { rememberCapsBeforeSwitch(); _ = TISSelectInputSource(source) }; updateInputIndicator() }
+    func selectLanguage(_ prefix: String) {
+        if let source = menuLanguageSource(prefix).flatMap({ Self.sourceForID($0.id) }) { rememberCapsBeforeSwitch(); _ = TISSelectInputSource(source) }
+        updateInputIndicator()
+    }
     @objc func selectKorean() { selectLanguage("ko") }
     @objc func selectEnglish() { selectLanguage("en") }
     @objc func menuEnabled() {
@@ -1491,13 +1528,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     @objc func selectionChanged() {
         guard !engine.isUpdatingSettings else { resetSelection(); return }
         cancelLongPress()
-        guard confirmCapsLockKey(engine.capsLockSwitches(picker.selection)), confirmSeparateKey(picker.selection) else { resetSelection(); return }
+        guard confirmCapsLockKey(engine.capsLockSwitches(picker.selection)), confirmSourceKeys(picker.selection) else { resetSelection(); return }
         if enabled.state == .on { applyNow() }
         else {
             if let keys = picker.selection { engine.defaultSources = keys }
             engine.defaults.set(targets[targetPicker.indexOfSelectedItem].name, forKey: "target")
         }
-        releaseKoreanCapsLock(); releaseSeparateKey()
+        releaseKoreanCapsLock(); releaseSourceKeys()
     }
     // False keeps the old keys.
     func confirmCapsLockKey(_ taken: Bool, as role: String = "한영 키") -> Bool {
@@ -1546,7 +1583,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         do { try engine.restore(); lastError = ""; stickyError = ""; repairFailed = false; refreshStatus() } catch { report(error) }
         resetSelection(); syncCapsPreservation(); updatePressAccess(); refreshKeyboardState()
     }
-    func recover() { sourceCache = nil; observedCaps = nil; queuedSwitch = nil; releaseHeldKeys(); optionInput.cancel(); if capsRestoreTasks.isEmpty { englishCaps.switching = false }; cancelLongPress(); longPress = LongPressState(); pressGate.held.removeAll(); nativeRemote = NativeRemoteGate(); spaceGate = SpaceComboGate(); separateGate.held.removeAll(); for delay in [0.5, 2.0, 5.0] { DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.repair() } } }
+    func recover() { sourceCache = nil; observedCaps = nil; queuedSwitch = nil; releaseHeldKeys(); optionInput.cancel(); if capsRestoreTasks.isEmpty { englishCaps.switching = false }; cancelLongPress(); longPress = LongPressState(); pressGate.held.removeAll(); nativeRemote = NativeRemoteGate(); spaceGate = SpaceComboGate(); sourceKeyGate.held.removeAll(); for delay in [0.5, 2.0, 5.0] { DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.repair() } } }
     // The tap does not see Caps Lock on another user's login window, and leaves it alone on the lock screen. Coming back
     // with English (or Korean showing the English case) selected, the lock as left there is the English case. A restore on
     // its way finishes first: unlocking can land in Korean while its input method turns the lock off.

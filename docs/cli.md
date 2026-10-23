@@ -100,26 +100,27 @@ gksdud source             # 현재 입력 소스 ID
 | `special-chars` | `off`, `english`, `block` | 특수문자 (끔, 영어처럼 특수문자 입력, Option 문자 입력 차단) |
 | `backquote` | `on`, `off` | 한글 상태에서 ₩와 ` 반전 |
 | `added-sources` | `on`, `off` | 입력 소스 추가 → 활성화 |
-| `added-mode` | `cycle`, `separate` | 입력 소스 추가 → 전환 방식 (순회, 분리) |
-| `cycle` | `<입력 소스>,...` | 입력 소스 추가 → 순서 |
-| `separate-key` | `<키>`, `none` | 입력 소스 추가 → 전환 키 |
-| `separate-source` | `<입력 소스>`, `none` | 입력 소스 추가 → 입력 소스 |
-| `compatibility` | `on`, `off` | 입력 소스 추가 → 호환성 모드 |
+| `cycle` | `<입력 소스>,...` | 입력 소스 설정 → 순환과 순서 |
+| `source-key-return` | `on`, `off` | 입력 소스 설정 → 고유 키를 한 번 더 누를 시 직전 입력 소스로 전환 |
+| `compatibility` | `on`, `off` | 입력 소스 설정 → 호환성 모드 |
 | `escape` | `on`, `off` | ESC 누를 시 영소문자로 변경 |
 | `universal-control` | `on`, `off` | 유니버설 컨트롤 호환 모드 |
 | `keyboard.<키보드>.mode` | `on`, `default`, `off` | 고급 설정 → 키보드별 적용 |
 | `keyboard.<키보드>.keys` | `<키>,...`, `default` | 고급 설정 → 키보드별 한영 키 |
+| `source.<입력 소스>.enabled` | `on`, `off` | 입력 소스 설정 → 활성화 |
+| `source.<입력 소스>.key` | `<키>`, `none` | 입력 소스 설정 → 고유 키 |
 
 - `<키>`: `right-command`, `right-option`, `caps-lock`, `right-control`, `ctrl-space`, `cmd-space`, `opt-space`, `shift-space`. 키보드별 한영 키는 앞의 네 개(단일키)만 가능합니다.
 - `<키보드>`: `gksdud keyboards`에 나오는 ID 앞부분(4자 이상), 이름, 이름 일부. `*`는 모든 키보드입니다. 이름이 같은 키보드는 함께 바뀝니다. 이름에 공백이 있으면 전체를 따옴표로 감싸 주세요: `"keyboard.Magic Keyboard.mode=off"`
-- `<입력 소스>`: `gksdud sources`의 ID, 이름, ID 끝부분이나 일부. `ko`·`en`은 최근에 쓴 한국어·영어 입력 소스입니다.
+- `<입력 소스>`: `gksdud sources`의 ID, 이름, ID 끝부분이나 일부. `ko`·`en`은 최근에 쓴 한국어·영어 입력 소스입니다. 같은 언어의 입력 소스가 여럿이면 ID로 지정하세요.
 - on/off 대신 `true`/`false`, `yes`/`no`, `1`/`0`도 가능합니다.
 
 ```sh
 gksdud set keys=right-command,caps-lock      # 한영 키 두 개
 gksdud set keys+=shift-space                  # 하나 추가
 gksdud set keys-=caps-lock                    # 하나 제거
-gksdud set added-sources=on added-mode=cycle cycle=ko,ABC,Japanese
+gksdud set added-sources=on cycle=ko,ABC,Japanese
+gksdud set source.com.apple.inputmethod.SCIM.ITABC.key=right-option
 gksdud set "keyboard.Magic Keyboard.mode=off"
 gksdud set 'keyboard.*.keys=default'       # *는 셸이 해석하지 않게 따옴표로
 ```
@@ -128,9 +129,9 @@ gksdud set 'keyboard.*.keys=default'       # *는 셸이 해석하지 않게 따
 
 - 적은 순서대로 적용합니다. 다른 설정이 먼저 필요한 항목(예: `preserve-case`가 켜져 있어야 하는 `korean-caps-lock`)은 나머지를 적용한 뒤 다시 시도하니, 순서는 신경 쓰지 않아도 됩니다.
 - 알 수 없는 설정, 형식이 틀린 값, 없는 키보드나 입력 소스가 하나라도 있으면 아무것도 바꾸지 않습니다. (종료 코드 2)
-- 한영 키를 모두 빼거나 순회할 입력 소스가 2개보다 적어지는 것처럼 지금 설정에 따라 정해지는 문제는 그 항목만 실패합니다.
+- 한영 키를 모두 빼는 것처럼 지금 설정에 따라 정해지는 문제는 그 항목만 실패합니다.
 - 설정 창에서 확인을 묻는 변경은 `--force`를 붙여야 진행됩니다. `korean-caps-lock`이 켜진 채로 Caps Lock을 한영 키로 바꾸거나, 다른 앱이 매핑한 키를 한영 키로 쓰는 경우 등입니다. `--force`가 없으면 그 항목만 실패하고 이유를 알려줍니다.
-- 설정 창에서 오류 창이 뜨는 경우(단축키 적용 실패, 분리 전환 키가 한영 키와 겹침 등)에는 결과와 함께 gksdud 창에도 띄웁니다. 창이 뜨지 않게 하려면 `--no-alert`를 붙입니다.
+- 설정 창에서 오류 창이 뜨는 경우(단축키 적용 실패, 고유 키가 한영 키와 겹침 등)에는 결과와 함께 gksdud 창에도 띄웁니다. 창이 뜨지 않게 하려면 `--no-alert`를 붙입니다.
 - 다른 설정이 함께 바뀌면 `함께 바뀜`(JSON `also`)으로 알려줍니다. 뒤 항목이 앞 항목을 되돌리면 앞 항목은 실패로 표시됩니다.
 - 접근성 권한이 없으면 설정 창과 마찬가지로 대부분의 설정을 바꿀 수 없습니다.
 

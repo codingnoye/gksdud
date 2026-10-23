@@ -20,13 +20,14 @@ struct CommandReply {
     var data: Data { (try? JSONSerialization.data(withJSONObject: ["exit": exit, "text": text, "json": json])) ?? Data() }
 }
 
-// One setting a command changes: a global one, or one keyboard's.
+// One setting a command changes: a global one, one keyboard's, or one input source's (by ID).
 struct CommandItem {
     let setting: CLI.Setting
     let keyboard: SavedKeyboard?
+    var source: String? = nil
     let operation: CLI.Operation
     let value: CLI.Value
-    var label: String { keyboard.map { commandLabel($0, setting.name) } ?? setting.name }
+    var label: String { keyboard.map { commandLabel($0, setting.name) } ?? source.map { "source.\($0).\(setting.name)" } ?? setting.name }
 }
 func commandLabel(_ keyboard: SavedKeyboard, _ name: String) -> String { "keyboard.\(keyboard.key.prefix(8)).\(name)" }
 // In their first order.
@@ -73,8 +74,10 @@ extension AppDelegate {
             case .get(let addresses): return try commandGet(addresses)
             case .set(let changes): return try commandSet(changes, options: invocation.options)
             case .toggle(let addresses):
-                return try commandSet(addresses.map { CLI.Change(address: $0, operation: .set, value: .bool(commandValue($0.name) != .bool(true))) },
-                                      options: invocation.options)
+                return try commandSet(addresses.map { address in
+                    let current = address.source.map { try? matchSourceID($0) }.map { commandValue(address.name, source: $0) } ?? commandValue(address.name)
+                    return CLI.Change(address: address, operation: .set, value: .bool(current != .bool(true)))
+                }, options: invocation.options)
             case .source(let spec): return try commandSource(spec)
             case .sources: return commandSources()
             case .keyboards: return commandKeyboards()
@@ -94,7 +97,12 @@ extension AppDelegate {
     func keyNames(_ keys: [UInt64]) -> [String] { keys.compactMap { hangulKeys.firstIndex(of: $0).map { CLI.keyNames[$0] } } }
     func keyIDs(_ names: [String]) -> [UInt64] { names.compactMap { CLI.keyNames.firstIndex(of: $0).map { hangulKeys[$0] } } }
 
-    func commandValue(_ name: String, keyboard: SavedKeyboard? = nil) -> CLI.Value {
+    func commandValue(_ item: CommandItem) -> CLI.Value { commandValue(item.setting.name, keyboard: item.keyboard, source: item.source) }
+    func commandValue(_ name: String, keyboard: SavedKeyboard? = nil, source: String? = nil) -> CLI.Value {
+        if let source {
+            if name == "enabled" { return .bool(!engine.disabledSources.contains(source)) }
+            return engine.sourceKeys[source].map { .text(keyNames([$0])[0]) } ?? .none
+        }
         if let keyboard {
             let saved = engine.keyboards.known[keyboard.key]
             if name == "mode" { return .text((saved?.mode ?? .default).rawValue) }
@@ -119,10 +127,8 @@ extension AppDelegate {
         case "backquote": return .bool(engine.swapBackquote)
         case "universal-control": return .bool(engine.universalControlCompat)
         case "added-sources": return .bool(engine.addedSourcesEnabled)
-        case "added-mode": return .text(engine.addedSourceMode == .cycle ? "cycle" : "separate")
         case "cycle": return .list(cycleOrder)
-        case "separate-key": return engine.separateKey.map { .text(keyNames([$0])[0]) } ?? .none
-        case "separate-source": return engine.separateSource.map { .text($0) } ?? .none
+        case "source-key-return": return .bool(engine.sourceKeyReturns)
         case "compatibility": return .bool(engine.addedSourcesCompatible)
         default: return .none
         }
@@ -132,6 +138,9 @@ extension AppDelegate {
         CLI.settings.filter { $0.name != "login" }.map { ($0.name, $0.kind, commandValue($0.name)) }
             + engine.keyboards.keyboards.flatMap { keyboard in
                 CLI.keyboardSettings.map { (commandLabel(keyboard, $0.name), $0.kind, commandValue($0.name, keyboard: keyboard)) }
+            }
+            + unique(enabledSources().map(\.id) + engine.sourceKeys.keys.sorted()).flatMap { id in
+                CLI.sourceSettings.map { ("source.\(id).\($0.name)", $0.kind, commandValue($0.name, source: id)) }
             }
     }
 
@@ -179,17 +188,18 @@ extension AppDelegate {
         throw CLI.UsageError("'\(spec)' 입력 소스를 찾지 못했습니다. gksdud sources로 켜져 있는 입력 소스를 확인하세요.")
     }
 
+    // A source's settings can be cleared after macOS stops offering it, so a saved ID names it too.
+    func matchSourceID(_ spec: String) throws -> String {
+        let saved = cycleOrder + engine.sourceKeys.keys + engine.disabledSources
+        return saved.contains(spec) ? spec : try matchSource(spec).id
+    }
     // A change names input sources as the user likes and keyboards by selector; they are saved by ID.
     func commandItems(_ change: CLI.Change) throws -> [CommandItem] {
         let setting = try CLI.setting(change.address.label).1
         var value = change.value
-        switch (setting.kind, value) {
-        case (.sources, .list(let specs)): value = .list(try specs.map { try matchSource($0).id })
-        case (.source, .text(let spec)):
-            let source = try matchSource(spec)
-            guard !isKorean(source) && !isEnglish(source) else { throw CLI.UsageError("분리로 전환할 입력 소스는 한국어·영어가 아니어야 합니다.") }
-            value = .text(source.id)
-        default: break
+        if case (.sources, .list(let specs)) = (setting.kind, value) { value = .list(try specs.map { try matchSource($0).id }) }
+        if let spec = change.address.source {
+            return [CommandItem(setting: setting, keyboard: nil, source: try matchSourceID(spec), operation: change.operation, value: value)]
         }
         guard let selector = change.address.keyboard else { return [CommandItem(setting: setting, keyboard: nil, operation: change.operation, value: value)] }
         return try matchKeyboards(selector).map { CommandItem(setting: setting, keyboard: $0, operation: change.operation, value: value) }
@@ -204,10 +214,7 @@ extension AppDelegate {
             list = (single ? CLI.singleKeyNames : CLI.keyNames).filter(list.contains)
             // A keyboard with no key of its own follows the default keys, as in the keyboard sheet.
             if list.isEmpty { if item.keyboard != nil { return .none }; throw CLI.UsageError("한영 키를 하나 이상 골라주세요.") }
-        } else {
-            list = unique(list)
-            guard list.count > 1 else { throw CLI.UsageError("순회할 입력 소스를 2개 이상 선택해주세요.") }
-        }
+        } else { list = unique(list) }
         return .list(list)
     }
 
@@ -236,6 +243,11 @@ extension AppDelegate {
             button.state = on ? .on : .off; action(); return nil
         }
         let section = addedSources
+        if let id = item.source {
+            guard section.edit.isEnabled else { return trusted ? "입력 소스 추가를 켜야 쓸 수 있습니다." : accessibilityHint }
+            if item.setting.name == "enabled" { section.setSource(id, on: on) } else { section.setKey(text.map { keyIDs([$0]) }?.first, for: id) }
+            return nil
+        }
         switch item.setting.name {
         case "active": return flip(enabled) { toggleEnabled() }
         case "login":
@@ -272,17 +284,10 @@ extension AppDelegate {
             button.state = mode == 0 ? .off : .on; changeSpecialMode(button)
         case "added-sources": return flip(section.enable) { section.toggle() }
         default:
-            guard section.modePicker.isEnabled else { return trusted ? "입력 소스 추가를 켜야 쓸 수 있습니다." : accessibilityHint }
+            guard section.edit.isEnabled else { return trusted ? "입력 소스 추가를 켜야 쓸 수 있습니다." : accessibilityHint }
             switch item.setting.name {
-            case "added-mode": section.modePicker.selectItem(at: text == "separate" ? 1 : 0); section.changeMode()
             case "cycle": section.setCycle(list ?? [])
-            case "separate-key":
-                let key = text.map { keyIDs([$0]) }?.first
-                section.keyPicker.selectItem(at: section.keyPicker.itemArray.firstIndex { ($0.representedObject as? NSNumber)?.uint64Value == key } ?? 0)
-                section.changeKey()
-            case "separate-source":
-                section.sourcePicker.selectItem(at: section.sourcePicker.itemArray.firstIndex { $0.representedObject as? String == text } ?? 0)
-                section.changeSource()
+            case "source-key-return": return flip(section.returns) { section.toggleReturns() }
             default: return flip(section.compatible) { section.toggleCompatible() }
             }
         }
@@ -328,7 +333,7 @@ extension AppDelegate {
         // A later change can undo an earlier one, as turning case preservation off turns Caps Lock in Korean off.
         let final = items.indices.map { index in
             var result = results[index]!
-            let now = commandValue(result.item.setting.name, keyboard: result.item.keyboard)
+            let now = commandValue(result.item)
             if result.ok, let wanted = result.wanted, now != wanted {
                 result.ok = false; result.after = now
                 result.error = "같은 명령의 다른 변경 때문에 유지되지 않았습니다 (현재 \(CLI.text(now, result.item.setting.kind)))."
@@ -355,7 +360,7 @@ extension AppDelegate {
     }
     func attemptCommand(_ item: CommandItem, _ session: CommandSession) -> (CommandResult, retry: Bool) {
         session.clear()
-        let current = commandValue(item.setting.name, keyboard: item.keyboard)
+        let current = commandValue(item)
         var result = CommandResult(item: item, ok: true, before: current, after: current)
         let wanted: CLI.Value
         do { wanted = try commandTarget(item, current: current) } catch {
@@ -366,7 +371,7 @@ extension AppDelegate {
         let before = commandSnapshot()
         let blocked = applyCommand(item, wanted)
         let after = commandSnapshot()
-        result.after = commandValue(item.setting.name, keyboard: item.keyboard)
+        result.after = commandValue(item)
         result.ok = result.after == wanted && session.errors.isEmpty
         result.warnings = session.accepted
         let earlier = Dictionary(before.map { ($0.label, $0.value) }, uniquingKeysWith: { $1 })
@@ -387,7 +392,7 @@ extension AppDelegate {
         var lines: [String] = []
         for result in results {
             let kind = result.item.setting.kind, label = result.item.label
-            let name = result.item.keyboard.map { " (\($0.name))" } ?? ""
+            let name = result.item.keyboard.map { " (\($0.name))" } ?? result.item.source.map { " (\(Self.sourceTitle($0)))" } ?? ""
             if !result.ok { lines.append("✗ \(label)\(name): \(result.error ?? "")") }
             else if result.before == result.after { lines.append("✓ \(label)\(name): \(show(kind, result.after)) (변경 없음)") }
             else { lines.append("✓ \(label)\(name): \(show(kind, result.before)) → \(show(kind, result.after))") }
@@ -403,6 +408,7 @@ extension AppDelegate {
                 var entry: [String: Any] = ["setting": result.item.label, "ok": result.ok, "changed": result.before != result.after,
                                             "before": CLI.json(result.before), "after": CLI.json(result.after)]
                 if let keyboard = result.item.keyboard { entry["keyboard"] = ["id": keyboard.key, "name": keyboard.name] }
+                if let source = result.item.source { entry["source"] = source }
                 if let error = result.error { entry["error"] = error }
                 if !result.also.isEmpty { entry["also"] = result.also.map { ["setting": $0.label, "before": CLI.json($0.before), "after": CLI.json($0.after)] } }
                 if !result.warnings.isEmpty { entry["warnings"] = result.warnings }
@@ -431,6 +437,10 @@ extension AppDelegate {
             ? CLI.settings.map { ($0.name, $0.kind, commandValue($0.name)) }
             : try addresses.flatMap { address -> [(label: String, kind: CLI.Kind, value: CLI.Value)] in
                 let setting = try CLI.setting(address.label).1
+                if let spec = address.source {
+                    let id = try matchSourceID(spec)
+                    return [("source.\(id).\(address.name)", setting.kind, commandValue(address.name, source: id))]
+                }
                 guard let selector = address.keyboard else { return [(address.name, setting.kind, commandValue(address.name))] }
                 return try matchKeyboards(selector).map { (commandLabel($0, address.name), setting.kind, commandValue(address.name, keyboard: $0)) }
             }
@@ -453,12 +463,24 @@ extension AppDelegate {
         json["source"] = source.map(describe)
         return CommandReply(text: ([aligned(rows)] + keyboards.details + issues).joined(separator: "\n"), json: json)
     }
+    // With added sources on, also what this app does with each.
     func commandSources() -> CommandReply {
-        let current = currentSource?.id, list = enabledSources()
+        let current = currentSource?.id, list = enabledSources(), added = engine.addedSourcesEnabled
+        let cycle = cycleOrder, disabled = engine.disabledSources, keys = engine.sourceKeys
         let width = list.map { CLI.width($0.id) }.max() ?? 0
-        let lines = list.map { "\($0.id == current ? "*" : " ") \(CLI.pad($0.id, width))  \(Self.sourceTitle($0.id)) (\($0.language))" }
+        let lines = list.map { source -> String in
+            var line = "\(source.id == current ? "*" : " ") \(CLI.pad(source.id, width))  \(Self.sourceTitle(source.id)) (\(source.language))"
+            guard added else { return line }
+            let flags = disabled.contains(source.id) ? ["off"]
+                : (cycle.contains(source.id) ? ["cycle"] : []) + (keys[source.id].map { ["key=\(keyNames([$0])[0])"] } ?? [])
+            if !flags.isEmpty { line += "  [\(flags.joined(separator: " "))]" }
+            return line
+        }
         return CommandReply(text: lines.joined(separator: "\n"), json: ["ok": true, "sources": list.map { source -> [String: Any] in
-            var entry = describe(source); entry["current"] = source.id == current; return entry
+            var entry = describe(source); entry["current"] = source.id == current
+            entry["enabled"] = !disabled.contains(source.id); entry["cycle"] = cycle.contains(source.id)
+            entry["key"] = keys[source.id].map { keyNames([$0])[0] as Any } ?? NSNull()
+            return entry
         }])
     }
     func commandKeyboards() -> CommandReply {
@@ -493,7 +515,7 @@ extension AppDelegate {
         let pulse = engine.active ? nativeSwitchPulse(keyCode: engine.target.keyCode, marker: nativePulseMarker) : nil
         if spec.lowercased() == "toggle" {
             guard let pulse else { return .failure("gksdud가 꺼져 있어 한영 전환을 할 수 없습니다.") }
-            let target = addedSourcesActive ? addedTarget(separateKey: false, from: from)
+            let target = addedSourcesActive ? hangulTarget(from: from)
                 : sourceHistory.previous(of: from.id).flatMap { id in enabled.first { $0.id == id } }
             rememberCapsBeforeSwitch(); switchHangul(pulse)
             return switched(to: target, method: "shortcut")
