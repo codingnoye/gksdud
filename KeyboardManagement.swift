@@ -157,6 +157,8 @@ struct KeyboardReconcileResult {
     // Keyboards where another mapping already emits an extra key's target, so only the other keys apply, and those targets.
     var extraBlocked = 0
     var blockedTargets: Set<UInt64> = []
+    // F-keys that other mappings on selected keyboards send, which an automatic one steps around.
+    var foreignTargets: Set<UInt64> = []
 }
 
 // More keys with targets of their own, beside the Korean/English keys.
@@ -319,9 +321,13 @@ final class KeyboardManager {
         if let old, old["away"] == nil, old["source"] == encodeSources(all), old["target"] == String(target), old["extraTarget"] == extraTarget,
            old["pendingTarget"] == nil, old["pendingExtraTarget"] == nil, mappingEqual(current, desired) { return }
         let previous = old.map(Self.undo) ?? []
-        let kept: [Undo] = all.map { source in
-            previous.first { $0.source == source } ?? (source, current.first { $0[srcKey]?.uint64Value == source }?[dstKey]?.uint64Value)
+        // A key already sending the F-key it gets, as one left behind by a run that ended without its undo, has no original:
+        // giving it back would leave the key sending that F-key.
+        func original(_ source: UInt64) -> UInt64? {
+            guard let mapped = current.first(where: { $0[srcKey]?.uint64Value == source })?[dstKey]?.uint64Value else { return nil }
+            return pairs.contains { $0.source == source && $0.target == mapped } ? nil : mapped
         }
+        let kept: [Undo] = all.map { source in previous.first { $0.source == source } ?? (source, original(source)) }
         // Dropped keys stay in the undo until the write is verified, so a failed write can still restore them.
         var pending = Self.record(kept + previous.filter { !all.contains($0.source) }, target: old?["target"] ?? String(target))
         // Save undo before touching hardware; remember both outcomes of a failed readback.
@@ -350,6 +356,14 @@ final class KeyboardManager {
             // With only Space combinations chosen, a keyboard has nothing to map.
             let keys = selected && !away ? sources(for: device, default: fallback) : []
             var own = selected && !away ? extras.filter { !keys.contains($0.source) } : []
+            if selected, !away, let mappings = try? device.readMappings() {
+                let fKeys = Set(targets.map(\.usage)), ours = Set(keys + extras.map(\.source)), record = records[device.registryID]
+                next.foreignTargets.formUnion(mappings.compactMap { mapping in
+                    guard let target = mapping[dstKey]?.uint64Value, fKeys.contains(target), !ours.contains(mapping[srcKey]?.uint64Value ?? 0),
+                          !owns(record, mapping) else { return nil }
+                    return target
+                })
+            }
             do {
                 // An extra key never costs the Korean/English keys: if its target is taken, it waits.
                 if !own.isEmpty, let mappings = try? device.readMappings() {

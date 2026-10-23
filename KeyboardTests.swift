@@ -994,6 +994,31 @@ func runSourceKeyTests() {
         "A taken F-key leaves the Korean/English key and the other keys working")
     _ = repair([], active: false)
     precondition(taken.mappings == [mapping(capsLock, f18)])
+    precondition(repair([second]).foreignTargets == [f18], "Another mapping's F-key is known")
+    _ = repair([], active: false)
+    // A run that ended without its undo left the key on its F-key; mapping it there again keeps no such original.
+    let leftover = TestKeyboard("s3", serial: "leftover", mappings: [mapping(option, f18)])
+    devices = [leftover]
+    _ = repair([extra]); _ = repair([])
+    precondition(same(leftover.mappings, [mapping(command, f19)]), "Dropped, the key goes back to itself, not to the F-key")
+    _ = repair([], active: false)
+
+    // An automatic F-key another mapping sends moves to a free one at once.
+    let movingSuite = "io.gksdud.source-key-moving-tests.\(UUID().uuidString)", movingDefaults = UserDefaults(suiteName: movingSuite)!
+    defer { movingDefaults.removePersistentDomain(forName: movingSuite) }
+    let stray = TestKeyboard("s4", serial: "stray", mappings: [mapping(option, f18)])
+    let moving = Engine(defaults: movingDefaults, discover: { [stray] })
+    moving.accessibilityTrusted = { true }
+    movingDefaults.set(true, forKey: "addedSources")
+    moving.setSourceKey(capsLock, for: "com.apple.inputmethod.Kotoeri.RomajiTyping.Japanese")
+    _ = try? moving.reconcile()
+    precondition(same(stray.mappings, [mapping(option, f18), mapping(command, f19), mapping(capsLock, f17)])
+        && moving.internalKey(for: "com.apple.inputmethod.Kotoeri.RomajiTyping.Japanese").map { $0.target.name == "F17" && $0.automatic } == true
+        && moving.keyboards.result.blockedTargets.isEmpty, "Caps Lock goes to F17, leaving F18 to the other mapping")
+    moving.setInternalKey("F18", for: "com.apple.inputmethod.Kotoeri.RomajiTyping.Japanese")
+    _ = try? moving.reconcile()
+    precondition(moving.keyboards.result.blockedTargets == [f18], "A hand choice stays, with its warning")
+    movingDefaults.set(false, forKey: "active"); _ = try? moving.reconcile()
 
     // Settings: single keys of sources turned on map while the tap can act on them.
     let engineSuite = "io.gksdud.source-key-engine-tests.\(UUID().uuidString)"

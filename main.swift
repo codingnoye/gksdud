@@ -227,9 +227,11 @@ final class Engine {
                   let chosen = targets.first(where: { $0.name == name }), chosen.name != target.name else { continue }
             result[key] = (chosen, false)
         }
-        let taken = Set(result.values.map(\.target.name))
+        let taken = Set(result.values.map(\.target.name)), foreign = keyboards.result.foreignTargets
         let order = [18, 17, 16, 20, 19, 15, 14, 13].map { targets[$0 - 13] }.filter { $0.name != target.name && !taken.contains($0.name) }
-        let free = order.filter { !systemFKeys.contains($0.keyCode) } + order.filter { systemFKeys.contains($0.keyCode) }
+        // F-keys a system shortcut or another mapping uses come last.
+        let free = order.filter { !systemFKeys.contains($0.keyCode) && !foreign.contains($0.usage) }
+            + order.filter { systemFKeys.contains($0.keyCode) || foreign.contains($0.usage) }
         for (key, target) in zip(sources.filter { used.values.contains($0) && result[$0] == nil }, free) { result[key] = (target, true) }
         return result
     }
@@ -396,7 +398,13 @@ final class Engine {
         defaults.removeObject(forKey: "inputMenuBackedUp")
     }
     func reconcile() throws -> Int {
-        keyboards.reconcile(sources: defaultSources, target: target.usage, active: active, away: sessionAway() || paused, extras: sourceKeyMappings).applied
+        let away = sessionAway() || paused, extras = sourceKeyMappings
+        var result = keyboards.reconcile(sources: defaultSources, target: target.usage, active: active, away: away, extras: extras)
+        // An automatic F-key that turns out to be another mapping's moves to a free one at once.
+        if !result.blockedTargets.isEmpty, sourceKeyMappings != extras {
+            result = keyboards.reconcile(sources: defaultSources, target: target.usage, active: active, away: away, extras: sourceKeyMappings)
+        }
+        return result.applied
     }
     // Turning off is saved before anything is undone, so a later failure retries the undo instead of reapplying.
     func restore() throws {
