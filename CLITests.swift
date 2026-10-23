@@ -120,6 +120,25 @@ func runCommandTests() {
     precondition(run("sources").json["sources"] is [[String: Any]])
     print("PASS: Accessibility, one command at a time, status and sources")
 
+    let gureumHan2 = InputSourceIdentity(id: "org.youknowone.inputmethod.Gureum.han2", language: "ko")
+    let dkst = InputSourceIdentity(id: "com.dinkisstyle.inputmethod.DKST.hangul", language: "ko")
+    let gureumEnglish = InputSourceIdentity(id: "org.youknowone.inputmethod.Gureum.system", language: "en")
+    let cliSources = [InputSourceIdentity(id: "com.apple.inputmethod.Korean.2SetKorean", language: "ko"),
+                      InputSourceIdentity(id: "com.apple.keylayout.ABC", language: "en"), gureumHan2, dkst, gureumEnglish]
+    defaults.set(true, forKey: "addedSources")
+    defaults.set(AddedSourceMode.separate.rawValue, forKey: "addedSourceMode")
+    delegate.sourceCache = (list: cliSources, layouts: [])
+    func setSeparateSource(_ id: String) {
+        delegate.sourceCache = (list: cliSources, layouts: [])
+        let reply = run("set", "separate-source=\(id)", "--no-alert")
+        precondition(reply.exit == CLI.Exit.ok && engine.separateSource == id, "CLI accepts exact source ID \(id)")
+    }
+    for id in [gureumHan2.id, dkst.id, gureumEnglish.id] { setSeparateSource(id) }
+    for key in ["addedSources", "addedSourceMode", "separateSource", "cycleSources"] { defaults.removeObject(forKey: key) }
+    delegate.sourceCache = nil
+    delegate.addedSources.refresh(force: true)
+    print("PASS: Korean and English input methods as separate sources")
+
     // What the window shows in a window, such as a separate key that is a Korean/English key, shows there too unless --no-alert.
     // A declined warning was the command's answer, so it shows nothing.
     precondition(shown.isEmpty && run("set", "added-sources=on", "added-mode=separate").exit == CLI.Exit.ok)

@@ -267,10 +267,11 @@ extension AppDelegate {
     // Empty, it takes no room between the sections.
     func showSpecialStatus(_ text: String) { specialStatus.stringValue = text; specialStatus.isHidden = text.isEmpty }
     static func sourceIdentity(_ source: TISInputSource) -> InputSourceIdentity? {
-        guard let id = TISGetInputSourceProperty(source, kTISPropertyInputSourceID),
-              let languages = TISGetInputSourceProperty(source, kTISPropertyInputSourceLanguages) else { return nil }
+        guard let id = TISGetInputSourceProperty(source, kTISPropertyInputSourceID) else { return nil }
+        let languages = TISGetInputSourceProperty(source, kTISPropertyInputSourceLanguages)
+            .flatMap { Unmanaged<CFArray>.fromOpaque($0).takeUnretainedValue() as? [String] }
         return InputSourceIdentity(id: Unmanaged<CFString>.fromOpaque(id).takeUnretainedValue() as String,
-            language: (Unmanaged<CFArray>.fromOpaque(languages).takeUnretainedValue() as? [String])?.first ?? "")
+            language: languages?.first ?? "")
     }
     static func sourceForID(_ id: String) -> TISInputSource? {
         // macOS may return nil (not an empty array) when this source is unavailable.

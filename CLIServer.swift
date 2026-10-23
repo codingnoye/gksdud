@@ -187,7 +187,6 @@ extension AppDelegate {
         case (.sources, .list(let specs)): value = .list(try specs.map { try matchSource($0).id })
         case (.source, .text(let spec)):
             let source = try matchSource(spec)
-            guard !isKorean(source) && !isEnglish(source) else { throw CLI.UsageError("분리로 전환할 입력 소스는 한국어·영어가 아니어야 합니다.") }
             value = .text(source.id)
         default: break
         }
@@ -495,7 +494,11 @@ extension AppDelegate {
             guard let pulse else { return .failure("gksdud가 꺼져 있어 한영 전환을 할 수 없습니다.") }
             let target = addedSourcesActive ? addedTarget(separateKey: false, from: from)
                 : sourceHistory.previous(of: from.id).flatMap { id in enabled.first { $0.id == id } }
-            rememberCapsBeforeSwitch(); switchHangul(pulse)
+            if addedSourcesActive, hasSeparateTarget, target == nil {
+                return .failure("전환할 한국어·영어 입력 소스가 없습니다. 분리 대상 외의 입력 소스를 시스템 설정에서 추가해주세요.")
+            }
+            rememberCapsBeforeSwitch()
+            guard switchHangul(pulse) else { return .failure("입력 소스를 전환하지 못했습니다. 현재 활성 입력 소스를 확인해주세요.") }
             return switched(to: target, method: "shortcut")
         }
         let target = try matchSource(spec)
@@ -504,7 +507,7 @@ extension AppDelegate {
         }
         if let pulse {
             rememberCapsBeforeSwitch()
-            switchSource(to: target, from: from, pulse: pulse)
+            guard switchSource(to: target, from: from, pulse: pulse) else { return .failure("입력 소스를 전환하지 못했습니다. 현재 활성 입력 소스를 확인해주세요.") }
             return switched(to: target, method: "shortcut")
         }
         guard let source = Self.sourceForID(target.id), TISSelectInputSource(source) == noErr else { return .failure("입력 소스를 전환하지 못했습니다.") }

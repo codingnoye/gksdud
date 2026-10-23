@@ -749,7 +749,7 @@ func renderKeyboardUI(to directory: String) throws {
         try save(delegate.window.contentView!, "added-cycle-\(name).png")
     }
     defaults.set(AddedSourceMode.separate.rawValue, forKey: "addedSourceMode")
-    engine.separateKey = sources[1]; engine.separateSource = enabledSources.first { !isKorean($0) && !isEnglish($0) }?.id
+    engine.separateKey = sources[1]; engine.separateSource = enabledSources.first(where: isKorean)?.id ?? enabledSources.first?.id
     delegate.addedSources.refresh(force: true)
     for (name, appearance) in [("light", NSAppearance.Name.aqua), ("dark", NSAppearance.Name.darkAqua)] {
         delegate.window.appearance = NSAppearance(named: appearance); delegate.selectTab(3)

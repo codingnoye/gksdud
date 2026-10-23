@@ -980,6 +980,46 @@ func runAddedSourceTests() {
     featureCheck(separate(ko, key: true) == "zh" && separate(abc, key: true) == "zh" && separate(ja, key: true) == "zh", "The separate key goes to its source")
     featureCheck(separate(zh, key: true, history: recent) == "us", "and back to the most recent Korean or English")
     featureCheck(separate(ko, key: true, source: "gone") == nil && separate(ko, key: true, source: nil) == nil, "A source that is gone does nothing")
+    let gureumHan2 = InputSourceIdentity(id: "org.youknowone.inputmethod.Gureum.han2", language: "ko")
+    let gureumHan3 = InputSourceIdentity(id: "org.youknowone.inputmethod.Gureum.han3final", language: "ko")
+    let dkst = InputSourceIdentity(id: "com.dinkisstyle.inputmethod.DKST.hangul", language: "ko")
+    let gureumEnglish = InputSourceIdentity(id: "org.youknowone.inputmethod.Gureum.system", language: "en")
+    let noLanguage = InputSourceIdentity(id: "com.example.inputmethod.NoLanguage", language: "")
+    featureCheck(sourceDisplayTitle("두벌식", provider: "구름") == "두벌식 · 구름"
+        && sourceDisplayTitle("한글", provider: "DKST") == "한글 · DKST"
+        && sourceDisplayTitle("한국어", provider: "구름") == "한국어 · 구름",
+                 "The input method's name follows the mode's")
+    featureCheck(sourceDisplayTitle("ABC", provider: nil) == "ABC" && sourceDisplayTitle("ABC", provider: "") == "ABC"
+        && sourceDisplayTitle("Gureum Input Method", provider: "gureum") == "Gureum Input Method"
+        && sourceDisplayTitle("구름 두벌식", provider: "구름") == "구름 두벌식",
+                 "Missing or repeated providers do not add a separator")
+    let allModes = [ko, abc, gureumHan2, gureumHan3, dkst, gureumEnglish, ja, noLanguage]
+    let allModeIDs = allModes.map(\.id)
+    featureCheck(cycle(gureumHan2, allModeIDs, enabled: allModes) == gureumHan3.id
+        && cycle(gureumHan3, allModeIDs, enabled: allModes) == dkst.id,
+                 "Cycle keeps exact IDs for multiple Korean input methods")
+    let separateEnabled = [ko, abc, gureumHan2, gureumEnglish]
+    var separateHistory = SourceHistory([gureumHan2.id, abc.id, gureumEnglish.id, ko.id])
+    featureCheck(addedSourceTarget(separateKey: true, current: ko, mode: .separate, cycle: [], separate: gureumHan2.id,
+                                   enabled: separateEnabled, history: separateHistory)?.id == gureumHan2.id,
+                 "A separate Korean input method is reachable from the separate key")
+    featureCheck(addedSourceTarget(separateKey: true, current: gureumHan2, mode: .separate, cycle: [], separate: gureumHan2.id,
+                                   enabled: separateEnabled, history: separateHistory)?.id == abc.id,
+                 "A separate target returns to the recent base Korean/English source")
+    featureCheck(addedSourceTarget(separateKey: false, current: ko, mode: .separate, cycle: [], separate: gureumHan2.id,
+                                   enabled: separateEnabled, history: separateHistory)?.id == abc.id
+        && addedSourceTarget(separateKey: false, current: abc, mode: .separate, cycle: [], separate: gureumHan2.id,
+                             enabled: separateEnabled, history: separateHistory)?.id == ko.id,
+                 "The ordinary Korean/English key excludes a separate target by exact ID")
+    separateHistory = SourceHistory([gureumEnglish.id, ko.id, gureumHan2.id, abc.id])
+    featureCheck(addedSourceTarget(separateKey: true, current: abc, mode: .separate, cycle: [], separate: gureumEnglish.id,
+                                   enabled: separateEnabled, history: separateHistory)?.id == gureumEnglish.id
+        && addedSourceTarget(separateKey: false, current: gureumEnglish, mode: .separate, cycle: [], separate: gureumEnglish.id,
+                             enabled: separateEnabled, history: separateHistory)?.id == ko.id,
+                 "An English separate target is excluded from both return paths")
+    featureCheck(addedSourceTarget(separateKey: true, current: gureumHan2, mode: .separate, cycle: [], separate: gureumHan2.id,
+                                   enabled: [gureumHan2, ja], history: SourceHistory()) == nil,
+                 "A separate target with no other Korean/English source has no return target")
     var capped = SourceHistory()
     for index in 0..<20 { capped.note("s\(index)") }
     capped.note("s19"); capped.note("s18")
@@ -1034,7 +1074,95 @@ func runAddedSourceTests() {
                                     ["KeyboardLayout Name": "ABC – AZERTY"], ["KeyboardLayout Name": "Removed"], ["KeyboardLayout Name": "U.S."]]
     featureCheck(systemHistory(entries, sources: infos) == ["com.apple.inputmethod.Korean.2SetKorean", "com.apple.keylayout.US",
         "com.apple.inputmethod.Kotoeri.RomajiTyping.Japanese", "com.apple.keylayout.ABC-AZERTY"], "Entries map to sources until one does not")
-    print("PASS: added input sources: cycle order, other layouts, outside the list, missing sources, separate key and back, history, badges, switch plans, landing, notifications, system history")
+    let uiSuite = "io.gksdud.added-source-ui-tests.\(UUID().uuidString)", uiDefaults = UserDefaults(suiteName: uiSuite)!
+    defer { uiDefaults.removePersistentDomain(forName: uiSuite) }
+    var uiShortcuts: [String: Any] = [:], uiMenu: CFPropertyList?
+    let uiEngine = Engine(defaults: uiDefaults, discover: { [] },
+                          shortcutPreferences: ShortcutPreferences(read: { uiShortcuts }, write: { uiShortcuts = $0 }, activate: {}),
+                          inputMenu: InputMenuPreference(read: { uiMenu }, write: { uiMenu = $0 }))
+    uiEngine.accessibilityTrusted = { true }
+    uiDefaults.set(false, forKey: "active")
+    uiDefaults.set(true, forKey: "addedSources")
+    uiDefaults.set(AddedSourceMode.cycle.rawValue, forKey: "addedSourceMode")
+    uiDefaults.set(allModeIDs, forKey: "cycleSources")
+    let uiDelegate = AppDelegate(engine: uiEngine)
+    uiDelegate.sourceCache = (list: allModes, layouts: [])
+    // A fake source and null events check cancellation without switching or typing.
+    let landing = InputSourceIdentity(id: "io.gksdud.test.pending-source", language: "ko")
+    let pulse = (CGEvent(source: nil)!, CGEvent(source: nil)!)
+    uiDelegate.switchLanding = landing.id
+    uiDelegate.queuedSwitch = (noLanguage, pulse)
+    featureCheck(uiDelegate.switchSource(to: landing, from: landing, pulse: pulse) && uiDelegate.queuedSwitch == nil,
+                 "Requesting the landing source again cancels a queued switch")
+    uiDelegate.switchLanding = nil
+    let uiPanel = NSStackView()
+    uiDelegate.addedSources.install(in: uiPanel)
+    featureCheck(!uiDelegate.hasSeparateTarget, "Cycle mode has no separate target")
+    let pickerIDs = uiDelegate.addedSources.sourcePicker.itemArray.compactMap { $0.representedObject as? String }
+    featureCheck(pickerIDs == allModeIDs && uiDelegate.menuSources.map(\.id) == allModeIDs,
+                 "Picker and menu expose every exact configured source ID")
+    uiDefaults.set(AddedSourceMode.separate.rawValue, forKey: "addedSourceMode")
+    uiDefaults.set(gureumHan2.id, forKey: "separateSource")
+    uiDelegate.addedSources.refresh(force: true)
+    featureCheck(uiDelegate.hasSeparateTarget, "Separate mode recognizes an enabled target by exact ID")
+    featureCheck(uiDelegate.menuSources.map(\.id) == [gureumHan2.id]
+        && uiDelegate.addedSources.sourcePicker.selectedItem?.representedObject as? String == gureumHan2.id,
+                 "A Korean separate target appears in the menu and remains selected in the picker")
+    uiDefaults.removeObject(forKey: "separateSource")
+    uiDelegate.addedSources.refresh(force: true)
+    featureCheck(!uiDelegate.hasSeparateTarget, "Separate mode without a target does not claim one")
+    uiDefaults.set("com.example.inputmethod.Missing", forKey: "separateSource")
+    uiDelegate.addedSources.refresh(force: true)
+    featureCheck(!uiDelegate.hasSeparateTarget, "Separate mode ignores a target missing from enabled sources")
+    uiDefaults.set(gureumHan2.id, forKey: "separateSource")
+    uiDelegate.addedSources.refresh(force: true)
+    uiDelegate.sourceCache = (list: [gureumHan2, ja], layouts: [])
+    uiDelegate.addedSources.refresh(force: true)
+    featureCheck(uiDelegate.addedSources.warning.stringValue == "돌아갈 한국어·영어 입력 소스를 시스템 설정에서 추가해주세요.",
+                 "A lone Korean/English separate target explains the missing return source")
+    let realABC = InputSourceIdentity(id: "com.apple.keylayout.ABC", language: "en")
+    let missingEnglish = InputSourceIdentity(id: "io.gksdud.nonexistent-english-input-source", language: "en")
+    uiDefaults.set(AddedSourceMode.cycle.rawValue, forKey: "addedSourceMode")
+    uiDefaults.set([realABC.id, missingEnglish.id], forKey: "cycleSources")
+    uiDelegate.sourceCache = (list: [realABC, missingEnglish], layouts: [])
+    uiDelegate.addedSources.refresh(force: true)
+    let genericEnglishBadge = uiDelegate.sourceIcon(realABC)
+    func settingsPickerImage(_ id: String) -> NSImage? {
+        uiDelegate.addedSources.sourcePicker.itemArray.first { $0.representedObject as? String == id }?.image
+    }
+    func settingsCycleImage(_ id: String) -> NSImage? {
+        guard let index = [realABC.id, missingEnglish.id].firstIndex(of: id),
+              index < uiDelegate.addedSources.list.arrangedSubviews.count,
+              let row = uiDelegate.addedSources.list.arrangedSubviews[index] as? NSStackView else { return nil }
+        return (row.arrangedSubviews.first as? NSImageView)?.image
+    }
+    let originalABCPickerImage = settingsPickerImage(realABC.id)
+    let originalABCCycleImage = settingsCycleImage(realABC.id)
+    let originalMissingPickerImage = settingsPickerImage(missingEnglish.id)
+    let originalMissingCycleImage = settingsCycleImage(missingEnglish.id)
+    featureCheck(originalABCPickerImage != nil && originalABCCycleImage != nil
+        && originalMissingPickerImage === genericEnglishBadge && originalMissingCycleImage === genericEnglishBadge,
+                 "Settings use a common English badge for an unavailable source")
+    if originalABCPickerImage !== genericEnglishBadge || originalABCCycleImage !== genericEnglishBadge {
+        featureCheck(AppDelegate.sourceForID(realABC.id) != nil, "A distinct ABC settings icon comes from an installed source")
+    }
+    let sourceMenu = NSMenu()
+    sourceMenu.addItem(withTitle: "영어", action: #selector(AppDelegate.selectEnglish), keyEquivalent: "")
+    uiDelegate.refreshAddedMenuItems(sourceMenu)
+    let menuABCImage = sourceMenu.items.first { $0.action == #selector(AppDelegate.selectAddedSource(_:))
+        && ($0.representedObject as? String) == realABC.id }?.image
+    featureCheck(menuABCImage === genericEnglishBadge, "The added-source menu keeps the common English badge")
+    let sentinelEnglishImage = NSImage(size: NSSize(width: 1, height: 1))
+    uiDelegate.addedSources.showEnglishIcon(sentinelEnglishImage)
+    let expectedABCPickerImage = originalABCPickerImage === genericEnglishBadge ? sentinelEnglishImage : originalABCPickerImage
+    let expectedABCCycleImage = originalABCCycleImage === genericEnglishBadge ? sentinelEnglishImage : originalABCCycleImage
+    featureCheck(settingsPickerImage(realABC.id) === expectedABCPickerImage
+        && settingsCycleImage(realABC.id) === expectedABCCycleImage,
+                 "A live English icon refresh does not replace the real ABC settings icon")
+    featureCheck(settingsPickerImage(missingEnglish.id) === sentinelEnglishImage
+        && settingsCycleImage(missingEnglish.id) === sentinelEnglishImage,
+                 "A live English icon refresh updates unavailable-source fallback icons")
+    print("PASS: added input sources: exact modes, cycle order, separate target and back, missing return, history, badges, provider names, settings icons, switch plans, landing, notifications, system history")
 }
 // Drives the running gksdud with its switch keys, then reads the input source and what this probe's text view receives.
 // Launch the test app from build.sh, signed like the installed one, so it has gksdud's Accessibility permission:

@@ -120,9 +120,12 @@ gksdud set keys=right-command,caps-lock      # 한영 키 두 개
 gksdud set keys+=shift-space                  # 하나 추가
 gksdud set keys-=caps-lock                    # 하나 제거
 gksdud set added-sources=on added-mode=cycle cycle=ko,ABC,Japanese
+gksdud set added-sources=on added-mode=separate separate-key=right-option separate-source=ko
 gksdud set "keyboard.Magic Keyboard.mode=off"
 gksdud set 'keyboard.*.keys=default'       # *는 셸이 해석하지 않게 따옴표로
 ```
+
+`cycle`과 `separate-source`는 같은 언어의 다른 입력 소스도 지원합니다. 특정 입력 소스를 지정하려면 `gksdud sources`에 나오는 ID를 사용하세요. 분리 대상은 일반 한영 전환에서 제외됩니다.
 
 ### 여러 설정을 함께 바꿀 때
 

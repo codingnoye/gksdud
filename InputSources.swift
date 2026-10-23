@@ -1,7 +1,7 @@
 import AppKit
 import Carbon
 
-// Input sources beside Korean and English. The Korean/English key goes round a list (cycle), or a key of its own
+// Added input sources. The Korean/English key goes round a list (cycle), or a key of its own
 // goes to one more source and back (separate). Either way only the system shortcut switches.
 enum AddedSourceMode: Int { case cycle, separate }
 
@@ -89,6 +89,12 @@ func sourceBadgeLabel(_ language: String, position: Int?) -> String {
     return position.flatMap { (1...10).contains($0) ? String($0) : nil } ?? ""
 }
 
+// Modes with the same name are told apart by their input method's name.
+func sourceDisplayTitle(_ name: String, provider: String?) -> String {
+    guard let provider, !provider.isEmpty, !name.localizedCaseInsensitiveContains(provider) else { return name }
+    return "\(name) · \(provider)"
+}
+
 // Korean first, then English, then the rest in the order macOS lists them.
 func defaultCycle(_ enabled: [InputSourceIdentity]) -> [String] {
     (enabled.filter(isKorean) + enabled.filter(isEnglish) + enabled.filter { !isKorean($0) && !isEnglish($0) }).map(\.id)
@@ -98,7 +104,6 @@ func defaultCycle(_ enabled: [InputSourceIdentity]) -> [String] {
 // so saved ones that are gone are skipped.
 func addedSourceTarget(separateKey: Bool, current: InputSourceIdentity, mode: AddedSourceMode, cycle: [String],
                        separate: String?, enabled: [InputSourceIdentity], history: SourceHistory) -> InputSourceIdentity? {
-    let hangul = enabled.filter { isKorean($0) || isEnglish($0) }
     switch mode {
     case .cycle:
         guard !separateKey else { return nil }
@@ -109,13 +114,16 @@ func addedSourceTarget(separateKey: Bool, current: InputSourceIdentity, mode: Ad
         guard let index = exact ?? members.firstIndex(where: { $0.language == current.language }) else { return history.mostRecent(members) }
         return members[(index + 1) % members.count]
     case .separate:
-        let foreign = separate.flatMap { id in enabled.first { $0.id == id } }
+        let extra = separate.flatMap { id in enabled.first { $0.id == id } }
+        // A separate source stays out of the Korean/English key and the way back, even when it shares their language.
+        let hangul = enabled.filter { $0.id != extra?.id && (isKorean($0) || isEnglish($0)) }
         if separateKey {
-            guard let foreign else { return nil }
-            return current.id == foreign.id ? history.mostRecent(hangul) : foreign
+            guard let extra else { return nil }
+            return current.id == extra.id ? history.mostRecent(hangul) : extra
         }
-        if isKorean(current) { return history.mostRecent(enabled.filter(isEnglish)) }
-        if isEnglish(current) { return history.mostRecent(enabled.filter(isKorean)) }
+        if current.id == extra?.id { return history.mostRecent(hangul) }
+        if isKorean(current) { return history.mostRecent(hangul.filter(isEnglish)) }
+        if isEnglish(current) { return history.mostRecent(hangul.filter(isKorean)) }
         return history.mostRecent(hangul)
     }
 }
@@ -123,6 +131,9 @@ func addedSourceTarget(separateKey: Bool, current: InputSourceIdentity, mode: Ad
 extension AppDelegate {
     var addedSourcesActive: Bool { engine.active && !engine.paused && engine.addedSourcesEnabled && engine.accessibilityTrusted() }
     var separateKeyActive: Bool { addedSourcesActive && engine.addedSourceMode == .separate }
+    var hasSeparateTarget: Bool {
+        engine.addedSourceMode == .separate && engine.separateSource.map { id in enabledSources().contains { $0.id == id } } == true
+    }
     // The tap takes the separate key's F-key only while the separate key is mapped to it. When another mapping already
     // sends that F-key, the separate key is not applied and its presses stay that mapping's.
     func takesSeparateKey(_ code: Int64) -> Bool {
@@ -167,24 +178,28 @@ extension AppDelegate {
                           separate: engine.separateSource, enabled: enabledSources(), history: sourceHistory)
     }
     // The Korean/English key. Without added input sources it sends the system shortcut alone, as before.
-    func switchHangul(_ pulse: (CGEvent, CGEvent)) {
-        guard addedSourcesActive, let current = logicalSource, let target = addedTarget(separateKey: false, from: current) else {
-            postSwitchPulse(pulse); return
+    @discardableResult
+    func switchHangul(_ pulse: (CGEvent, CGEvent)) -> Bool {
+        guard addedSourcesActive, let current = logicalSource else {
+            postSwitchPulse(pulse); return true
         }
-        switchSource(to: target, from: current, pulse: pulse)
+        guard let target = addedTarget(separateKey: false, from: current) else {
+            // With no source to return to, the system shortcut could go to the separate source again.
+            if !hasSeparateTarget { postSwitchPulse(pulse); return true }
+            return false
+        }
+        return switchSource(to: target, from: current, pulse: pulse)
     }
     // False when there is nothing to switch with, so a Space goes back to the app.
     func switchSeparate(_ key: CGEvent) -> Bool {
         guard separateKeyActive, let current = logicalSource, let target = addedTarget(separateKey: true, from: current),
               let pulse = nativeSwitchPulse(keyCode: engine.target.keyCode, marker: nativePulseMarker) else { return false }
         rememberCapsBeforeSwitch(key)
-        switchSource(to: target, from: current, pulse: pulse)
-        return true
+        return switchSource(to: target, from: current, pulse: pulse)
     }
     func switchToEnglish(_ pulse: (CGEvent, CGEvent)) -> Bool {
         guard let current = logicalSource, let english = sourceHistory.mostRecent(enabledSources().filter(isEnglish)) else { return false }
-        switchSource(to: english, from: current, pulse: pulse)
-        return true
+        return switchSource(to: english, from: current, pulse: pulse)
     }
     static func isLayout(_ id: String) -> Bool {
         guard let source = sourceForID(id), let type = TISGetInputSourceProperty(source, kTISPropertyInputSourceType) else { return false }
@@ -205,18 +220,24 @@ extension AppDelegate {
     // Only the system shortcut switches, as without added sources. Sources selected from here first only set where it goes.
     // Pressed again before a switch lands, `current` is where it is headed: the shortcut alone follows it at once, but
     // selections would reorder the recent sources under it, so that switch waits for it to land. Only the last one waits.
-    func switchSource(to target: InputSourceIdentity, from current: InputSourceIdentity, pulse: (CGEvent, CGEvent)) {
-        if let landing = switchLanding {
-            if target.id == landing { queuedSwitch = nil; return }
+    @discardableResult
+    func switchSource(to target: InputSourceIdentity, from current: InputSourceIdentity, pulse: (CGEvent, CGEvent)) -> Bool {
+        if switchLanding == target.id { queuedSwitch = nil; return true }
+        guard target.id != current.id else { return true }
+        guard Self.sourceForID(target.id) != nil else {
+            sourceCache = nil
+            addedSources.showError("선택한 입력 소스를 사용할 수 없습니다. 시스템 설정에서 추가해주세요.")
+            return false
+        }
+        if switchLanding != nil {
             guard queuedSwitch == nil, plannedSwitch(to: target, from: current).selections.isEmpty else {
-                queuedSwitch = (target, pulse); holdKeys = true; return
+                queuedSwitch = (target, pulse); holdKeys = true; return true
             }
             postSwitchPulse(pulse)
             sourceHistory.note(target.id)
             expectLanding(target, origin: current.id)
-            return
+            return true
         }
-        guard target.id != current.id else { return }
         let plan = plannedSwitch(to: target, from: current)
         let waits = plan.selections.count > 1
             && waitsBetweenSelections(bundles: ([current.id] + plan.selections).map(Self.bundleID), always: engine.addedSourcesCompatible)
@@ -226,13 +247,20 @@ extension AppDelegate {
             guard let source = Self.sourceForID(id), TISSelectInputSource(source) == noErr else { failed = true; break }
             sourceHistory.note(id)
         }
-        addedSources.showError(failed ? "입력 소스를 전환하지 못했습니다." : nil)
+        guard !failed else {
+            sourceCache = nil
+            addedSources.showError("입력 소스를 전환하지 못했습니다.")
+            updateInputIndicator()
+            return false
+        }
+        addedSources.showError(nil)
         // The frontmost app can see the selections before the shortcut's switch reaches it.
         if !plan.selections.isEmpty { holdKeys = true }
         postSwitchPulse(pulse)
         // Where it lands, as long as the shortcut switches.
         sourceHistory.note(target.id)
         expectLanding(target, origin: plan.selections.last ?? current.id)
+        return true
     }
     // Until the switch lands the icon keeps showing where it started, not the sources selected on the way. If the shortcut
     // does not switch, a layout selected on the way may already have reached the frontmost app while macOS shows another
@@ -303,6 +331,32 @@ extension AppDelegate {
         isKorean(source) || isEnglish(source) ? sourceMenuIcon(korean: isKorean(source), upper: englishCase())
             : badgeImage(label: sourceBadgeLabel(source.language, position: sourcePosition(source.id)), filled: false)
     }
+    // Each source's own icon, in settings only; the menu bar and other places keep sourceIcon().
+    func nativeSourceIcon(_ id: String) -> NSImage? {
+        // Includes saved but disabled sources for display; switching still uses enabledSources().
+        let list = TISCreateInputSourceList([kTISPropertyInputSourceID as String: id] as CFDictionary, true)?.takeRetainedValue() as? [TISInputSource]
+        guard let source = list?.first else { return nil }
+        var image: NSImage?
+        if let pointer = TISGetInputSourceProperty(source, kTISPropertyIconImageURL) {
+            let url = Unmanaged<CFURL>.fromOpaque(pointer).takeUnretainedValue() as URL
+            image = NSImage(contentsOf: url)
+            // An asset catalog may hold the image even when its file URL does not exist.
+            if image == nil, let pointer = TISGetInputSourceProperty(source, kTISPropertyBundleID) {
+                let id = Unmanaged<CFString>.fromOpaque(pointer).takeUnretainedValue() as String
+                let bundle = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id).flatMap { Bundle(url: $0) }
+                image = bundle?.image(forResource: NSImage.Name(url.deletingPathExtension().lastPathComponent))
+                    ?? bundle?.image(forResource: NSImage.Name(url.lastPathComponent))
+            }
+        }
+        if image == nil, let pointer = TISGetInputSourceProperty(source, kTISPropertyIconRef) {
+            image = NSImage(iconRef: IconRef(pointer))
+        }
+        guard let image = image?.copy() as? NSImage, image.size.width > 0, image.size.height > 0 else { return nil }
+        // Copy before resizing a shared bundle image, keeping its shape and colors.
+        let scale = min(22 / image.size.width, 20 / image.size.height)
+        image.size = NSSize(width: image.size.width * scale, height: image.size.height * scale)
+        return image
+    }
     // Counted in the cycle's order, which starts as Korean, English, then the rest; a source outside it follows that
     // default order.
     func sourcePosition(_ id: String) -> Int? {
@@ -311,15 +365,24 @@ extension AppDelegate {
     }
     static func sourceTitle(_ id: String) -> String {
         let list = TISCreateInputSourceList([kTISPropertyInputSourceID as String: id] as CFDictionary, true)?.takeRetainedValue() as? [TISInputSource]
-        return list?.first.flatMap { TISGetInputSourceProperty($0, kTISPropertyLocalizedName) }
-            .map { Unmanaged<CFString>.fromOpaque($0).takeUnretainedValue() as String } ?? id
+        guard let source = list?.first else { return id }
+        func text(_ key: CFString) -> String? {
+            TISGetInputSourceProperty(source, key).map { Unmanaged<CFString>.fromOpaque($0).takeUnretainedValue() as String }
+        }
+        let name = text(kTISPropertyLocalizedName) ?? id
+        guard let bundleID = text(kTISPropertyBundleID), !bundleID.hasPrefix("com.apple.") else { return name }
+        let bundle = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID).flatMap { Bundle(url: $0) }
+        let provider = bundle?.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String
+            ?? bundle?.object(forInfoDictionaryKey: "CFBundleName") as? String
+            ?? bundleID.split(separator: ".").last.map(String.init)
+        return sourceDisplayTitle(name, provider: provider)
     }
     // The menu lists the added sources after Korean and English.
     var menuSources: [InputSourceIdentity] {
         guard engine.addedSourcesEnabled else { return [] }
         let enabled = enabledSources()
         let ids = engine.addedSourceMode == .cycle ? cycleOrder : engine.separateSource.map { [$0] } ?? []
-        return ids.compactMap { id in enabled.first { $0.id == id } }.filter { !isKorean($0) && !isEnglish($0) }
+        return ids.compactMap { id in enabled.first { $0.id == id } }
     }
     func refreshAddedMenuItems(_ menu: NSMenu) {
         for entry in menu.items where entry.action == #selector(selectAddedSource(_:)) { menu.removeItem(entry) }
@@ -462,10 +525,11 @@ final class AddedSourcesSettings: NSObject {
         addPicker.removeAllItems(); addPicker.addItem(withTitle: "추가")
         for source in enabled where !cycle.contains(source.id) {
             addPicker.addItem(withTitle: AppDelegate.sourceTitle(source.id))
-            addPicker.lastItem?.representedObject = source.id; addPicker.lastItem?.image = owner.sourceIcon(source)
-            if isEnglish(source), let item = addPicker.lastItem { englishItems.append(item) }
+            let native = owner.nativeSourceIcon(source.id)
+            addPicker.lastItem?.representedObject = source.id; addPicker.lastItem?.image = native ?? owner.sourceIcon(source)
+            if native == nil, isEnglish(source), let item = addPicker.lastItem { englishItems.append(item) }
         }
-        // Separate: one key and one input source that is neither Korean nor English.
+        // Separate: one key and any enabled input source, including Korean and English.
         keyPicker.removeAllItems(); keyPicker.addItem(withTitle: "선택 안 함")
         for key in hangulKeys {
             if key == spaceCombos.first { keyPicker.menu?.addItem(.separator()) }
@@ -473,14 +537,16 @@ final class AddedSourcesSettings: NSObject {
         }
         if let key = engine.separateKey { keyPicker.selectItem(withTitle: sourceName(key)) } else { keyPicker.selectItem(at: 0) }
         sourcePicker.removeAllItems(); sourcePicker.addItem(withTitle: "선택 안 함")
-        let foreign = enabled.filter { !isKorean($0) && !isEnglish($0) }
-        for source in foreign {
+        for source in enabled {
             sourcePicker.addItem(withTitle: AppDelegate.sourceTitle(source.id))
-            sourcePicker.lastItem?.representedObject = source.id; sourcePicker.lastItem?.image = owner.sourceIcon(source)
+            let native = owner.nativeSourceIcon(source.id)
+            sourcePicker.lastItem?.representedObject = source.id; sourcePicker.lastItem?.image = native ?? owner.sourceIcon(source)
+            if native == nil, isEnglish(source), let item = sourcePicker.lastItem { englishItems.append(item) }
         }
-        if let id = engine.separateSource, !foreign.contains(where: { $0.id == id }) {
+        if let id = engine.separateSource, !enabled.contains(where: { $0.id == id }) {
             // Saved, but macOS no longer offers it.
             sourcePicker.addItem(withTitle: AppDelegate.sourceTitle(id)); sourcePicker.lastItem?.representedObject = id
+            sourcePicker.lastItem?.image = owner.nativeSourceIcon(id)
             sourcePicker.lastItem?.isEnabled = false
         }
         let saved = engine.separateSource.flatMap { id in sourcePicker.itemArray.first { $0.representedObject as? String == id } }
@@ -494,7 +560,9 @@ final class AddedSourcesSettings: NSObject {
         warning.stringValue = !usable ? "" : error ?? (engine.addedSourceMode == .cycle
             ? (members.count < 2 ? "순회할 입력 소스를 2개 이상 선택해주세요." : "")
             : engine.separateKeyIsHangulKey() ? "전환 키가 한영 키와 겹칩니다. 다른 키를 선택해주세요."
-            : engine.separateSource.map { id in !foreign.contains { $0.id == id } } == true ? "선택한 입력 소스를 사용할 수 없습니다. 시스템 설정에서 추가해주세요."
+            : engine.separateSource.map { id in !enabled.contains { $0.id == id } } == true ? "선택한 입력 소스를 사용할 수 없습니다. 시스템 설정에서 추가해주세요."
+            : engine.separateSource.map { id in !enabled.contains { $0.id != id && (isKorean($0) || isEnglish($0)) } } == true
+                ? "돌아갈 한국어·영어 입력 소스를 시스템 설정에서 추가해주세요."
             : engine.keyboards.result.extraBlocked > 0 ? "\(engine.separateTarget.name)이 다른 키 매핑에서 사용 중이라 전환 키를 적용하지 못했습니다." : "")
         warning.isHidden = warning.stringValue.isEmpty
     }
@@ -503,9 +571,10 @@ final class AddedSourcesSettings: NSObject {
         for item in englishItems where item.image !== image { item.image = image }
     }
     private func cycleRow(_ id: String, source: InputSourceIdentity?, index: Int, count: Int, usable: Bool) -> NSView {
-        let icon = NSImageView(image: source.map(owner.sourceIcon) ?? owner.badgeImage(label: sourceBadgeLabel("", position: index + 1), filled: false))
-        if source.map(isEnglish) == true { englishIcons.append(icon) }
-        icon.contentTintColor = source == nil || !usable ? .disabledControlTextColor : .labelColor
+        let native = source.flatMap { owner.nativeSourceIcon($0.id) }
+        let icon = NSImageView(image: native ?? source.map(owner.sourceIcon) ?? owner.badgeImage(label: sourceBadgeLabel("", position: index + 1), filled: false))
+        if native == nil, source.map(isEnglish) == true { englishIcons.append(icon) }
+        icon.contentTintColor = native == nil ? (source == nil || !usable ? .disabledControlTextColor : .labelColor) : nil
         icon.widthAnchor.constraint(equalToConstant: 22).isActive = true; icon.heightAnchor.constraint(equalToConstant: 20).isActive = true
         let name = NSTextField(labelWithString: AppDelegate.sourceTitle(id))
         name.lineBreakMode = .byTruncatingTail; name.textColor = source == nil || !usable ? .disabledControlTextColor : .labelColor
