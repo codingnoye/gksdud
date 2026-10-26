@@ -141,10 +141,13 @@ enum UpdateValidation {
     }
     // The record of the last launch can miss one, as when the settings were removed but not the permission, and the system
     // prompt never replaces it. Asked while not allowed, there is nothing to lose: removed, allowing adds one for this build,
-    // and the running app takes it without a relaunch.
-    static func forgetUnusablePermissions(trusted: () -> Bool = { AXIsProcessTrusted() }, reset: (String) -> Bool = resetPermission) {
+    // and the running app takes it without a relaunch. One removed here is no longer left for the next launch to remove, as
+    // that would take away what is allowed now.
+    static func forgetUnusablePermissions(defaults: UserDefaults, trusted: () -> Bool = { AXIsProcessTrusted() },
+                                          reset: (String) -> Bool = resetPermission) {
         guard !trusted() else { return }
-        for service in ["Accessibility", "PostEvent"] { _ = reset(service) }
+        let failed = ["Accessibility", "PostEvent"].filter { !reset($0) }
+        if let left = defaults.stringArray(forKey: "permissions.reset") { defaults.set(left.filter(failed.contains), forKey: "permissions.reset") }
     }
     static func resetPermission(_ service: String) -> Bool {
         (0..<3).contains { attempt in

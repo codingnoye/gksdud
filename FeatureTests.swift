@@ -768,10 +768,15 @@ func runUpdateInstallTests() throws {
     failing = []
     featureCheck(!forget(true) && !forget(true) && resets.count == 10, "Until it is removed")
     resets = []
-    UpdateValidation.forgetUnusablePermissions(trusted: { true }) { resets.append($0); return true }
-    featureCheck(resets.isEmpty, "A permission that applies is kept")
-    UpdateValidation.forgetUnusablePermissions(trusted: { false }) { resets.append($0); return false }
+    defaults.set(["Accessibility", "PostEvent"], forKey: "permissions.reset")
+    UpdateValidation.forgetUnusablePermissions(defaults: defaults, trusted: { true }) { resets.append($0); return true }
+    featureCheck(resets.isEmpty && defaults.stringArray(forKey: "permissions.reset")?.count == 2, "A permission that applies is kept")
+    UpdateValidation.forgetUnusablePermissions(defaults: defaults, trusted: { false }) { resets.append($0); return $0 == "Accessibility" }
     featureCheck(resets == ["Accessibility", "PostEvent"], "Asking without it removes what is left, whatever the record says")
+    featureCheck(defaults.stringArray(forKey: "permissions.reset") == ["PostEvent"], "Removed here, not again on the next launch")
+    defaults.removeObject(forKey: "permissions.reset")
+    UpdateValidation.forgetUnusablePermissions(defaults: defaults, trusted: { false }) { _ in false }
+    featureCheck(defaults.object(forKey: "permissions.reset") == nil, "Nothing to retry is recorded from here")
     // Real children: timeout must reap the process before replacement can roll back.
     for arguments in [["5"], ["-c", "trap '' TERM; exec /bin/sleep 5"]] {
         var pid: pid_t = 0
