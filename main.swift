@@ -480,9 +480,10 @@ final class Engine {
         liveNextTarget = nil; nextFailedKey = nil
         defaults.removeObject(forKey: "nextRestorePending")
         keys["61"] = ["enabled": true, "value": ["type": "standard", "parameters": [65535, next.keyCode, 0]]] as [String: Any]
-        defaults.set(next.keyCode, forKey: "managedNextShortcutKeyCode")
         defaults.set(true, forKey: "nextActivatePending")
         try shortcutPreferences.write(keys)
+        // Only once written: a failed write leaves the key before it, still this app's, which a backup would take as the user's.
+        defaults.set(next.keyCode, forKey: "managedNextShortcutKeyCode")
         try shortcutPreferences.activate()
         defaults.removeObject(forKey: "nextActivatePending")
         liveNextTarget = next

@@ -122,7 +122,7 @@ enum CLI {
         case "sources": command = try bare(.sources)
         case "keyboards": command = try bare(.keyboards)
         case "get": command = .get(try rest.map { try setting($0).0 })
-        case "set": try needed(); command = .set(try rest.map(change))
+        case "set": try needed(); command = .set(try rest.compactMap(change))
         case "toggle":
             try needed()
             command = .toggle(try rest.map { word in
@@ -162,10 +162,16 @@ enum CLI {
         throw UsageError("알 수 없는 설정: \(text). gksdud help settings로 설정을 확인하세요.")
     }
 
-    static func change(_ word: String) throws -> Change {
+    // Nothing for a setting of 2.0.1 that has no effect now.
+    static func change(_ word: String) throws -> Change? {
         guard let equals = word.firstIndex(of: "=") else { throw UsageError("\(word): <설정>=<값> 형식으로 적어주세요.") }
         var key = String(word[..<equals]), operation = Operation.set
         if key.hasSuffix("+") { key.removeLast(); operation = .add } else if key.hasSuffix("-") { key.removeLast(); operation = .remove }
+        // 2.0.1's scripts go on: the cycle is the only mode left, and its F20 now reads as F19, as the app's own setting does.
+        let raw = word[word.index(after: equals)...].trimmingCharacters(in: .whitespaces).lowercased()
+        if key == "added-mode", operation == .set, ["cycle", "separate"].contains(raw) { return nil }
+        if ["separate-key", "separate-source"].contains(key) { throw UsageError("\(key)는 없어졌습니다. source.<입력 소스>.key=<키>로 지정하세요.") }
+        if key == "target", operation == .set, ["f20", "20"].contains(raw) { return try change("target=F19") }
         let (address, setting) = try self.setting(key)
         guard operation == .set || setting.kind.isList else { throw UsageError("\(key)에는 \(operation.rawValue)를 쓸 수 없습니다. 목록 설정에만 씁니다.") }
         return Change(address: address, operation: operation, value: try value(String(word[word.index(after: equals)...]), for: setting, label: key, operation: operation))

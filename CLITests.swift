@@ -15,6 +15,10 @@ func runCommandTests() {
     precondition(parse(["--enable"])?.command == .set([change("active", value: .bool(true)), change("paused", value: .bool(false))])
         && parse(["disable"])?.command == .set([change("active", value: .bool(false))])
         && parse(["--im", "com.apple.keylayout.ABC"])?.command == .source("com.apple.keylayout.ABC"), "The flags issue #47 asked for")
+    precondition(parse(["set", "added-sources=on", "added-mode=cycle", "target=F20"])?.command
+        == .set([change("added-sources", value: .bool(true)), change("target", value: .text("F19"))])
+        && parse(["set", "added-mode=other"]) == nil && parse(["set", "separate-key=right-option"]) == nil
+        && parse(["get", "added-mode"]) == nil, "2.0.1's settings: the mode is dropped, F20 reads as F19, separate keys name the new form")
     let set = parse(["set", "long-press=on", "keys+=Caps-Lock,shift-space", "target=19", "-j", "--force"])
     precondition(set?.options == CLI.Options(json: true, force: true, wait: false) && set?.command == .set([change("long-press", value: .bool(true)),
         change("keys", nil, .add, value: .list(["caps-lock", "shift-space"])), change("target", value: .text("F19"))]))
@@ -29,7 +33,7 @@ func runCommandTests() {
     precondition(parse(["pause"])?.command == .set([change("paused", value: .bool(true))]) && parse(["toggle", "escape"])?.command == .toggle([CLI.Address(name: "escape", keyboard: nil)]))
     for wrong in [["set"], ["set", "nope=on"], ["set", "active"], ["set", "active=maybe"], ["set", "active+=on"], ["toggle", "keys"], ["set", "keys="],
                   ["set", "keyboard.x.keys=ctrl-space"], ["set", "keyboard..mode=on"], ["get", "keyboard."], ["status", "x"], ["frobnicate"], ["--nope"],
-                  ["set", "source.x.key=caps"], ["set", "source..enabled=on"], ["set", "source.x.key+=caps-lock"], ["set", "added-mode=cycle"]] {
+                  ["set", "source.x.key=caps"], ["set", "source..enabled=on"], ["set", "source.x.key+=caps-lock"]] {
         precondition(parse(wrong) == nil, "A usage error: \(wrong)")
     }
     print("PASS: commands, options, issue #47's flags, list operations, keyboard and source names with dots, usage errors")

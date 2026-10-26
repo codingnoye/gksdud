@@ -76,11 +76,14 @@ class ReleaseTests < Minitest::Test
   end
 
   def test_pushed_tags_must_match_source_version
-    with_release_repository do |selection, _, _|
+    with_release_repository do |selection, command, _|
       result = selection.resolve(event: 'push', tag: 'v1.2.0', version: '', source: '', summary: '')
       assert_equal ['1.2.0', false], result.values_at(:version, :prerelease)
       assert_raises(ArgumentError) { selection.resolve(event: 'push', tag: 'v9.0.0', version: '', source: '', summary: '') }
-      # A prerelease's version is its tag's, after the source's stable version.
+      # A prerelease's version is its tag's, after the source's stable version, which must be out already.
+      error = assert_raises(RuntimeError) { selection.resolve(event: 'push', tag: 'pre-v1.2.0.1', version: '', source: '', summary: '') }
+      assert_match 'v1.2.0 does not exist', error.message
+      command.call('git', 'tag', 'v1.2.0')
       result = selection.resolve(event: 'push', tag: 'pre-v1.2.0.1', version: '', source: '', summary: '')
       assert_equal ['1.2.0.1', 'pre', true], result.values_at(:version, :channel, :prerelease)
       assert_raises(ArgumentError) { selection.resolve(event: 'push', tag: 'pre-v1.2.0', version: '', source: '', summary: '') }

@@ -27,6 +27,11 @@ class ReleaseSelection
                 else capture('/usr/libexec/PlistBuddy', '-c', 'Print :CFBundleShortVersionString', 'Info.plist') end
       metadata = ReleaseMetadata.new(version, tag)
       sha = capture('git', 'rev-parse', 'HEAD^{commit}')
+      # Numbered on a stable release not out yet, it would outrank that release and never be updated to it.
+      if metadata.channel == 'pre'
+        base = "refs/tags/v#{version.split('.').first(3).join('.')}"
+        raise "A prerelease follows a published stable release; #{base.delete_prefix('refs/tags/')} does not exist" if capture('git', 'ls-remote', '--tags', 'origin', base).empty?
+      end
     end
     ref = "refs/tags/#{metadata.tag}"
     refs = capture('git', 'ls-remote', '--tags', 'origin', ref, "#{ref}^{}").lines.map do |line|
