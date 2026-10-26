@@ -99,7 +99,15 @@ func defaultCycle(_ enabled: [InputSourceIdentity]) -> [String] {
     (enabled.filter(isKorean) + enabled.filter(isEnglish) + enabled.filter { !isKorean($0) && !isEnglish($0) }).map(\.id)
 }
 
-// macOS's next-source shortcut goes round the sources it offers in their order.
+// The input menu, and the next-source shortcut that goes round it, lists the sources by the name of their language in the
+// system's language, keeping macOS's order within one. Measured on macOS 26 and 27.
+func menuOrder(_ sources: [InputSourceIdentity], locale: Locale) -> [String] {
+    let names = sources.map { locale.localizedString(forIdentifier: $0.language) ?? $0.language }
+    return sources.indices.sorted { a, b in
+        let order = names[a].compare(names[b], locale: locale)
+        return order == .orderedSame ? a < b : order == .orderedAscending
+    }.map { sources[$0].id }
+}
 func nextInMenu(_ ids: [String], after id: String) -> String? {
     guard ids.count > 1, let index = ids.firstIndex(of: id) else { return nil }
     return ids[(index + 1) % ids.count]
@@ -242,9 +250,10 @@ extension AppDelegate {
         if switchLanding == target.id { queuedSwitch = nil; return true }
         if switchLanding == nil && target.id == current.id { return true }
         // The input menu's next source is one shortcut away, as the previous one is: nothing is selected first.
-        if queuedSwitch == nil, let next = engine.liveNextTarget, nextInMenu(enabledSources().map(\.id), after: current.id) == target.id,
+        if queuedSwitch == nil, let next = engine.liveNextTarget, menuNext(after: current.id) == target.id,
            Self.sourceForID(target.id) != nil, let nextPulse = nativeSwitchPulse(keyCode: next.keyCode, marker: nativePulseMarker) {
             postSwitchPulse(nextPulse)
+            nextSent = (current.id, target.id)
             sourceHistory.note(target.id)
             expectLanding(target, origin: current.id)
             return true
@@ -283,6 +292,23 @@ extension AppDelegate {
         expectLanding(target, origin: plan.selections.last ?? current.id)
         return true
     }
+    // Where the next-source shortcut goes: as seen, or else as the menu is expected to list them.
+    func menuNext(after id: String) -> String? {
+        missedNext[id] ?? nextInMenu(menuOrder(enabledSources(), locale: Locale(identifier: Locale.preferredLanguages.first ?? "en")), after: id)
+    }
+    // The next-source shortcut went elsewhere: that is remembered, and the switch goes on from there.
+    func nextLanded(_ id: String?) {
+        guard let sent = nextSent, id != sent.from else { return }
+        nextSent = nil
+        guard let id, id != sent.target else { return }
+        missedNext[sent.from] = id
+        sourceHistory.note(sent.from); sourceHistory.note(id)
+        if switchLanding == sent.target { switchLanding = nil }
+        let enabled = enabledSources()
+        guard let landed = enabled.first(where: { $0.id == id }), let target = enabled.first(where: { $0.id == sent.target }),
+              let pulse = nativeSwitchPulse(keyCode: engine.target.keyCode, marker: nativePulseMarker) else { return }
+        switchSource(to: target, from: landed, pulse: pulse)
+    }
     // Until the switch lands the icon keeps showing where it started, not the sources selected on the way. If the shortcut
     // does not switch, a layout selected on the way may already have reached the frontmost app while macOS shows another
     // source; selecting the target layout makes them agree.
@@ -293,7 +319,7 @@ extension AppDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             guard let self, self.landingGeneration == generation else { return }
             let landed = self.switchLanding == nil
-            self.switchLanding = nil
+            self.switchLanding = nil; self.nextSent = nil
             if reselectsTarget(landed: landed, current: self.currentSource?.id, origin: origin, targetIsLayout: self.isLayout(target.id)),
                let source = Self.sourceForID(target.id) { _ = TISSelectInputSource(source) }
             self.updateInputIndicator()

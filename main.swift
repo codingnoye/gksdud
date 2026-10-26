@@ -762,6 +762,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     // The source a switch is on its way to, and one that waits for it to land.
     var switchLanding: String?
     var queuedSwitch: (target: InputSourceIdentity, pulse: (CGEvent, CGEvent))?
+    // The next-source shortcut on its way, and where it went instead of the expected source, until the sources change.
+    var nextSent: (from: String, target: String)?
+    var missedNext: [String: String] = [:]
     // Keys typed while such a switch is on its way.
     var holdKeys = false
     var heldKeys: [CGEvent] = []
@@ -1468,6 +1471,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             guard let self else { return }
             let id = self.currentSource?.id
             if let id { self.sourceHistory.note(id) }
+            self.nextLanded(id)
             if id == self.switchLanding {
                 self.switchLanding = nil
                 // After this notification is handled, like a key pressed now.
@@ -1488,7 +1492,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     // A source's key maps or goes back to the keyboard as its source comes and goes.
     @objc func enabledSourcesChanged() {
         RunLoop.main.perform(inModes: [.common]) { [weak self] in
-            self?.sourceCache = nil; self?.nativeIconCache = [:]; self?.repair(); self?.addedSources.refresh(force: true)
+            self?.sourceCache = nil; self?.nativeIconCache = [:]; self?.missedNext = [:]; self?.repair(); self?.addedSources.refresh(force: true)
         }
     }
     func updateInputIndicator() {

@@ -1057,6 +1057,17 @@ func runSourceKeyTests() {
     precondition(NSDictionary(dictionary: hotkeys["61"] as! [String: Any]).isEqual(to: edited), "A change made meanwhile is the user's and stays")
     precondition(nextInMenu(["us", "ko", "zh"], after: "zh") == "us" && nextInMenu(["us", "ko"], after: "us") == "ko"
         && nextInMenu(["us"], after: "us") == nil && nextInMenu(["us", "ko"], after: "ja") == nil, "The menu's next source, round the end")
+    let measured = [InputSourceIdentity(id: "abc", language: "en"), InputSourceIdentity(id: "ko", language: "ko"),
+                    InputSourceIdentity(id: "ja", language: "ja"), InputSourceIdentity(id: "fr", language: "fr"),
+                    InputSourceIdentity(id: "de", language: "de"), InputSourceIdentity(id: "us", language: "en")]
+    let korean = Locale(identifier: "ko"), english = Locale(identifier: "en")
+    precondition(menuOrder(Array(measured.prefix(3)), locale: korean) == ["abc", "ja", "ko"]
+        && menuOrder(Array(measured.prefix(4)), locale: korean) == ["abc", "ja", "fr", "ko"]
+        && menuOrder(measured.filter { $0.id != "fr" }, locale: korean) == ["de", "abc", "us", "ja", "ko"],
+        "macOS 27 lists the sources by their language's name in Korean, as measured")
+    let guest = [InputSourceIdentity(id: "us", language: "en"), InputSourceIdentity(id: "ko", language: "ko"),
+                 InputSourceIdentity(id: "itabc", language: "zh-Hans"), InputSourceIdentity(id: "wetype", language: "zh-Hans")]
+    precondition(menuOrder(guest, locale: english) == ["itabc", "wetype", "us", "ko"], "and macOS 26 in English, as measured")
 
     // Settings: single keys of sources turned on map while the tap can act on them.
     let engineSuite = "io.gksdud.source-key-engine-tests.\(UUID().uuidString)"
