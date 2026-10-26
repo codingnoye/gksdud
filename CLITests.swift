@@ -17,8 +17,9 @@ func runCommandTests() {
         && parse(["--im", "com.apple.keylayout.ABC"])?.command == .source("com.apple.keylayout.ABC"), "The flags issue #47 asked for")
     precondition(parse(["set", "added-sources=on", "added-mode=cycle", "target=F20"])?.command
         == .set([change("added-sources", value: .bool(true)), change("target", value: .text("F19"))])
-        && parse(["set", "added-mode=other"]) == nil && parse(["set", "separate-key=right-option"]) == nil
-        && parse(["get", "added-mode"]) == nil, "2.0.1's settings: the mode is dropped, F20 reads as F19, separate keys name the new form")
+        && parse(["set", "separate-key=none"])?.command == .set([])
+        && parse(["set", "added-mode=separate"]) == nil && parse(["set", "separate-key=right-option"]) == nil
+        && parse(["get", "added-mode"]) == nil, "2.0.1's settings: the cycle and no separate key are dropped, F20 reads as F19, separate keys name the new form")
     let set = parse(["set", "long-press=on", "keys+=Caps-Lock,shift-space", "target=19", "-j", "--force"])
     precondition(set?.options == CLI.Options(json: true, force: true, wait: false) && set?.command == .set([change("long-press", value: .bool(true)),
         change("keys", nil, .add, value: .list(["caps-lock", "shift-space"])), change("target", value: .text("F19"))]))

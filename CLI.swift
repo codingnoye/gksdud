@@ -169,8 +169,9 @@ enum CLI {
         if key.hasSuffix("+") { key.removeLast(); operation = .add } else if key.hasSuffix("-") { key.removeLast(); operation = .remove }
         // 2.0.1's scripts go on: the cycle is the only mode left, and its F20 now reads as F19, as the app's own setting does.
         let raw = word[word.index(after: equals)...].trimmingCharacters(in: .whitespaces).lowercased()
-        if key == "added-mode", operation == .set, ["cycle", "separate"].contains(raw) { return nil }
-        if ["separate-key", "separate-source"].contains(key) { throw UsageError("\(key)는 없어졌습니다. source.<입력 소스>.key=<키>로 지정하세요.") }
+        if key == "added-mode", operation == .set, raw == "cycle" { return nil }
+        if key == "separate-key", operation == .set, raw == "none" { return nil }
+        if ["added-mode", "separate-key", "separate-source"].contains(key) { throw UsageError("\(key)는 없어졌습니다. source.<입력 소스>.key=<키>로 지정하세요.") }
         if key == "target", operation == .set, ["f20", "20"].contains(raw) { return try change("target=F19") }
         let (address, setting) = try self.setting(key)
         guard operation == .set || setting.kind.isList else { throw UsageError("\(key)에는 \(operation.rawValue)를 쓸 수 없습니다. 목록 설정에만 씁니다.") }
