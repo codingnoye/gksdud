@@ -17,7 +17,7 @@ func runCommandTests() {
         && parse(["--im", "com.apple.keylayout.ABC"])?.command == .source("com.apple.keylayout.ABC"), "The flags issue #47 asked for")
     precondition(parse(["set", "added-sources=on", "added-mode=cycle", "target=F20"])?.command
         == .set([change("added-sources", value: .bool(true)), change("target", value: .text("F19"))])
-        && parse(["set", "separate-key=none"])?.command == .set([])
+        && parse(["set", "separate-key=none", "separate-source=none"])?.command == .set([])
         && parse(["set", "added-mode=separate"]) == nil && parse(["set", "separate-key=right-option"]) == nil
         && parse(["get", "added-mode"]) == nil, "2.0.1's settings: the cycle and no separate key are dropped, F20 reads as F19, separate keys name the new form")
     let set = parse(["set", "long-press=on", "keys+=Caps-Lock,shift-space", "target=19", "-j", "--force"])

@@ -481,8 +481,12 @@ final class Engine {
         defaults.removeObject(forKey: "nextRestorePending")
         keys["61"] = ["enabled": true, "value": ["type": "standard", "parameters": [65535, next.keyCode, 0]]] as [String: Any]
         defaults.set(true, forKey: "nextActivatePending")
-        try shortcutPreferences.write(keys)
-        // Only once written: a failed write leaves the key before it, still this app's, which a backup would take as the user's.
+        // Recorded once it is there: a failed write leaves the key before it, still this app's, which a backup would take as the
+        // user's. A write that fails to sync can still leave the new key.
+        do { try shortcutPreferences.write(keys) } catch {
+            if Self.ownsShortcut(shortcutPreferences.read()["61"], keyCode: next.keyCode) { defaults.set(next.keyCode, forKey: "managedNextShortcutKeyCode") }
+            throw error
+        }
         defaults.set(next.keyCode, forKey: "managedNextShortcutKeyCode")
         try shortcutPreferences.activate()
         defaults.removeObject(forKey: "nextActivatePending")

@@ -1063,14 +1063,18 @@ func runSourceKeyTests() {
     // A move to another F-key that fails to write leaves the one before still this app's, for the user's to come back.
     let failSuite = "io.gksdud.next-shortcut-failure-tests.\(UUID().uuidString)", failDefaults = UserDefaults(suiteName: failSuite)!
     defer { failDefaults.removePersistentDomain(forName: failSuite) }
-    var failHotkeys: [String: Any] = ["61": userNext], writeFails = false
+    var failHotkeys: [String: Any] = ["61": userNext], writeFails = false, writeStores = false
     let moveFailing = Engine(defaults: failDefaults, discover: { [] }, shortcutPreferences: ShortcutPreferences(read: { failHotkeys }, write: {
-        if writeFails { throw NSError(domain: "test", code: 1) }; failHotkeys = $0 }, activate: {}))
+        if writeStores || !writeFails { failHotkeys = $0 }; if writeFails { throw NSError(domain: "test", code: 1) } }, activate: {}))
     moveFailing.accessibilityTrusted = { true }
-    failDefaults.set(true, forKey: "addedSources"); try? moveFailing.updateNextShortcut()
-    writeFails = true; failDefaults.set("F16", forKey: "target"); try? moveFailing.updateNextShortcut()
-    writeFails = false; failDefaults.removeObject(forKey: "target"); failDefaults.set(false, forKey: "addedSources"); try? moveFailing.updateNextShortcut()
-    precondition(NSDictionary(dictionary: failHotkeys["61"] as! [String: Any]).isEqual(to: userNext), "The user's shortcut comes back after a failed move")
+    for stores in [false, true] {
+        failHotkeys = ["61": userNext]; writeStores = stores
+        failDefaults.set(true, forKey: "addedSources"); try? moveFailing.updateNextShortcut()
+        writeFails = true; failDefaults.set("F16", forKey: "target"); try? moveFailing.updateNextShortcut()
+        writeFails = false; failDefaults.removeObject(forKey: "target"); failDefaults.set(false, forKey: "addedSources"); try? moveFailing.updateNextShortcut()
+        precondition(NSDictionary(dictionary: failHotkeys["61"] as! [String: Any]).isEqual(to: userNext),
+            "The user's shortcut comes back after a failed move, whether the write left the new key or not")
+    }
     // Shortcuts are read before the next-source shortcut is placed on launch, and it moves when a free F-key changes.
     hotkeys = ["61": userNext, "32": ["enabled": true, "value": ["type": "standard", "parameters": [65535, targets[3].keyCode, 8388608]]] as [String: Any]]
     activations = 0
