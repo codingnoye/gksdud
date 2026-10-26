@@ -630,13 +630,16 @@ func renderKeyboardUI(to directory: String) throws {
     for _ in 0..<3 { _ = engine.keyboards.reconcile(sources: [sources[0]], target: f19, active: true) }
     let previewRelease = AppRelease(tag_name: "v9.0.0", html_url: "https://github.com/codingnoye/gksdud/releases/tag/v9.0.0", body: "## 요약\n- 설정을 일반·대소문자·특수문자·gksdud 탭으로 나눴습니다.\n- 한글에서도 Option 특수문자를 입력할 수 있습니다.\n- 새 버전이 나오면 메뉴에서 알려드립니다. 자세히: https://github.com/codingnoye/gksdud\n\n## 경고\n- 업데이트 후 손쉬운 사용 권한을 다시 허용해주세요. [방법 보기](https://support.apple.com/guide/mac-help/mh43185/mac)\n\n## 설치\n요약에 나타나면 안 됩니다.", draft: false, prerelease: false)
     let olderRelease = AppRelease(tag_name: "v8.9.0", html_url: "https://github.com/codingnoye/gksdud/releases/tag/v8.9.0", body: "## 요약\n- 이전 버전 항목입니다.", draft: false, prerelease: false)
-    defaults.set(try JSONEncoder().encode([previewRelease, olderRelease]), forKey: "updates.releases")
+    defaults.set(try JSONEncoder().encode([previewRelease, olderRelease]), forKey: "updates.cache")
     let delegate = AppDelegate(engine: engine)
     delegate.updates = UpdateChecker(defaults: defaults, channel: .stable)
     delegate.buildWindow()
     delegate.window.makeFirstResponder(nil)
     delegate.updateMenu()
     defer { if let item = delegate.item { NSStatusBar.system.removeStatusItem(item) } }
+    // English, whatever this Mac's input source is.
+    func showEnglish() { delegate.indicator = (InputSourceIdentity(id: "com.apple.keylayout.US", language: "en"), ""); delegate.showIndicator() }
+    showEnglish()
     // Wired like AppDelegate, except that the test answers warnings and repair always applies.
     var allowChanges = true, checked: [(keyboards: Set<String>, conflict: UInt64?)] = []
     let settings = KeyboardSettingsController(engine: engine, targetPicker: delegate.targetPicker, sourcesChanged: { delegate.picker.show($0); delegate.selectionChanged() }, confirm: {
@@ -651,6 +654,8 @@ func renderKeyboardUI(to directory: String) throws {
         button.layoutSubtreeIfNeeded()
         precondition(delegate.warningBadge.superview === button && !delegate.warningBadge.isHidden)
         precondition(button.bounds.contains(delegate.warningBadge.frame), "Warning badge must fit inside the menu-bar button")
+        precondition(delegate.updateArrow && button.image === delegate.withUpdateArrow(delegate.sourceMenuIcon(korean: false))
+            && button.image?.isTemplate == true && button.image?.size == NSSize(width: 22, height: 20), "The update arrow is drawn into the icon, in its color")
         if let bitmap = button.bitmapImageRepForCachingDisplay(in: button.bounds) {
             button.cacheDisplay(in: button.bounds, to: bitmap)
             try bitmap.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: directory).appendingPathComponent("menubar-warning.png"))
@@ -712,9 +717,32 @@ func renderKeyboardUI(to directory: String) throws {
         && link(warningText!, at: "v9.0.0")?.absoluteString == "https://github.com/codingnoye/gksdud/releases/tag/v9.0.0")
     precondition(warningAlerts[0].buttons.map(\.title) == ["업데이트 설치", "취소"])
     delegate.runAlert = { $0.runModal() }
-    delegate.updates = UpdateChecker(defaults: defaults, installedVersion: "9.0.0", channel: .stable)
+    precondition(delegate.channelPicker.titleOfSelectedItem == "정식 릴리즈" && delegate.channelPicker.superview === delegate.checkUpdateButton.superview)
+    precondition(delegate.updateBadgeSwitch.state == .on && delegate.updateBadgeSwitch.isEnabled)
+    showEnglish()
+    delegate.updateBadgeSwitch.performClick(nil)
+    precondition(!delegate.updateArrow && delegate.item?.button?.image === delegate.sourceMenuIcon(korean: false) && !updateEntry.isHidden && defaults.object(forKey: "updateBadge") as? Bool == false, "The option hides only the arrow")
+    delegate.updateBadgeSwitch.performClick(nil)
+    precondition(delegate.updateArrow)
+    // On prerelease the menu bar shows only a stable release; the gksdud tab offers the prerelease.
+    let nextPreview = AppRelease(tag_name: "v9.0.0.1", html_url: "https://github.com/codingnoye/gksdud/releases/tag/v9.0.0.1", body: "## 요약\n- 프리릴리즈", draft: false, prerelease: true)
+    defaults.set(try JSONEncoder().encode([nextPreview, previewRelease]), forKey: "updates.cache")
+    delegate.updates = UpdateChecker(defaults: defaults, installedVersion: "9.0.0", channel: .prerelease)
     delegate.refreshUpdates()
-    precondition(delegate.tabButtons[4].accessibilityLabel() == "\(UpdateChannel.current.appName) 탭" && delegate.updateButton.isHidden && updateEntry.isHidden)
+    precondition(!delegate.updateButton.isHidden && !delegate.updateArrow && updateEntry.isHidden && delegate.channelPicker.titleOfSelectedItem == "프리릴리즈")
+    // Choosing in the dropdown shows the channel's updates at once, and checks it.
+    var fetches = 0
+    delegate.updates = UpdateChecker(defaults: defaults, installedVersion: "8.9.5", channel: .canary, fetch: { _, _ in fetches += 1 })
+    delegate.updates.onChange = { delegate.refreshUpdates() }
+    delegate.refreshUpdates()
+    precondition(!delegate.updateArrow && delegate.updateButton.isHidden && delegate.channelPicker.titleOfSelectedItem == "카나리아")
+    delegate.channelPicker.selectItem(at: 0)
+    precondition(delegate.channelPicker.sendAction(delegate.channelPicker.action, to: delegate.channelPicker.target))
+    precondition(delegate.updates.channel == .stable && fetches == 1 && delegate.updateArrow && !updateEntry.isHidden && !delegate.updateButton.isHidden
+        && delegate.updateStatus.stringValue == "업데이트 확인 중…" && delegate.updateHeading.stringValue == "v8.9.5 → v9.0.0")
+    delegate.updates = UpdateChecker(defaults: defaults, installedVersion: "9.0.0.1", channel: .stable)
+    delegate.refreshUpdates()
+    precondition(delegate.tabButtons[4].accessibilityLabel() == "\(BuildKind.current.displayName) 탭" && delegate.updateButton.isHidden && updateEntry.isHidden && !delegate.updateArrow)
     defaults.set(false, forKey: "active")
     delegate.resetSelection()
     // Right Control goes last: the screenshots and later checks start from it.

@@ -76,6 +76,13 @@ func runCommandTests() {
         && run("get", "icon-case").text == "off", "Without the menu bar icon it waits, as in the window")
     // Back without putting an icon in the real menu bar.
     defaults.set(false, forKey: "hidden"); delegate.showInMenuBar.state = .on; delegate.updatePressAccess()
+    precondition(run("get", "update-badge").text == "on" && run("toggle", "update-badge").exit == CLI.Exit.ok && !delegate.showsUpdateBadge
+        && delegate.updateBadgeSwitch.state == .off && run("set", "update-badge=on").exit == CLI.Exit.ok && delegate.showsUpdateBadge)
+    var fetched = 0
+    delegate.updates = UpdateChecker(defaults: defaults, installedVersion: "9.0.0", channel: .stable, fetch: { _, _ in fetched += 1 })
+    precondition(run("set", "update-channel=prerelease").exit == CLI.Exit.ok && delegate.updates.channel == .prerelease && fetched == 1
+        && defaults.string(forKey: "updates.channel") == "prerelease" && run("get", "update-channel").text == "prerelease"
+        && delegate.channelPicker.titleOfSelectedItem == "프리릴리즈", "Choosing a channel checks it at once")
     print("PASS: get one value or all, set several, toggle, unchanged values")
 
     // Caps Lock in Korean needs case preservation, which comes later in the same command.

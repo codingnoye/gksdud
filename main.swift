@@ -760,6 +760,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     let updateStatus = NSTextField(wrappingLabelWithString: "")
     let updateButton = NSButton(title: "업데이트 설치", target: nil, action: nil)
     let checkUpdateButton = NSButton(title: "업데이트 확인", target: nil, action: nil)
+    let channelPicker = NSPopUpButton()
     var specialButtons: [NSButton] = []
     let specialStatus = NSTextField(wrappingLabelWithString: "")
     var item: NSStatusItem?
@@ -788,6 +789,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     let showInMenuBar = NSButton(checkboxWithTitle: "메뉴바에 표시", target: nil, action: nil)
     let replaceInputMenu = NSButton(checkboxWithTitle: "Mac 입력기 아이콘 대체", target: nil, action: nil)
     let iconCaseSwitch = NSButton(checkboxWithTitle: "대소문자를 영문 아이콘에 반영", target: nil, action: nil)
+    let updateBadgeSwitch = NSButton(checkboxWithTitle: "업데이트 가능 표시", target: nil, action: nil)
+    // Whether the menu bar icon shows the update arrow.
+    var updateArrow = false
+    var showsUpdateBadge: Bool { engine.defaults.object(forKey: "updateBadge") as? Bool ?? true }
     let status = NSTextField(wrappingLabelWithString: "")
     var timer: Timer?
     var menuInputTimer: Timer?
@@ -1015,6 +1020,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         replaceInputMenu.isEnabled = trusted && showInMenuBar.state == .on
         iconCaseSwitch.state = engine.defaults.bool(forKey: "iconCase") ? .on : .off
         iconCaseSwitch.isEnabled = trusted && showInMenuBar.state == .on
+        updateBadgeSwitch.state = showsUpdateBadge ? .on : .off
+        // The arrow shows without Accessibility too, so it can be turned off without it.
+        updateBadgeSwitch.isEnabled = showInMenuBar.state == .on
         for preview in [koreanPreview, englishPreview] { preview.contentTintColor = trusted ? .labelColor : .disabledControlTextColor }
         for (label, color) in settingLabels { label.textColor = trusted ? color : .disabledControlTextColor }
         let ready = keyTap.map { CGEvent.tapIsEnabled(tap: $0) } ?? false
@@ -1288,7 +1296,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
     func switchInFlight(from language: String) -> Bool { sentSwitch?.inFlight(now: ProcessInfo.processInfo.systemUptime, language: language) == true }
     func permissionAgainAlert() -> NSAlert {
-        let name = UpdateChannel.current.appName, alert = NSAlert()
+        let name = BuildKind.appName, alert = NSAlert()
         alert.messageText = "손쉬운 사용 권한을 다시 허용해주세요"
         alert.informativeText = "\(name)가 Apple 서명 버전으로 바뀌어, 이전에 허용한 권한을 macOS가 더 이상 인정하지 않습니다. 다음 창에서 시스템 설정을 열고 \(name)를 켜주세요. 켜면 한영 전환도 다시 켜집니다."
         alert.addButton(withTitle: "계속")
@@ -1304,8 +1312,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
     func applicationDidFinishLaunching(_ notification: Notification) {
         let mainMenu = NSMenu()
-        let appEntry = NSMenuItem(); let appMenu = NSMenu(title: UpdateChannel.current.appName)
-        appMenu.addItem(withTitle: "\(UpdateChannel.current.appName) 종료", action: #selector(quit), keyEquivalent: "q").target = self
+        let appEntry = NSMenuItem(); let appMenu = NSMenu(title: BuildKind.current.displayName)
+        appMenu.addItem(withTitle: "\(BuildKind.current.displayName) 종료", action: #selector(quit), keyEquivalent: "q").target = self
         appEntry.submenu = appMenu; mainMenu.addItem(appEntry)
         let editEntry = NSMenuItem(); let editMenu = NSMenu(title: "편집")
         for (title, action, key) in [("잘라내기", "cut:", "x"), ("복사", "copy:", "c"), ("붙여넣기", "paste:", "v"), ("모두 선택", "selectAll:", "a")] {
@@ -1426,11 +1434,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             ])
             warningBadge.isHidden = engine.keyboards.warning == nil
         }
+        updateArrow = showsUpdateBadge && updates.announced != nil
         let menu = NSMenu()
         menu.delegate = self
         menu.autoenablesItems = false
-        let brandEntry = NSMenuItem(title: UpdateChannel.current.appName, action: #selector(menuBrand), keyEquivalent: "")
-        brandEntry.attributedTitle = NSAttributedString(string: UpdateChannel.current.appName, attributes: [.font: NSFont.systemFont(ofSize: 15, weight: .heavy), .kern: 0.6])
+        let brandEntry = NSMenuItem(title: BuildKind.current.displayName, action: #selector(menuBrand), keyEquivalent: "")
+        brandEntry.attributedTitle = NSAttributedString(string: BuildKind.current.displayName, attributes: [.font: NSFont.systemFont(ofSize: 15, weight: .heavy), .kern: 0.6])
         brandEntry.image = DudIcon.badge(korean: false)
         brandEntry.target = self
         brandEntry.isEnabled = true
@@ -1438,7 +1447,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let updateEntry = NSMenuItem(title: "업데이트 가능", action: #selector(showAbout), keyEquivalent: "")
         updateEntry.target = self
         updateEntry.image = updateGlyph(NSSize(width: 22, height: 20))
-        updateEntry.isHidden = updates.available == nil
+        updateEntry.isHidden = updates.announced == nil
         menu.addItem(updateEntry)
         menu.addItem(NSMenuItem.separator())
         let koreanEntry = menu.addItem(withTitle: "한국어", action: #selector(selectKorean), keyEquivalent: "")
@@ -1476,8 +1485,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         engine.defaults.set(iconCaseSwitch.state == .on, forKey: "iconCase")
         updateInputIndicator()
     }
+    @objc func toggleUpdateBadge() {
+        engine.defaults.set(updateBadgeSwitch.state == .on, forKey: "updateBadge")
+        refreshUpdates()
+    }
     // Icons are kept, so the refresh every second finds the one showing and sets nothing.
     private var iconCache: [String: NSImage] = [:]
+    // The menu bar icon with the update arrow: a circle in the icon's own color at its bottom right, apart from it, with the
+    // arrow cut out of it.
+    private var arrowIcon: (base: NSImage, image: NSImage)?
+    func withUpdateArrow(_ icon: NSImage) -> NSImage {
+        if let arrowIcon, arrowIcon.base === icon { return arrowIcon.image }
+        let image = NSImage(size: icon.size, flipped: false) { rect in
+            // In a layer of its own, so cutting out reaches only the icon, not what it is drawn over.
+            guard let context = NSGraphicsContext.current?.cgContext else { return false }
+            NSGraphicsContext.saveGraphicsState(); context.beginTransparencyLayer(auxiliaryInfo: nil)
+            defer { context.endTransparencyLayer(); NSGraphicsContext.restoreGraphicsState() }
+            icon.draw(in: rect)
+            let radius = min(4.25, min(rect.width, rect.height) * 0.22), center = NSPoint(x: rect.maxX - radius, y: rect.minY + radius)
+            func circle(_ r: CGFloat) -> NSBezierPath { NSBezierPath(ovalIn: NSRect(x: center.x - r, y: center.y - r, width: r * 2, height: r * 2)) }
+            NSGraphicsContext.current?.compositingOperation = .destinationOut
+            circle(radius + 1.25).fill()
+            NSGraphicsContext.current?.compositingOperation = .sourceOver
+            (icon.isTemplate ? NSColor.black : NSColor.labelColor).setFill(); circle(radius).fill()
+            let arrow = NSBezierPath(); arrow.lineWidth = 1.2; arrow.lineCapStyle = .round; arrow.lineJoinStyle = .round
+            let tip = center.y + radius * 0.55, wing = radius * 0.45
+            arrow.move(to: NSPoint(x: center.x, y: center.y - radius * 0.55)); arrow.line(to: NSPoint(x: center.x, y: tip))
+            arrow.move(to: NSPoint(x: center.x - wing, y: tip - wing)); arrow.line(to: NSPoint(x: center.x, y: tip)); arrow.line(to: NSPoint(x: center.x + wing, y: tip - wing))
+            NSGraphicsContext.current?.compositingOperation = .destinationOut
+            arrow.stroke()
+            return true
+        }
+        image.isTemplate = icon.isTemplate
+        arrowIcon = (icon, image)
+        return image
+    }
     // Input sources' own icons by ID, nil for one without; read again when macOS's sources change.
     var nativeIconCache: [String: NSImage?] = [:]
     func badgeImage(label: String, filled: Bool) -> NSImage {
@@ -1565,10 +1607,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         if inputBadge.image !== badge { inputBadge.image = badge; inputBadge.setAccessibilityLabel("현재 입력: \(name)") }
         if tabButtons.first?.image !== badge { tabButtons.first?.image = badge }
         guard let button = item?.button else { return }
-        if button.image !== badge { button.title = ""; button.image = badge; button.imagePosition = .imageOnly }
+        let shown = updateArrow ? withUpdateArrow(badge) : badge
+        if button.image !== shown { button.title = ""; button.image = shown; button.imagePosition = .imageOnly }
         let warning = engine.keyboards.warning.map { "\n\($0)" } ?? ""
-        let tip = "\(UpdateChannel.current.appName) · 현재 입력 소스: \(source.language)\(warning)"
-        let spoken = "\(UpdateChannel.current.appName), 현재 입력 \(name)\(warning)"
+        let tip = "\(BuildKind.current.displayName) · 현재 입력 소스: \(source.language)\(warning)"
+        let update = updateArrow ? ", 업데이트 가능" : ""
+        let spoken = "\(BuildKind.current.displayName), 현재 입력 \(name)\(warning)\(update)"
         if button.toolTip != tip { button.toolTip = tip }
         if button.accessibilityLabel() != spoken { button.setAccessibilityLabel(spoken) }
     }
@@ -1774,7 +1818,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             : !stickyError.isEmpty ? stickyError
             : !engine.chosenCombos.isEmpty && !AXIsProcessTrusted() ? "조합 키를 쓰려면 접근성 권한을 허용하세요."
             : engine.active && result.selected == 0 && !engine.mappedSources.isEmpty ? "적용할 키보드 연결 대기 중"
-            : window.isVisible && login.state == .on && SMAppService.mainApp.status == .requiresApproval ? "시스템 설정 → 로그인 항목에서 \(UpdateChannel.current.appName)를 허용하세요." : ""
+            : window.isVisible && login.state == .on && SMAppService.mainApp.status == .requiresApproval ? "시스템 설정 → 로그인 항목에서 \(BuildKind.appName)를 허용하세요." : ""
     }
     var lastError = ""
     var stickyError = ""

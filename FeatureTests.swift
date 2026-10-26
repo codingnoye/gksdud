@@ -14,7 +14,10 @@ func featureCheck(_ condition: @autoclosure () -> Bool, _ message: String = "", 
 func runFeatureTests() {
     featureCheck(ReleaseVersion("v1.10.0")! > ReleaseVersion("1.9.9")!)
     featureCheck(ReleaseVersion("1.2")! == ReleaseVersion("1.2.0")!)
-    for invalid in ["pre-v1.3.0", "1.3.0-beta", "1..2", "1.2x", "", "1.2.99999999999999999999999"] { featureCheck(ReleaseVersion(invalid) == nil) }
+    featureCheck(ReleaseVersion("2.0.1")! < ReleaseVersion("2.0.1.0.1")! && ReleaseVersion("2.0.1.0.9")! < ReleaseVersion("2.0.1.1")!
+        && ReleaseVersion("2.0.1.1")! < ReleaseVersion("2.0.1.1.1")! && ReleaseVersion("2.0.1.1.30")! < ReleaseVersion("2.0.2")!)
+    featureCheck(["2.0.1", "2.0.1.1", "2.0.1.1.3", "2.0.1.0.3"].map { ReleaseVersion($0)!.channel } == [.stable, .prerelease, .canary, .canary])
+    for invalid in ["pre-v1.3.0", "1.3.0-beta", "1..2", "1.2x", "", "1.2.99999999999999999999999", "1.2.3.4.5.6"] { featureCheck(ReleaseVersion(invalid) == nil) }
     func release(_ body: String?, tag: String = "v1.3.0", url: String = "https://github.com/codingnoye/gksdud/releases/tag/v1.3.0", draft: Bool = false, pre: Bool = false) -> AppRelease {
         AppRelease(tag_name: tag, html_url: url, body: body, draft: draft, prerelease: pre)
     }
@@ -88,7 +91,7 @@ func runFeatureTests() {
     signed.assets = [ReleaseAsset(name: "gksdud-1.3.0.zip", browser_download_url: "", size: 1)]
     featureCheck(signed.updates("1.3.0", developerID: false) && !signed.updates("1.3.0", developerID: true) && !both.updates("1.3.0", developerID: false)
                  && signed.updates("1.2.0", developerID: true) && !signed.updates("1.3.1", developerID: false), "A self-signed app takes its own version signed by Apple")
-    let selfSigned = UpdateChecker(defaults: defaults, installedVersion: "1.3.0", channel: .stable, developerID: false, fetch: { _, done in completion = done })
+    let selfSigned = UpdateChecker(defaults: defaults, installedVersion: "1.3.0", channel: .stable, build: .stable, developerID: false, fetch: { _, done in completion = done })
     selfSigned.check(force: true); respond(200, try! JSONEncoder().encode([stable("1.2.0", nil), signed]))
     featureCheck(selfSigned.available?.tag_name == "v1.3.0" && selfSigned.available?.archiveName == "gksdud-1.3.0.zip" && selfSigned.pending.count == 1)
     featureCheck(UpdateChecker(defaults: defaults, installedVersion: "1.3.0", channel: .stable, developerID: true).available == nil, "Already signed by Apple, nothing to take")
@@ -724,10 +727,7 @@ func runUpdateInstallTests() throws {
     rejected { try UpdateValidation.archiveNames("/gksdud.app/file", listing: listing, app: "gksdud.app") }
     rejected { try UpdateValidation.archiveNames(names, listing: listing.replacingOccurrences(of: "-rwx", with: "lrwx"), app: "gksdud.app") }
     rejected { try UpdateValidation.archiveNames(names, listing: listing.replacingOccurrences(of: "42 bx", with: "999999999 bx"), app: "gksdud.app") }
-    // The canary app is gksdud-dev.app; neither channel takes the other's archive.
     rejected { try UpdateValidation.archiveNames(names, listing: listing, app: "gksdud-dev.app") }
-    try UpdateValidation.archiveNames(names.replacingOccurrences(of: "gksdud.app", with: "gksdud-dev.app"),
-                                      listing: listing.replacingOccurrences(of: "gksdud.app", with: "gksdud-dev.app"), app: "gksdud-dev.app")
     var release = AppRelease(tag_name: "v1.3.0", html_url: "https://github.com/codingnoye/gksdud/releases/tag/v1.3.0", body: nil, draft: false, prerelease: false)
     release.assets = [ReleaseAsset(name: "test.zip", browser_download_url: "https://github.com/codingnoye/gksdud/releases/download/v1.3.0/test.zip", size: 100)]
     let assetURL = try release.assetURL(named: "test.zip", limit: 100)
@@ -812,18 +812,22 @@ func runPrereleaseTests() {
         AppRelease(tag_name: tag, html_url: "https://github.com/codingnoye/gksdud/releases/tag/\(tag)", body: "### 요약\n- \(tag)", draft: draft, prerelease: pre,
                    assets: [ReleaseAsset(name: "gksdud-\(tag.drop { !$0.isNumber }).zip", browser_download_url: "", size: 1)])
     }
-    let preview = release("pre-v1.3.0.1")
-    featureCheck(preview.channel == .stable && preview.versionString == "1.3.0.1" && preview.archiveName == "gksdud-1.3.0.1.zip")
-    featureCheck(!preview.isNewer(than: "1.2.0") && !preview.isNewer(than: "1.3.0"), "A stable app never takes a prerelease")
-    featureCheck(preview.isNewer(than: "1.2.0.3") && !preview.isNewer(than: "1.3.0.1"))
-    featureCheck(!release("pre-v1.3.0.1", pre: false).isNewer(than: "1.2.0.1") && !release("pre-v1.3.0").isNewer(than: "1.2.0.1")
-        && !release("v1.3.0.1", pre: false).isNewer(than: "1.2.0.1") && !release("canary-v1.3.0.1").isNewer(than: "1.2.0.1"),
-        "A prerelease is a GitHub prerelease with four fields")
-    var completion: ((Data?, URLResponse?, Error?) -> Void)?
-    func checker(_ installed: String) -> UpdateChecker {
-        UpdateChecker(defaults: defaults, installedVersion: installed, channel: .stable, developerID: true, fetch: { request, done in
+    let preview = release("v1.3.0.1"), canary = release("v1.3.0.1.5")
+    featureCheck(preview.channel == .prerelease && preview.versionString == "1.3.0.1" && preview.archiveName == "gksdud-1.3.0.1.zip")
+    featureCheck(canary.channel == .canary && canary.versionString == "1.3.0.1.5" && canary.archiveName == "gksdud-1.3.0.1.5.zip", "Canary is the same app")
+    featureCheck(preview.isNewer(than: "1.2.0") && preview.isNewer(than: "1.3.0") && !preview.isNewer(than: "1.3.0.1") && canary.isNewer(than: "1.3.0.1"))
+    featureCheck(!release("v1.3.0.1", pre: false).isNewer(than: "1.2.0.1") && !release("v1.3.0.1.1", pre: false).isNewer(than: "1.2.0.1")
+        && !release("v1.3.0").isNewer(than: "1.2.0") && !release("v1.3.0.0").isNewer(than: "1.2.0.1") && !release("v1.3.0.1.0").isNewer(than: "1.2.0.1")
+        && !release("pre-v1.3.0.1").isNewer(than: "1.2.0.1") && !release("canary-v1.3.0.1.1").isNewer(than: "1.2.0.1"),
+        "Prereleases are GitHub prereleases with four fields, canary releases with five, stable releases neither; old pre- and canary- tags are not read")
+    featureCheck(release("v1.3.0.2").isNewer(than: "1.3.0.1.5") && !canary.isNewer(than: "1.3.0.2"), "A canary between the prereleases around it")
+    featureCheck(UpdateChannel.allCases.map(\.rawValue) == CLI.channelNames && [BuildKind.dev, .canary, .prerelease, .stable].map(\.displayName) == ["gksdud-DEV", "gksdud-CAN", "gksdud", "gksdud"]
+        && [BuildKind.dev, .canary, .prerelease, .stable].map(\.channel) == [.canary, .canary, .prerelease, .stable], "A local build counts as canary")
+    var completion: ((Data?, URLResponse?, Error?) -> Void)?, requests = 0
+    func checker(_ installed: String, _ channel: UpdateChannel? = nil) -> UpdateChecker {
+        UpdateChecker(defaults: defaults, installedVersion: installed, channel: channel, developerID: true, fetch: { request, done in
             featureCheck(request.url?.path == "/repos/codingnoye/gksdud/releases" && request.url?.query == "per_page=100")
-            completion = done
+            requests += 1; completion = done
         })
     }
     func respond(_ checker: UpdateChecker, _ releases: [AppRelease]) {
@@ -831,54 +835,75 @@ func runPrereleaseTests() {
         completion?(try! JSONEncoder().encode(releases), HTTPURLResponse(url: URL(string: "https://api.github.com")!, statusCode: 200, httpVersion: nil, headerFields: nil), nil)
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.01))
     }
-    let all = [release("v1.3.1", pre: false), release("pre-v1.3.0.2"), release("pre-v1.3.0.1"), release("v1.3.0", pre: false),
-               release("canary-v1.4.0"), release("pre-v1.2.0")]
-    let stable = checker("1.3.0")
+    let all = [release("v1.3.1", pre: false), release("v1.3.0.1.9"), release("v1.3.0.2"), release("v1.3.0.1"), release("v1.3.0", pre: false),
+               release("canary-v1.4.0"), release("v1.3.0.1.4", draft: true), release("pre-v1.2.0")]
+    let stable = checker("1.3.0", .stable)
     respond(stable, all)
-    featureCheck(stable.pending.map(\.tag_name) == ["v1.3.1"] && stable.error == nil, "A stable app skips prereleases")
-    let pre = checker("1.3.0.1")
-    respond(pre, all)
-    featureCheck(pre.pending.map(\.tag_name) == ["v1.3.1", "pre-v1.3.0.2"] && pre.available?.tag_name == "v1.3.1",
-        "A prerelease takes the higher of a newer prerelease and stable release")
-    respond(pre, [release("pre-v1.3.0.2"), release("v1.3.0", pre: false)])
-    featureCheck(pre.available?.tag_name == "pre-v1.3.0.2" && pre.available?.archiveName == "gksdud-1.3.0.2.zip", "Then the next prerelease")
-    respond(pre, [release("v1.3.0", pre: false), release("pre-v1.3.0.1")])
-    featureCheck(pre.available == nil && pre.error == nil, "Never back to the stable release it follows")
-    print("PASS: release list endpoint, prereleases only for prereleases, which also take newer stable releases")
-    runCanaryTests()
-}
-
-func runCanaryTests() {
-    func release(_ tag: String, pre: Bool = true, draft: Bool = false) -> AppRelease {
-        AppRelease(tag_name: tag, html_url: "https://github.com/codingnoye/gksdud/releases/tag/\(tag)", body: "### 요약\n- \(tag)", draft: draft, prerelease: pre)
+    featureCheck(stable.pending.map(\.tag_name) == ["v1.3.1"] && stable.announced?.tag_name == "v1.3.1" && stable.error == nil, "Stable takes stable releases only")
+    let pre = checker("1.3.0.1", .prerelease)
+    featureCheck(pre.pending.map(\.tag_name) == ["v1.3.1", "v1.3.0.2"] && pre.available?.tag_name == "v1.3.1" && pre.announced?.tag_name == "v1.3.1",
+        "Prerelease takes the higher of a newer prerelease and stable release, from the releases of every channel kept")
+    respond(pre, [release("v1.3.0.2"), release("v1.3.0.1.9"), release("v1.3.0", pre: false)])
+    featureCheck(pre.available?.tag_name == "v1.3.0.2" && pre.available?.archiveName == "gksdud-1.3.0.2.zip" && pre.announced == nil,
+        "Then the next prerelease, which the menu bar leaves alone")
+    let fromCanary = checker("1.3.0.1.5", .prerelease)
+    respond(fromCanary, all)
+    featureCheck(fromCanary.pending.map(\.tag_name) == ["v1.3.1", "v1.3.0.2"], "A canary build moved to prerelease takes the next prerelease")
+    let canaryChecker = checker("1.3.0.1", .canary)
+    featureCheck(canaryChecker.pending.map(\.tag_name) == ["v1.3.0.1.9"] && canaryChecker.announced?.tag_name == "v1.3.0.1.9", "Canary takes canary releases only")
+    func commit(_ hash: String) -> String { "[\(hash)](https://github.com/codingnoye/gksdud/commit/\(hash)00000000)" }
+    var commits = release("v1.3.0.1.12")
+    commits = AppRelease(tag_name: commits.tag_name, html_url: commits.html_url, body: "### 요약\n- \(commit("abc1234")) [FEAT] 업데이트 채널 (#81)\n- \(commit("def5678")) [문서](https://example.com/x) 오타 수정\n\n### 카나리아\n설치 안내",
+                         draft: false, prerelease: true)
+    respond(canaryChecker, [commits, release("v1.3.0.1.9", pre: true), release("v1.3.1", pre: false)])
+    let shown = AppRelease.links(canaryChecker.summary)
+    featureCheck(shown.text == "abc1234 [FEAT] 업데이트 채널 (#81)\ndef5678 문서 오타 수정\nv1.3.0.1.9", "A canary shows its commits, hash and title, not its version: \(shown.text)")
+    featureCheck(shown.links.map(\.url.absoluteString) == ["https://github.com/codingnoye/gksdud/commit/abc123400000000", "https://github.com/codingnoye/gksdud/commit/def567800000000"])
+    featureCheck(release("v1.3.0.1.3", pre: true).commits == ["v1.3.0.1.3"] && AppRelease(tag_name: "v1.3.0.1.3", html_url: "", body: nil, draft: false, prerelease: true).commits == ["v1.3.0.1.3"])
+    respond(canaryChecker, [release("v1.3.1", pre: false), release("v1.3.0.2")])
+    featureCheck(canaryChecker.available == nil && canaryChecker.error == nil, "No canary release yet is not an error")
+    // A stable release installed on prerelease keeps taking prereleases; the channel chosen is kept.
+    featureCheck(checker("1.3.1").channel == BuildKind.current.channel, "The build's own channel until one is chosen")
+    pre.keepChannel()
+    featureCheck(checker("1.3.1").channel == .prerelease)
+    let chosen = checker("1.3.1")
+    requests = 0
+    var changes = 0
+    chosen.onChange = { changes += 1 }
+    chosen.select(.canary)
+    featureCheck(chosen.channel == .canary && checker("1.3.1").channel == .canary && requests == 1 && changes >= 1, "Choosing checks again")
+    chosen.select(.canary)
+    featureCheck(requests == 1, "The same channel again is nothing to do")
+    // A self-signed build takes the Apple-signed build of its own version; a local build, numbered like that canary, does not.
+    var signedCanary = release("v1.3.0.1.9")
+    signedCanary.assets = [ReleaseAsset(name: "gksdud-1.3.0.1.9.zip", browser_download_url: "", size: 1)]
+    defaults.set(try! JSONEncoder().encode([signedCanary]), forKey: "updates.cache")
+    featureCheck(UpdateChecker(defaults: defaults, installedVersion: "1.3.0.1.9", channel: .canary, build: .canary, developerID: false).available != nil
+        && UpdateChecker(defaults: defaults, installedVersion: "1.3.0.1.9", channel: .canary, build: .dev, developerID: false).available == nil)
+    featureCheck([("dev", "2.0.1.3.7"), ("canary", "2.0.1.3.7"), (nil, "2.0.1.2"), (nil, "2.0.1"), ("other", "2.0.1"), (nil, nil)].map { BuildKind(channel: $0, version: $1) }
+        == [.dev, .canary, .prerelease, .stable, .stable, .stable], "The build from Info.plist")
+    // Prerelease and canary builds keep their channel from the first launch; stable and local builds do not.
+    for (build, kept) in [(BuildKind.prerelease, "prerelease"), (.canary, "canary"), (.stable, nil), (.dev, nil)] as [(BuildKind, String?)] {
+        defaults.removeObject(forKey: "updates.channel")
+        let launched = UpdateChecker(defaults: defaults, installedVersion: "1.3.0.1", build: build)
+        featureCheck(defaults.string(forKey: "updates.channel") == kept && launched.channel == build.channel, "\(build)")
     }
-    let canary = release("canary-v1.3.0")
-    featureCheck(canary.channel == .canary && canary.versionString == "1.3.0" && canary.archiveName == "gksdud-dev-1.3.0-macos-universal.zip")
-    featureCheck(canary.isNewer(than: "1.2.0") && !release("canary-v1.3.0", pre: false).isNewer(than: "1.2.0"), "Canary releases are prereleases")
-    featureCheck(release("v1.3.0", pre: false).channel == .stable && !release("v1.3.0").isNewer(than: "1.2.0") && release("pre-v1.3.0").channel == .stable && !release("pre-v1.3.0").isNewer(than: "1.2.0"))
-    let suite = "io.gksdud.canary-tests.\(UUID().uuidString)"
-    let defaults = UserDefaults(suiteName: suite)!
-    defer { defaults.removePersistentDomain(forName: suite) }
-    // A stable release cached under the same defaults is not an update for canary.
-    defaults.set(try! JSONEncoder().encode([release("v9.0.0", pre: false)]), forKey: "updates.releases")
-    var completion: ((Data?, URLResponse?, Error?) -> Void)?
-    let checker = UpdateChecker(defaults: defaults, installedVersion: "1.2.0", channel: .canary, fetch: { request, done in
-        featureCheck(request.url?.path == "/repos/codingnoye/gksdud/releases" && request.url?.query == "per_page=100")
-        completion = done
-    })
-    featureCheck(checker.available == nil)
-    func respond(_ releases: [AppRelease]) {
-        checker.check(force: true)
-        completion?(try! JSONEncoder().encode(releases), HTTPURLResponse(url: URL(string: "https://api.github.com")!, statusCode: 200, httpVersion: nil, headerFields: nil), nil)
-        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.01))
-    }
-    respond([release("v2.0.0", pre: false), release("pre-v1.9.0"), release("canary-v1.4.0", draft: true), release("canary-v1.3.0"), release("canary-v1.3.1"), release("canary-v1.2.0")])
-    featureCheck(checker.pending.map(\.tag_name) == ["canary-v1.3.1", "canary-v1.3.0"] && checker.error == nil, "Canary releases only")
-    featureCheck(AppRelease.links(checker.summary).text == "v1.3.1\n* canary-v1.3.1\n\nv1.3.0\n* canary-v1.3.0", checker.summary)
-    featureCheck(UpdateChecker(defaults: defaults, installedVersion: "1.2.0", channel: .canary).available?.tag_name == "canary-v1.3.1")
-    respond([release("v2.0.0", pre: false)])
-    featureCheck(checker.available == nil && checker.error == nil, "No canary release yet is not an error")
-    print("PASS: canary releases, endpoint, newest canary, separate from stable")
+    defaults.set("stable", forKey: "updates.channel")
+    featureCheck(UpdateChecker(defaults: defaults, installedVersion: "1.3.0.1", build: .canary).channel == .stable, "What was chosen stays")
+    // An older app's cache, of its channel only, shows until the check it brings forward.
+    let migrated = UserDefaults(suiteName: suite + ".old")!
+    defer { migrated.removePersistentDomain(forName: suite + ".old") }
+    let checked = Date(timeIntervalSince1970: 500_000)
+    migrated.set(try! JSONEncoder().encode([release("v1.3.1", pre: false)]), forKey: "updates.releases")
+    migrated.set(checked.addingTimeInterval(80_000), forKey: "updates.nextCheck")
+    let old = UpdateChecker(defaults: migrated, installedVersion: "1.3.0", channel: .stable, now: { checked }, fetch: { _, done in requests += 1; completion = done })
+    featureCheck(old.available?.tag_name == "v1.3.1")
+    requests = 0; old.check()
+    featureCheck(requests == 1, "Checked at once after the update")
+    completion?(try! JSONEncoder().encode(all), HTTPURLResponse(url: URL(string: "https://api.github.com")!, statusCode: 200, httpVersion: nil, headerFields: nil), nil)
+    RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.01))
+    featureCheck(migrated.data(forKey: "updates.releases") == nil && migrated.data(forKey: "updates.cache") != nil && old.releases.contains { $0.channel == .canary })
+    print("PASS: release list endpoint, the channel's releases, prerelease taking stable releases, what the menu bar shows, the chosen channel kept")
 }
 
 func runOptionRepeatTests() {

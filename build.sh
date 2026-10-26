@@ -7,13 +7,22 @@ developer_id() {
   security find-identity -v -p codesigning | sed -n -E "s/^ *[0-9]+\) ([0-9A-F]{40}) \"Developer ID Application: .* \($team\)\"$/\1/p" | head -1 || true
 }
 mode=${GKSDUD_SIGN_MODE:-$([[ -n $(developer_id) ]] && echo developer-id || echo local)}
-# Canary is a separate app, gksdud-dev, with its own settings, permissions and update channel.
-channel=${GKSDUD_CHANNEL:-stable}
-case $channel in
-  stable) app=gksdud identifier=io.gksdud.inputswitch ;;
-  canary) app=gksdud-dev identifier=io.gksdud.inputswitch.dev ;;
-  *) echo 'GKSDUD_CHANNEL must be stable or canary' >&2; exit 1 ;;
-esac
+# One app for every build; the app shows gksdud-DEV for a local build and gksdud-CAN for a canary release.
+# Stable is for the stable and prerelease releases.
+channel=${GKSDUD_CHANNEL:-dev}
+[[ $channel =~ ^(dev|canary|stable)$ ]] || { echo 'GKSDUD_CHANNEL must be dev, canary or stable' >&2; exit 1; }
+app=gksdud identifier=io.gksdud.inputswitch
+# A local build numbers itself like the canary of its commit (scripts/resolve-release.rb): the highest prerelease or stable
+# version before the commit, in four fields, and the commits since it.
+if [[ $channel != stable && -z ${GKSDUD_APP_VERSION:-} ]]; then
+  # A prerelease tag counts only with its stable release, as one pushed before it is refused.
+  base=$({ git tag --list 'v[0-9]*' 2>/dev/null | sed 's/^/known /'; git tag --list 'v[0-9]*' --merged HEAD^ 2>/dev/null; } |
+    awk '$1 == "known" { known[$2] = 1; next }
+         /^v[0-9]+\.[0-9]+\.[0-9]+$/ { print substr($0, 2) ".0", $0 }
+         /^v[0-9]+\.[0-9]+\.[0-9]+\.[1-9][0-9]*$/ { stable = $0; sub(/\.[0-9]+$/, "", stable); if (stable in known) print substr($0, 2), $0 }' |
+    sort -t. -k1,1n -k2,2n -k3,3n -k4,4n | tail -1 || true)
+  if [[ -n $base ]] && count=$(git rev-list --count "${base#* }..HEAD" 2>/dev/null); then GKSDUD_APP_VERSION=${base%% *}.$count; fi
+fi
 notary=()
 if [[ -n "${GKSDUD_NOTARY_PROFILE:-}" ]]; then
   notary=(--keychain-profile "$GKSDUD_NOTARY_PROFILE")
@@ -74,14 +83,11 @@ done
 lipo -create "$stage/gksdud-arm64" "$stage/gksdud-x86_64" -output "$stage/$app.app/Contents/MacOS/gksdud"
 lipo -create "$stage/cli-arm64" "$stage/cli-x86_64" -output "$stage/$app.app/Contents/Helpers/gksdud"
 cp Info.plist "$stage/$app.app/Contents/Info.plist"
-if [[ $channel == canary ]]; then
-  for key in CFBundleName CFBundleDisplayName; do /usr/libexec/PlistBuddy -c "Set :$key $app" "$stage/$app.app/Contents/Info.plist"; done
-  /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $identifier" -c 'Add :GKSDUDChannel string canary' "$stage/$app.app/Contents/Info.plist"
-fi
+[[ $channel == stable ]] || /usr/libexec/PlistBuddy -c "Add :GKSDUDChannel string $channel" "$stage/$app.app/Contents/Info.plist"
 cp LICENSE "$stage/$app.app/Contents/Resources/LICENSE"
 cp Resources/github.svg Resources/fairy.svg Resources/OCTICONS-LICENSE "$stage/$app.app/Contents/Resources/"
 if [[ -n "${GKSDUD_APP_VERSION:-}" ]]; then
-  [[ "$GKSDUD_APP_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || exit 1
+  [[ "$GKSDUD_APP_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+){0,2}$ ]] || exit 1
   /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $GKSDUD_APP_VERSION" "$stage/$app.app/Contents/Info.plist"
 fi
 if [[ -n "${GKSDUD_BUILD_NUMBER:-}" ]]; then

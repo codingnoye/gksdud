@@ -3,7 +3,7 @@ import Foundation
 // The gksdud command's settings, arguments and help, shared by the command-line tool and the app that runs its commands.
 // Foundation only, so the tool starts quickly.
 enum CLI {
-    // Named after the app's bundle identifier, so gksdud and the canary gksdud-dev each answer their own command.
+    // Named after the app's bundle identifier.
     static func port(_ app: String?) -> String { (app ?? "io.gksdud.inputswitch") + ".cli" }
     // 0 everything done, 1 something failed, 2 the arguments were wrong, 3 the app did not answer.
     enum Exit { static let ok: Int32 = 0, failed: Int32 = 1, usage: Int32 = 2, notRunning: Int32 = 3 }
@@ -26,6 +26,7 @@ enum CLI {
     static let iconNames = ["dud", "a", "ko-en", "character"]
     static let targetNames = (13...20).map { "F\($0)" }, switchTargetNames = Array(targetNames.dropLast())
     static let specialNames = ["off", "english", "block"]
+    static let channelNames = ["stable", "prerelease", "canary"]
     static let settings: [Setting] = [
         Setting(name: "active", kind: .bool, title: "활성화"),
         Setting(name: "paused", kind: .bool, title: "일시정지 (앱을 다시 실행하면 풀림)"),
@@ -37,6 +38,7 @@ enum CLI {
         Setting(name: "replace-input-menu", kind: .bool, title: "Mac 입력기 아이콘 대체"),
         Setting(name: "icon-case", kind: .bool, title: "대소문자를 영문 아이콘에 반영"),
         Setting(name: "icon", kind: .choice(iconNames), title: "메뉴바 아이콘 (한/dud, 한/A, KO/EN, ㅎuㅎ/dud)"),
+        Setting(name: "update-badge", kind: .bool, title: "업데이트 가능 표시"),
         Setting(name: "long-press", kind: .bool, title: "길게 눌러 대소문자 전환"),
         Setting(name: "preserve-case", kind: .bool, title: "한영 전환시 대소문자 보존"),
         Setting(name: "korean-caps-lock", kind: .bool, title: "한글 상태에서도 Caps Lock으로 대소문자 전환"),
@@ -48,6 +50,7 @@ enum CLI {
         Setting(name: "compatibility", kind: .bool, title: "입력 소스 관리 호환성 모드"),
         Setting(name: "escape", kind: .bool, title: "ESC 누를 시 영소문자로 변경"),
         Setting(name: "universal-control", kind: .bool, title: "유니버설 컨트롤 호환 모드"),
+        Setting(name: "update-channel", kind: .choice(channelNames), title: "업데이트 채널 (정식 릴리즈, 프리릴리즈, 카나리아)"),
     ]
     // keyboard.<keyboard>.mode and keyboard.<keyboard>.keys.
     static let keyboardSettings: [Setting] = [

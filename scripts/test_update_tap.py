@@ -36,7 +36,7 @@ class TapTests(unittest.TestCase):
         self.assertEqual(tap.updated_cask(new, "2.0.0", "b" * 64), new)
 
     def test_tag_validation(self):
-        for tag in ["main", "v1.0.0-rc1", "pre-v1.2.0", "pre-v.1.2.0", "v1.0.0/../../main", "v01.0.0"]:
+        for tag in ["main", "v1.0.0-rc1", "pre-v1.2.0", "pre-v.1.2.0", "v1.2.0.1", "v1.2.0.1.1", "v1.0.0/../../main", "v01.0.0"]:
             with self.assertRaises(ValueError):
                 tap.version(tag)
 

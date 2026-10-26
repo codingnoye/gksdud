@@ -94,6 +94,7 @@ gksdud source             # 현재 입력 소스 ID
 | `replace-input-menu` | `on`, `off` | Mac 입력기 아이콘 대체 |
 | `icon-case` | `on`, `off` | 대소문자를 영문 아이콘에 반영 |
 | `icon` | `dud`, `a`, `ko-en`, `character` | 메뉴바 아이콘 |
+| `update-badge` | `on`, `off` | 업데이트 가능 표시 |
 | `long-press` | `on`, `off` | 길게 눌러 대소문자 전환 |
 | `preserve-case` | `on`, `off` | 한영 전환시 대소문자 보존 |
 | `korean-caps-lock` | `on`, `off` | 한글 상태에서도 Caps Lock으로 대소문자 전환 |
@@ -105,6 +106,7 @@ gksdud source             # 현재 입력 소스 ID
 | `compatibility` | `on`, `off` | 입력 소스 설정 → 호환성 모드 |
 | `escape` | `on`, `off` | ESC 누를 시 영소문자로 변경 |
 | `universal-control` | `on`, `off` | 유니버설 컨트롤 호환 모드 |
+| `update-channel` | `stable`, `prerelease`, `canary` | gksdud 탭 → 업데이트 채널 |
 | `keyboard.<키보드>.mode` | `on`, `default`, `off` | 고급 설정 → 키보드별 적용 |
 | `keyboard.<키보드>.keys` | `<키>,...`, `default` | 고급 설정 → 키보드별 한영 키 |
 | `source.<입력 소스>.enabled` | `on`, `off` | 입력 소스 설정 → 활성화 |

@@ -55,6 +55,9 @@ sums = archives.map do |filename, (path, requirement)|
       actual = capture!('/usr/libexec/PlistBuddy', '-c', "Print :#{key}", "#{app}/Contents/Info.plist")
       abort "Archive #{key} does not match source" unless expected == actual
     end
+    # A canary shows its name as gksdud-CAN; stable releases and prereleases carry no channel, and a local build never ships.
+    channel, = Open3.capture2e('/usr/libexec/PlistBuddy', '-c', 'Print :GKSDUDChannel', "#{app}/Contents/Info.plist")
+    abort 'Archive is not a build of its channel' unless (metadata.channel == 'canary' ? channel.strip == 'canary' : channel.include?('Does Not Exist'))
     arches = capture!('/usr/bin/lipo', '-archs', "#{app}/Contents/MacOS/gksdud").split
     abort 'Expected arm64 + x86_64' unless arches.sort == %w[arm64 x86_64]
   end

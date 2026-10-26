@@ -1,26 +1,24 @@
 # Shared tag validation and asset naming for the release workflow and verifier.
 class ReleaseMetadata
   # While apps up to 1.7.1 move to Developer ID: they install only updates signed with the self-signed certificate, found
-  # by the old archive name, so stable and canary releases also carry that copy. False once the move is over.
+  # by the old archive name, so stable releases also carry that copy. False once the move is over.
   SELF_SIGNED_COPY = true
 
-  attr_reader :version, :tag
+  attr_reader :version, :tag, :channel
 
-  # A prerelease numbers a fourth field on the stable version it follows (pre-v2.3.0.1), so a newer stable release updates it.
+  # Every release is tagged vVERSION, and the fields tell the channel: three for stable, four for a prerelease numbered on the
+  # stable release it follows (v2.3.0.1), five for a canary numbered on the prerelease or stable release before it
+  # (v2.3.0.1.4, v2.3.1.0.2), so the next of either updates them.
+  FORMS = { 'stable' => /\A(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)\z/,
+            'pre' => /\A(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)\.[1-9]\d*\z/,
+            'canary' => /\A(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)\.[1-9]\d*\z/ }.freeze
+
   def initialize(version, tag = "v#{version}")
-    number = '(0|[1-9]\d*)'
-    stable = /\A#{number}\.#{number}\.#{number}\z/
-    raise ArgumentError, 'Expected numeric release version' unless version.match?(stable) || version.match?(/\A#{number}\.#{number}\.#{number}\.[1-9]\d*\z/)
-    unless ["v#{version}", "pre-v#{version}", "canary-v#{version}"].include?(tag)
-      raise ArgumentError, 'Tag must be vVERSION, pre-vVERSION or canary-vVERSION and match the release version'
-    end
-    raise ArgumentError, 'A prerelease version has four fields, such as 2.3.0.1' if tag.start_with?('pre-v') == version.match?(stable)
+    @channel = FORMS.keys.find { |name| version.match?(FORMS[name]) }
+    raise ArgumentError, 'Expected a stable version of three fields, a prerelease of four (2.3.0.1) or a canary of five (2.3.0.1.4)' unless @channel
+    raise ArgumentError, 'Tag must be vVERSION' unless tag == "v#{version}"
     @version = version
     @tag = tag
-  end
-
-  def channel
-    tag.start_with?('pre-v') ? 'pre' : tag.start_with?('canary-v') ? 'canary' : 'stable'
   end
 
   # Published as a GitHub prerelease: never Latest, never in Homebrew or the stable app's updates.
@@ -28,13 +26,13 @@ class ReleaseMetadata
     channel != 'stable'
   end
 
-  # Canary is a separate app, gksdud-dev, that updates only from canary releases.
+  # Every channel releases the same app; canary shows its name as gksdud-CAN.
   def app
-    channel == 'canary' ? 'gksdud-dev' : 'gksdud'
+    'gksdud'
   end
 
   def identifier
-    channel == 'canary' ? 'io.gksdud.inputswitch.dev' : 'io.gksdud.inputswitch'
+    'io.gksdud.inputswitch'
   end
 
   def asset_version
@@ -45,9 +43,9 @@ class ReleaseMetadata
     "#{app}-#{version}.zip"
   end
 
-  # The name apps up to 1.7.1 download; prereleases were never their updates.
+  # The name apps up to 1.7.1 download; prereleases and canary releases are never their updates.
   def self_signed_filename
-    "#{app}-#{version}-macos-universal.zip" if SELF_SIGNED_COPY && channel != 'pre'
+    "#{app}-#{version}-macos-universal.zip" if SELF_SIGNED_COPY && channel == 'stable'
   end
 
   def outputs

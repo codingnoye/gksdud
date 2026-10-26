@@ -117,6 +117,8 @@ extension AppDelegate {
         case "replace-input-menu": return .bool(engine.replacesInputMenu)
         case "icon": return .text(CLI.iconNames[iconStyle])
         case "icon-case": return .bool(engine.defaults.bool(forKey: "iconCase"))
+        case "update-badge": return .bool(showsUpdateBadge)
+        case "update-channel": return .text(updates.channel.rawValue)
         case "keys": return .list(keyNames(engine.defaultSources))
         case "target": return .text(engine.target.name)
         case "keyboard-default": return .bool(engine.keyboards.defaultEnabled)
@@ -260,11 +262,15 @@ extension AppDelegate {
         case "active": return flip(enabled) { toggleEnabled() }
         case "login":
             let blocked = flip(login) { toggleLogin() }
-            if blocked == nil, on, SMAppService.mainApp.status == .requiresApproval { commandSession?.errors.append("시스템 설정 → 로그인 항목에서 \(UpdateChannel.current.appName)를 허용하세요.") }
+            if blocked == nil, on, SMAppService.mainApp.status == .requiresApproval { commandSession?.errors.append("시스템 설정 → 로그인 항목에서 \(BuildKind.appName)를 허용하세요.") }
             return blocked
         case "menubar": return flip(showInMenuBar) { toggleHidden() }
         case "replace-input-menu": return flip(replaceInputMenu, unless: "메뉴바에 표시를 켜야 쓸 수 있습니다.") { toggleReplaceInputMenu() }
         case "icon-case": return flip(iconCaseSwitch, unless: "메뉴바에 표시를 켜야 쓸 수 있습니다.") { toggleIconCase() }
+        case "update-badge": return flip(updateBadgeSwitch, unless: "메뉴바에 표시를 켜야 쓸 수 있습니다.") { toggleUpdateBadge() }
+        case "update-channel":
+            guard channelPicker.isEnabled, let index = text.flatMap({ CLI.channelNames.firstIndex(of: $0) }) else { return "업데이트를 설치하는 중입니다." }
+            channelPicker.selectItem(at: index); changeUpdateChannel()
         case "long-press": return flip(longPressSwitch) { toggleFeature(longPressSwitch) }
         case "preserve-case": return flip(preserveCapsSwitch) { toggleFeature(preserveCapsSwitch) }
         case "korean-caps-lock": return flip(koreanCapsSwitch) { toggleFeature(koreanCapsSwitch) }
@@ -547,7 +553,7 @@ extension AppDelegate {
     // MARK: Installing
 
     // In /usr/local/bin, which every shell has on its PATH, as a link into this app: updates keep it current.
-    static let cliLink = "/usr/local/bin/" + UpdateChannel.current.appName
+    static let cliLink = "/usr/local/bin/" + BuildKind.appName
     var cliTool: String { Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/gksdud").path }
     var cliLinked: Bool { (try? FileManager.default.destinationOfSymbolicLink(atPath: Self.cliLink)) == cliTool }
     func refreshCLIButton() {

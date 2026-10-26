@@ -1,8 +1,12 @@
 name: Release
 
 on:
+  # Every push to main publishes a canary; prereleases come from their tags, vX.Y.Z.P.
+  # A push of only documents or test tools leaves the app as it was; its commits go in the next canary.
   push:
-    tags: ['pre-v*', 'canary-v*']
+    branches: [main]
+    tags: ['v*.*.*.*']
+    paths-ignore: ['**.md', 'docs/**', 'skills/**', 'tests/**']
   workflow_dispatch:
     inputs:
       source_ref:
@@ -31,13 +35,14 @@ on:
 permissions:
   contents: read
 
+# Canary has a group of its own, so a waiting canary never takes a waiting manual release's place.
 concurrency:
-  group: release-${{ github.repository }}
+  group: release-${{ github.repository }}-${{ github.event_name == 'push' && github.ref_type == 'branch' && 'canary' || 'manual' }}
   cancel-in-progress: false
 
 jobs:
   release:
-    if: github.repository == 'codingnoye/gksdud' && ((github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/pre-v') || startsWith(github.ref, 'refs/tags/canary-v'))) || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))
+    if: github.repository == 'codingnoye/gksdud' && ((github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main')) || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))
     runs-on: macos-15
     timeout-minutes: 60
     environment: release
@@ -47,9 +52,18 @@ jobs:
       run:
         shell: bash
     steps:
+      # With history and tags: a canary is numbered by the commits since the latest stable release, and lists them.
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
+          fetch-depth: 0
           persist-credentials: false
+
+      # A canary does not wait for Checks, so the release scripts are tested here; build.sh runs the app's self-tests.
+      - name: Test release scripts
+        run: |
+          set -euo pipefail
+          ruby scripts/test_release.rb
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p test_update_tap.py
 
       - name: Resolve source and validate release version
         id: version
@@ -191,6 +205,7 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
           TAG: ${{ steps.version.outputs.tag }}
           CHANNEL: ${{ steps.version.outputs.channel }}
+          SOURCE_SHA: ${{ steps.version.outputs.source_sha }}
           ASSET_VERSION: ${{ steps.version.outputs.asset_version }}
           FILENAME: ${{ steps.version.outputs.filename }}
           SELF_SIGNED_FILENAME: ${{ steps.version.outputs.self_signed_filename }}
@@ -199,23 +214,43 @@ jobs:
           set -euo pipefail
           options=(--draft --title "gksdud $VERSION" --notes-file .github/RELEASE_NOTES.md)
           if [[ "$CHANNEL" != stable ]]; then
-            # The annotated tag's message goes above the notes: the app shows its ### 요약 and confirms its ### 경고.
             notes=$(mktemp "${RUNNER_TEMP:-/tmp}/gksdud-$CHANNEL-notes.XXXXXX")
-            read -r type sha < <(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq '.object.type + " " + .object.sha')
-            if [[ "$type" == tag ]]; then gh api "repos/$GITHUB_REPOSITORY/git/tags/$sha" --jq .message > "$notes"; printf '\n' >> "$notes"; fi
           fi
           if [[ "$CHANNEL" == pre ]]; then
+            # The annotated tag's message goes above the notes: the app shows its ### 요약 and confirms its ### 경고.
+            read -r type sha < <(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq '.object.type + " " + .object.sha')
+            if [[ "$type" == tag ]]; then gh api "repos/$GITHUB_REPOSITORY/git/tags/$sha" --jq .message > "$notes"; printf '\n' >> "$notes"; fi
             cat .github/PRERELEASE_NOTES.md >> "$notes"
             options=(--prerelease --latest=false --title "gksdud $VERSION Pre-release" --notes-file "$notes" --generate-notes)
           elif [[ "$CHANNEL" == canary ]]; then
-            cat .github/CANARY_NOTES.md >> "$notes"
-            options=(--prerelease --latest=false --title "gksdud-dev $VERSION Canary" --notes-file "$notes")
+            # The commits since the previous canary or stable release, each as its hash and title: the app's summary of this one.
+            since='' nearest=''
+            for tag in $(git tag --list 'v*' --merged "$SOURCE_SHA^" 2>/dev/null | grep -E '^v[0-9]+(\.[0-9]+){2}$|^v[0-9]+(\.[0-9]+){4}$'); do
+              count=$(git rev-list --count "$tag..$SOURCE_SHA")
+              if [[ -z $nearest ]] || (( count < nearest )); then nearest=$count since=$tag; fi
+            done
+            range=${since:+$since..}$SOURCE_SHA
+            { echo '### 요약'; git log -n 20 --format="- [%h](https://github.com/$GITHUB_REPOSITORY/commit/%H) %s" "$range"
+              more=$(( $(git rev-list --count "$range") - 20 )); (( more <= 0 )) || echo "- 외 커밋 ${more}개"
+              echo; cat .github/CANARY_NOTES.md; } > "$notes"
+            options=(--prerelease --latest=false --title "gksdud $VERSION Canary" --notes-file "$notes")
           fi
           gh release create "$TAG" \
             "$SOURCE_ROOT/outputs/$FILENAME" ${SELF_SIGNED_FILENAME:+"$SOURCE_ROOT/outputs/$SELF_SIGNED_FILENAME"} \
             "$SOURCE_ROOT/outputs/release-$ASSET_VERSION/SHA256SUMS" \
             --repo "$GITHUB_REPOSITORY" --verify-tag \
             "${options[@]}"
+
+      - name: Keep the latest canary releases
+        if: steps.version.outputs.channel == 'canary'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # The app reads the latest hundred releases; older canaries would push stable releases out of them.
+          gh release list --repo "$GITHUB_REPOSITORY" --limit 200 --json tagName --jq '.[].tagName' |
+            { grep -E '^v[0-9]+(\.[0-9]+){4}$' || true; } | tail -n +21 |
+            while read -r tag; do gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag; done
 
       - name: Publish verified stable draft
         if: github.event_name == 'workflow_dispatch' && steps.version.outputs.prerelease == 'false'
@@ -236,3 +271,15 @@ jobs:
         run: |
           test -n "$TAP_GITHUB_TOKEN" || { echo 'Missing Homebrew tap token.' >&2; exit 1; }
           python3 scripts/update-tap.py "$RELEASE_TAG"
+
+      # A canary tag without its release would be taken as the previous canary, leaving its commits out of the next notes.
+      - name: Remove the tag of a canary that was not published
+        if: (failure() || cancelled()) && steps.version.outputs.channel == 'canary' && steps.version.outputs.tag_exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          # Only when GitHub says there is no such release, not when asking failed.
+          if ! answer=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" 2>&1 >/dev/null) && [[ $answer == *'HTTP 404'* ]]; then
+            gh api --method DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/$TAG" || true
+          fi

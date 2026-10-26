@@ -4,7 +4,7 @@ import ServiceManagement
 extension AppDelegate {
     func buildWindow() {
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 384, height: 636), styleMask: [.titled, .closable], backing: .buffered, defer: false)
-        window.title = UpdateChannel.current.appName; window.isReleasedWhenClosed = false
+        window.title = BuildKind.current.displayName; window.isReleasedWhenClosed = false
         window.delegate = self; window.hidesOnDeactivate = false; window.center()
         let content = window.contentView!
         func column() -> NSStackView {
@@ -40,7 +40,7 @@ extension AppDelegate {
         }
         let tabs = NSStackView(); tabs.distribution = .fillEqually; tabs.spacing = 8
         tabs.translatesAutoresizingMaskIntoConstraints = false; content.addSubview(tabs)
-        for (index, title) in ["일반", "대소문자", "특수문자", "추가기능", UpdateChannel.current.appName].enumerated() {
+        for (index, title) in ["일반", "대소문자", "특수문자", "추가기능", BuildKind.current.displayName].enumerated() {
             let button = NSButton(title: title, target: self, action: #selector(changeTab(_:)))
             button.tag = index; button.setButtonType(.toggle); button.bezelStyle = .regularSquare
             button.isBordered = false; button.imagePosition = .imageAbove; button.imageScaling = .scaleProportionallyDown
@@ -140,6 +140,9 @@ extension AppDelegate {
         iconCaseSwitch.target = self; iconCaseSwitch.action = #selector(toggleIconCase)
         iconCaseSwitch.state = engine.defaults.bool(forKey: "iconCase") ? .on : .off
         general.setCustomSpacing(12, after: general.arrangedSubviews.last!); indented(iconCaseSwitch)
+        updateBadgeSwitch.target = self; updateBadgeSwitch.action = #selector(toggleUpdateBadge)
+        updateBadgeSwitch.state = showsUpdateBadge ? .on : .off
+        general.setCustomSpacing(12, after: general.arrangedSubviews.last!); indented(updateBadgeSwitch)
         general.setCustomSpacing(24, after: general.arrangedSubviews.last!)
         iconPicker.addItems(withTitles: ["한 / dud", "한 / A", "KO / EN", "ㅎuㅎ / dud"])
         iconPicker.selectItem(at: iconStyle); iconPicker.target = self; iconPicker.action = #selector(changeIconStyle)
@@ -199,7 +202,7 @@ extension AppDelegate {
         appIcon.widthAnchor.constraint(equalToConstant: 72).isActive = true
         appIcon.heightAnchor.constraint(equalToConstant: 72).isActive = true
         about.addArrangedSubview(appIcon)
-        let name = NSTextField(labelWithString: UpdateChannel.current.appName); name.font = .systemFont(ofSize: 20, weight: .semibold)
+        let name = NSTextField(labelWithString: BuildKind.current.displayName); name.font = .systemFont(ofSize: 20, weight: .semibold)
         about.setCustomSpacing(12, after: appIcon); about.addArrangedSubview(name)
         updateHeading.font = .systemFont(ofSize: 12); updateHeading.textColor = .secondaryLabelColor; updateHeading.alignment = .center
         about.setCustomSpacing(4, after: name); full(updateHeading, in: about)
@@ -213,7 +216,10 @@ extension AppDelegate {
         updateScroll.documentView = updateSummary; full(updateScroll, in: about)
         updateButton.target = self; updateButton.action = #selector(performUpdate); updateButton.bezelStyle = .rounded
         checkUpdateButton.target = self; checkUpdateButton.action = #selector(checkForUpdates); checkUpdateButton.bezelStyle = .rounded
-        let actions = NSStackView(views: [updateButton, checkUpdateButton]); actions.spacing = 10; about.addArrangedSubview(actions)
+        channelPicker.addItems(withTitles: UpdateChannel.allCases.map(\.title))
+        channelPicker.target = self; channelPicker.action = #selector(changeUpdateChannel)
+        channelPicker.setAccessibilityLabel("업데이트 채널")
+        let actions = NSStackView(views: [updateButton, checkUpdateButton, channelPicker]); actions.spacing = 10; about.addArrangedSubview(actions)
         updateStatus.font = .systemFont(ofSize: 11); updateStatus.textColor = .secondaryLabelColor; updateStatus.alignment = .center
         about.setCustomSpacing(8, after: actions); full(updateStatus, in: about)
         about.setCustomSpacing(28, after: updateStatus)
@@ -229,7 +235,7 @@ extension AppDelegate {
         about.setCustomSpacing(28, after: project); separator(in: about)
         let supportTitle = NSTextField(labelWithString: "후원하기"); supportTitle.font = .systemFont(ofSize: 13, weight: .semibold)
         about.setCustomSpacing(20, after: about.arrangedSubviews.last!); about.addArrangedSubview(supportTitle)
-        let supportNote = NSTextField(wrappingLabelWithString: "후원해주시면 큰 힘이 됩니다!\nApp Store 등록에 사용하겠습니다.")
+        let supportNote = NSTextField(wrappingLabelWithString: "후원해주시면 큰 힘이 됩니다!")
         supportNote.font = .systemFont(ofSize: 11); supportNote.textColor = .secondaryLabelColor; supportNote.alignment = .center
         about.setCustomSpacing(6, after: supportTitle); about.addArrangedSubview(supportNote)
         about.setCustomSpacing(12, after: supportNote); about.addArrangedSubview(link("Fairy", icon: "fairy", template: false, action: #selector(openSupport)))
@@ -269,6 +275,10 @@ extension AppDelegate {
     }
     @objc func showAbout() { showSettings(); selectTab(tabPanels.count - 1) }
     @objc func checkForUpdates() { installer.clearStatus(); updates.check(force: true) }
+    @objc func changeUpdateChannel() {
+        guard UpdateChannel.allCases.indices.contains(channelPicker.indexOfSelectedItem) else { return }
+        installer.clearStatus(); updates.select(UpdateChannel.allCases[channelPicker.indexOfSelectedItem])
+    }
     @objc func performUpdate() {
         guard let release = updates.available else { return }
         // The warnings of every version the update installs, such as permissions to allow again, are read first.
@@ -321,8 +331,12 @@ extension AppDelegate {
         let release = updates.available
         tabButtons.last?.image = release == nil ? tabGlyph("?") : updateGlyph(NSSize(width: 24, height: 20), color: .controlAccentColor)
         selectTab(selectedTab)
-        tabButtons.last?.setAccessibilityLabel(release == nil ? "\(UpdateChannel.current.appName) 탭" : "\(UpdateChannel.current.appName) 탭, 업데이트 가능")
-        for entry in item?.menu?.items ?? [] where entry.action == #selector(showAbout) { entry.isHidden = release == nil }
+        tabButtons.last?.setAccessibilityLabel(release == nil ? "\(BuildKind.current.displayName) 탭" : "\(BuildKind.current.displayName) 탭, 업데이트 가능")
+        for entry in item?.menu?.items ?? [] where entry.action == #selector(showAbout) { entry.isHidden = updates.announced == nil }
+        let arrow = showsUpdateBadge && updates.announced != nil
+        if updateArrow != arrow { updateArrow = arrow; showIndicator() }
+        channelPicker.selectItem(at: UpdateChannel.allCases.firstIndex(of: updates.channel) ?? 0)
+        channelPicker.isEnabled = !installer.busy
         let latest = release.map { " → v\($0.versionString)" } ?? ""
         updateHeading.stringValue = "v\(updates.installedVersion)\(latest)"
         updateSummary.textStorage?.setAttributedString(linkedText(updates.summary, size: 12))

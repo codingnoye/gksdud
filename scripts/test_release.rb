@@ -3,6 +3,7 @@ require 'yaml'
 require 'json'
 require 'tmpdir'
 require 'open3'
+require 'fileutils'
 require_relative 'release-metadata'
 require_relative 'resolve-release'
 
@@ -10,12 +11,14 @@ class ReleaseTests < Minitest::Test
   ROOT = File.expand_path('..', __dir__)
 
   def test_tag_must_match_numeric_app_version
-    %w[main v1.2.1 pre-v.1.2.1 pre-v1.2.1 pre-v1.2.0 pre-v1.2.0-beta.1 pre-v.1.2.0-beta.1 ../1.2.0].each do |tag|
+    %w[main v1.2.1 pre-v1.2.0 canary-v1.2.0 v.1.2.0 1.2.0 v1.2.0-beta.1 ../1.2.0].each do |tag|
       assert_raises(ArgumentError) { ReleaseMetadata.new('1.2.0', tag) }
     end
-    # A prerelease has four fields, the fourth from 1; stable and canary releases have three.
-    assert_equal 'pre', ReleaseMetadata.new('1.2.0.1', 'pre-v1.2.0.1').channel
-    [%w[1.2.0.0 pre-v1.2.0.0], %w[1.2.0.01 pre-v1.2.0.01], %w[1.2.0.1 v1.2.0.1], %w[1.2.0.1 canary-v1.2.0.1], %w[1.2.0.1.1 pre-v1.2.0.1.1]].each do |version, tag|
+    # Every tag is vVERSION; stable releases have three fields, prereleases four with the fourth from 1, canary releases five
+    # with the fifth from 1.
+    assert_equal %w[stable pre canary canary], %w[1.2.0 1.2.0.1 1.2.0.1.3 1.2.1.0.1].map { |version| ReleaseMetadata.new(version).channel }
+    [%w[1.2.0.1 pre-v1.2.0.1], %w[1.2.0.1.3 canary-v1.2.0.1.3], %w[1.2.0.0 v1.2.0.0], %w[1.2.0.01 v1.2.0.01], %w[1.2.0.1.0 v1.2.0.1.0],
+     %w[1.2.0.1.1.1 v1.2.0.1.1.1]].each do |version, tag|
       assert_raises(ArgumentError) { ReleaseMetadata.new(version, tag) }
     end
     ["1.2.0\n", '1.2', '1.2.0-beta.1', '01.2.0', '1.02.0', '1.2.00'].each do |version|
@@ -25,36 +28,38 @@ class ReleaseTests < Minitest::Test
 
   def test_stable_and_prerelease_assets_are_separate
     stable = ReleaseMetadata.new('1.2.0', 'v1.2.0')
-    pre = ReleaseMetadata.new('1.2.0.1', 'pre-v1.2.0.1')
-    canary = ReleaseMetadata.new('1.2.0', 'canary-v1.2.0')
+    pre = ReleaseMetadata.new('1.2.0.1', 'v1.2.0.1')
+    canary = ReleaseMetadata.new('1.2.0.1.3', 'v1.2.0.1.3')
     refute stable.prerelease?
     assert pre.prerelease?
     assert canary.prerelease?
     assert_equal 'gksdud-1.2.0.zip', stable.filename
     # The name an app takes for the version it updates to.
     assert_equal 'gksdud-1.2.0.1.zip', pre.filename
-    assert_equal 'gksdud-dev-1.2.0.zip', canary.filename
+    assert_equal 'gksdud-1.2.0.1.3.zip', canary.filename
     # Apps up to 1.7.1 download the old name, which holds the self-signed copy while they move to Developer ID.
     assert ReleaseMetadata::SELF_SIGNED_COPY
     assert_equal 'gksdud-1.2.0-macos-universal.zip', stable.self_signed_filename
-    assert_equal 'gksdud-dev-1.2.0-macos-universal.zip', canary.self_signed_filename
+    assert_nil canary.self_signed_filename
     assert_nil pre.self_signed_filename
     # The Homebrew note about asking again ends with the copy.
     tap = File.read("#{ROOT}/scripts/update-tap.py")[/^MOVING_TO_DEVELOPER_ID = (True|False)$/, 1]
     assert_equal ReleaseMetadata::SELF_SIGNED_COPY.to_s, tap.downcase
-    assert_equal %w[gksdud gksdud gksdud-dev], [stable, pre, canary].map(&:app)
-    assert_equal 'io.gksdud.inputswitch.dev', canary.identifier
-    assert_equal 'io.gksdud.inputswitch', pre.identifier
+    # One app for every channel.
+    assert_equal %w[gksdud gksdud gksdud], [stable, pre, canary].map(&:app)
+    assert_equal ['io.gksdud.inputswitch'], [stable, pre, canary].map(&:identifier).uniq
     assert_equal 3, [stable, pre, canary].map(&:asset_version).uniq.length
   end
 
-  def test_only_prerelease_tags_trigger_on_push
+  def test_prerelease_tags_and_main_trigger_on_push
     workflow = YAML.load_file("#{ROOT}/.github/workflows/release.yml")
     triggers = workflow.fetch('on') { workflow.fetch(true) }
     patterns = triggers.fetch('push').fetch('tags')
-    assert patterns.any? { |pattern| File.fnmatch?(pattern, 'pre-v1.2.0.1') }, 'No push trigger for pre-v1.2.0.1'
-    assert patterns.any? { |pattern| File.fnmatch?(pattern, 'canary-v1.2.0') }, 'No push trigger for canary-v1.2.0'
+    assert patterns.any? { |pattern| File.fnmatch?(pattern, 'v1.2.0.1') }, 'No push trigger for v1.2.0.1'
     refute patterns.any? { |pattern| File.fnmatch?(pattern, 'v1.2.0') }, 'Stable tags must use manual release'
+    assert_equal ['main'], triggers.fetch('push').fetch('branches')
+    checkout = workflow.fetch('jobs').fetch('release').fetch('steps').first
+    assert_equal 0, checkout.fetch('with').fetch('fetch-depth'), 'A canary is numbered from tags and history'
   end
 
   def with_release_repository
@@ -77,20 +82,62 @@ class ReleaseTests < Minitest::Test
 
   def test_pushed_tags_must_match_source_version
     with_release_repository do |selection, command, _|
-      result = selection.resolve(event: 'push', tag: 'v1.2.0', version: '', source: '', summary: '')
-      assert_equal ['1.2.0', false], result.values_at(:version, :prerelease)
-      assert_raises(ArgumentError) { selection.resolve(event: 'push', tag: 'v9.0.0', version: '', source: '', summary: '') }
+      # Only a prerelease goes out from its tag; stable releases are manual and canary ones come from main.
+      %w[v1.2.0 v1.2.0.0.1 pre-v1.2.0.1 canary-v1.2.0.0.1].each do |tag|
+        error = assert_raises(RuntimeError) { selection.resolve(event: 'push', tag: tag, version: '', source: '', summary: '') }
+        assert_includes error.message, 'Only a prerelease'
+      end
       # A prerelease's version is its tag's, after the source's stable version, which must be out already.
-      error = assert_raises(RuntimeError) { selection.resolve(event: 'push', tag: 'pre-v1.2.0.1', version: '', source: '', summary: '') }
+      error = assert_raises(RuntimeError) { selection.resolve(event: 'push', tag: 'v1.2.0.1', version: '', source: '', summary: '') }
       assert_match 'v1.2.0 does not exist', error.message
       command.call('git', 'tag', 'v1.2.0')
-      result = selection.resolve(event: 'push', tag: 'pre-v1.2.0.1', version: '', source: '', summary: '')
-      assert_equal ['1.2.0.1', 'pre', true], result.values_at(:version, :channel, :prerelease)
-      assert_raises(ArgumentError) { selection.resolve(event: 'push', tag: 'pre-v1.2.0', version: '', source: '', summary: '') }
-      # A canary's version is its tag's, ahead of the source.
-      result = selection.resolve(event: 'push', tag: 'canary-v9.0.0', version: '', source: '', summary: '')
-      assert_equal ['9.0.0', 'canary', true], result.values_at(:version, :channel, :prerelease)
-      assert_raises(ArgumentError) { selection.resolve(event: 'push', tag: 'canary-v9.0', version: '', source: '', summary: '') }
+      result = selection.resolve(event: 'push', tag: 'v1.2.0.1', version: '', source: '', summary: '')
+      assert_equal ['1.2.0.1', 'v1.2.0.1', 'pre', true], result.values_at(:version, :tag, :channel, :prerelease)
+      assert_raises(ArgumentError) { selection.resolve(event: 'push', tag: 'v1.2.0.0', version: '', source: '', summary: '') }
+      # A manual release is stable.
+      %w[1.3.0.1 1.3.0.0.1].each do |version|
+        assert_raises(ArgumentError) { selection.resolve(event: 'workflow_dispatch', tag: '', version: version, source: 'main', summary: 'Fix input') }
+      end
+    end
+  end
+
+  def test_a_push_to_main_numbers_its_canary_after_the_latest_prerelease_or_stable_release
+    with_release_repository do |selection, git, dir|
+      push = { event: 'push', tag: 'main', version: '', source: '', summary: '', branch: true }
+      commit = ->(subject) { git.call('git', 'commit', '--allow-empty', '-m', subject) }
+      commit.call('Second')
+      error = assert_raises(RuntimeError) { selection.resolve(**push) }
+      assert_includes error.message, 'No prerelease or stable release tag'
+      git.call('git', 'tag', 'v1.2.0', 'HEAD~1')
+      git.call('git', 'tag', 'v1.1.9', 'HEAD~1')
+      git.call('git', 'tag', 'pre-v1.5.0.1')
+      commit.call('Change')
+      result = selection.resolve(**push)
+      assert_equal ['1.2.0.0.2', 'v1.2.0.0.2', 'canary', true], result.values_at(:version, :tag, :channel, :prerelease)
+      assert_equal git.call('git', 'rev-parse', 'HEAD'), result.fetch(:source_sha)
+      assert_equal 'gksdud-1.2.0.0.2.zip', result.fetch(:filename)
+      # A prerelease, or a stable release, of the same commit leaves the number of a rerun alone.
+      git.call('git', 'tag', '-a', '-m', 'Prerelease', 'v1.2.0.1')
+      assert_equal '1.2.0.0.2', selection.resolve(**push).fetch(:version)
+      commit.call('After the prerelease')
+      assert_equal '1.2.0.1.1', selection.resolve(**push).fetch(:version)
+      # A prerelease off this branch is not before the commit.
+      git.call('git', 'tag', 'v1.2.0.9', git.call('git', 'commit-tree', '-m', 'Elsewhere', 'HEAD^{tree}'))
+      git.call('git', 'tag', 'v1.2.0.1.1', 'HEAD')
+      commit.call('Next')
+      assert_equal '1.2.0.1.2', selection.resolve(**push).fetch(:version)
+      git.call('git', 'tag', 'v1.2.1', 'HEAD~1')
+      assert_equal '1.2.1.0.1', selection.resolve(**push).fetch(:version)
+      # A prerelease pushed before its stable release is refused and does not count.
+      git.call('git', 'tag', 'v1.3.0.1', 'HEAD~1')
+      assert_equal '1.2.1.0.1', selection.resolve(**push).fetch(:version)
+      git.call('git', 'tag', 'v1.3.0', 'HEAD~1')
+      assert_equal '1.3.0.1.1', selection.resolve(**push).fetch(:version)
+      # A local build numbers itself the same way.
+      FileUtils.cp("#{ROOT}/build.sh", "#{dir}/build.sh")
+      script = File.read("#{ROOT}/build.sh")[/^if \[\[ \$channel != stable.*?^fi$/m]
+      output, = Open3.capture2e({ 'channel' => 'dev' }, '/bin/bash', '-c', "set -euo pipefail\n#{script}\necho \"$GKSDUD_APP_VERSION\"", chdir: dir)
+      assert_equal '1.3.0.1.1', output.strip
     end
   end
 
@@ -163,8 +210,9 @@ class ReleaseTests < Minitest::Test
 
   # Run the actual publication shell block against a fake gh command. No network
   # or signing secrets are used, and no tag or release is created.
-  def release_arguments(tag, tag_type: 'commit', message: '')
+  def release_arguments(tag, tag_type: 'commit', message: '', root: ROOT)
     metadata = ReleaseMetadata.new(tag.sub(/\A(pre-|canary-)?v/, ''), tag)
+    head, = Open3.capture2('git', 'rev-parse', 'HEAD', chdir: root)
     workflow = YAML.load_file("#{ROOT}/.github/workflows/release.yml")
     step = workflow.fetch('jobs').fetch('release').fetch('steps').find do |item|
       item.fetch('name', '').start_with?('Create stable draft')
@@ -183,9 +231,9 @@ class ReleaseTests < Minitest::Test
       File.chmod(0755, "#{dir}/gh")
       env = metadata.outputs.transform_keys { |key| key.to_s.upcase }.transform_values(&:to_s)
       env.merge!('PATH' => "#{dir}:#{ENV.fetch('PATH')}", 'GITHUB_REPOSITORY' => 'codingnoye/gksdud',
-                 'SOURCE_ROOT' => 'release-source', 'RUNNER_TEMP' => dir, 'TAG_TYPE' => tag_type, 'TAG_MESSAGE' => message,
+                 'SOURCE_ROOT' => 'release-source', 'SOURCE_SHA' => head.strip, 'RUNNER_TEMP' => dir, 'TAG_TYPE' => tag_type, 'TAG_MESSAGE' => message,
                  'CAPTURE' => "#{dir}/args.json", 'NOTES' => "#{dir}/notes.md")
-      output, status = Open3.capture2e(env, '/bin/bash', '-c', step.fetch('run'), chdir: ROOT)
+      output, status = Open3.capture2e(env, '/bin/bash', '-c', step.fetch('run'), chdir: root)
       assert status.success?, output
       [JSON.parse(File.read("#{dir}/args.json")), File.read("#{dir}/notes.md")]
     end
@@ -204,8 +252,8 @@ class ReleaseTests < Minitest::Test
 
   def test_prerelease_is_published_with_the_tag_message_without_changing_latest
     message = "### 요약\n- 프리릴리즈 항목"
-    args, notes = release_arguments('pre-v1.2.0.1', tag_type: 'tag', message: message)
-    assert_equal ['release', 'create', 'pre-v1.2.0.1'], args.first(3)
+    args, notes = release_arguments('v1.2.0.1', tag_type: 'tag', message: message)
+    assert_equal ['release', 'create', 'v1.2.0.1'], args.first(3)
     assert_includes args, '--prerelease'
     assert_includes args, '--latest=false'
     refute_includes args, '--draft'
@@ -214,25 +262,94 @@ class ReleaseTests < Minitest::Test
     assert_includes args, '--generate-notes'
     assert_includes args, '--verify-tag'
     assert notes.start_with?("#{message}\n\n### 테스트용"), notes
-    _, notes = release_arguments('pre-v1.2.0.1')
+    _, notes = release_arguments('v1.2.0.1')
     assert_equal File.read("#{ROOT}/.github/PRERELEASE_NOTES.md"), notes, 'A lightweight tag has no message'
   end
 
-  def test_canary_is_published_with_the_tag_message_without_changing_latest
-    message = "### 요약\n- 카나리아 항목"
-    args, notes = release_arguments('canary-v1.2.0', tag_type: 'tag', message: message)
-    assert_equal ['release', 'create', 'canary-v1.2.0'], args.first(3)
-    assert_includes args, '--prerelease'
-    assert_includes args, '--latest=false'
-    refute_includes args, '--draft'
-    refute_includes args, '--generate-notes'
-    assert_includes args, 'gksdud-dev 1.2.0 Canary'
-    assert_includes args, 'release-source/outputs/gksdud-dev-1.2.0.zip'
-    assert_includes args, 'release-source/outputs/gksdud-dev-1.2.0-macos-universal.zip'
-    assert_includes args, 'release-source/outputs/release-1.2.0-canary/SHA256SUMS'
-    assert notes.start_with?("#{message}\n\n### 카나리아"), notes
-    _, notes = release_arguments('canary-v1.2.0')
-    assert_equal File.read("#{ROOT}/.github/CANARY_NOTES.md"), notes, 'A lightweight tag has no message'
+  def test_canary_is_published_with_its_commits_without_changing_latest
+    with_release_repository do |_, git, dir|
+      FileUtils.mkdir_p("#{dir}/.github")
+      FileUtils.cp("#{ROOT}/.github/CANARY_NOTES.md", "#{dir}/.github/")
+      commit = lambda do |subject|
+        git.call('git', 'commit', '--allow-empty', '-m', "#{subject}\n\nBody that stays out")
+        [git.call('git', 'rev-parse', '--short', 'HEAD'), git.call('git', 'rev-parse', 'HEAD')]
+      end
+      git.call('git', 'tag', 'v1.2.0')
+      commit.call('[FIX] Published before')
+      git.call('git', 'tag', 'v1.2.0.0.1')
+      first = commit.call('[FEAT] Channel (#81)')
+      second = commit.call('Typo')
+      args, notes = release_arguments('v1.2.0.0.3', root: dir)
+      assert_equal ['release', 'create', 'v1.2.0.0.3'], args.first(3)
+      assert_includes args, '--prerelease'
+      assert_includes args, '--latest=false'
+      refute_includes args, '--draft'
+      refute_includes args, '--generate-notes'
+      assert_includes args, 'gksdud 1.2.0.0.3 Canary'
+      assert_equal ['release-source/outputs/gksdud-1.2.0.0.3.zip', 'release-source/outputs/release-1.2.0.0.3-canary/SHA256SUMS'], args[3, 2]
+      # Since the previous canary, newest first, each its hash linked to the commit and its title alone.
+      expected = [second, first].zip(['Typo', '[FEAT] Channel (#81)']).map do |(short, full), title|
+        "- [#{short}](https://github.com/codingnoye/gksdud/commit/#{full}) #{title}\n"
+      end
+      assert_equal "### 요약\n#{expected.join}\n#{File.read("#{ROOT}/.github/CANARY_NOTES.md")}", notes
+      # Past twenty, the rest is counted; with no canary before, from the stable release.
+      git.call('git', 'tag', '-d', 'v1.2.0.0.1')
+      22.times { |index| git.call('git', 'commit', '--allow-empty', '-m', "Commit #{index}") }
+      _, notes = release_arguments('v1.2.0.0.25', root: dir)
+      items = notes.split("\n\n").first.lines.drop(1)
+      assert_equal 21, items.length
+      assert_equal "- 외 커밋 5개", items.last.chomp
+    end
+  end
+
+  def workflow_steps
+    YAML.load_file("#{ROOT}/.github/workflows/release.yml").fetch('jobs').fetch('release').fetch('steps')
+  end
+
+  def test_canary_runs_apart_tests_the_scripts_and_skips_documents
+    workflow = YAML.load_file("#{ROOT}/.github/workflows/release.yml")
+    assert_includes workflow.fetch('concurrency').fetch('group'), "github.event_name == 'push' && github.ref_type == 'branch' && 'canary' || 'manual'"
+    triggers = workflow.fetch('on') { workflow.fetch(true) }
+    ignored = triggers.fetch('push').fetch('paths-ignore')
+    assert(%w[README.md docs/cli.md tests/README.md].all? { |path| ignored.any? { |glob| File.fnmatch?(glob.sub('**.', '**/*.'), path, File::FNM_PATHNAME) || File.fnmatch?(glob, path) } })
+    refute(%w[main.swift build.sh .github/workflows/release.yml].any? { |path| ignored.any? { |glob| File.fnmatch?(glob, path, File::FNM_PATHNAME) } })
+    steps = workflow_steps
+    tests = steps.index { |step| step['name'] == 'Test release scripts' }
+    assert tests && tests < steps.index { |step| step['name'] == 'Create tag for the verified source' }
+    build = steps.find { |step| step['name'].to_s.start_with?('Build') }
+    assert_equal "${{ steps.version.outputs.channel == 'canary' && 'canary' || 'stable' }}", build.fetch('env').fetch('GKSDUD_CHANNEL'), 'A release never ships a local build'
+  end
+
+  # The pruning and tag cleanup steps against a fake gh; nothing reaches GitHub.
+  def run_step(name, env, gh)
+    step = workflow_steps.find { |item| item['name'] == name }
+    Dir.mktmpdir('gksdud-step-test-') do |dir|
+      File.write("#{dir}/gh", "#!/bin/bash\necho \"$*\" >> #{dir}/calls\n#{gh}\n")
+      File.chmod(0755, "#{dir}/gh")
+      output, status = Open3.capture2e(env.merge('PATH' => "#{dir}:#{ENV.fetch('PATH')}", 'GITHUB_REPOSITORY' => 'codingnoye/gksdud'), '/bin/bash', '-c', step.fetch('run'))
+      assert status.success?, output
+      [step, File.exist?("#{dir}/calls") ? File.read("#{dir}/calls").lines.map(&:strip) : []]
+    end
+  end
+
+  def test_only_the_latest_twenty_canaries_are_kept
+    tags = (1..23).map { |n| "v1.2.0.1.#{24 - n}" }.each_slice(5).flat_map { |slice| slice + ['v1.2.0', 'v1.2.0.1'] } + ['canary-v2.0.3', 'canary-v2.0.2.1.1']
+    step, calls = run_step('Keep the latest canary releases', {}, %(if [[ $1 == release && $2 == list ]]; then printf '%s\\n' #{tags.join(' ')}; fi))
+    assert_equal "steps.version.outputs.channel == 'canary'", step.fetch('if')
+    deleted = calls.select { |call| call.start_with?('release delete') }.map { |call| call.split[2] }
+    assert_equal %w[v1.2.0.1.3 v1.2.0.1.2 v1.2.0.1.1], deleted
+  end
+
+  def test_a_failed_canary_leaves_no_tag_without_a_release
+    name = 'Remove the tag of a canary that was not published'
+    lookup = 'api repos/codingnoye/gksdud/releases/tags/v1.2.0.1.3'
+    step, calls = run_step(name, { 'TAG' => 'v1.2.0.1.3' }, %(if [[ $2 == */releases/tags/* ]]; then echo 'gh: Not Found (HTTP 404)' >&2; exit 1; fi))
+    assert_equal "(failure() || cancelled()) && steps.version.outputs.channel == 'canary' && steps.version.outputs.tag_exists == 'false'", step.fetch('if')
+    assert_equal [lookup, 'api --method DELETE repos/codingnoye/gksdud/git/refs/tags/v1.2.0.1.3'], calls
+    _, calls = run_step(name, { 'TAG' => 'v1.2.0.1.3' }, 'true')
+    assert_equal [lookup], calls, 'A published canary keeps its tag'
+    _, calls = run_step(name, { 'TAG' => 'v1.2.0.1.3' }, %(echo 'error connecting to api.github.com' >&2; exit 1))
+    assert_equal [lookup], calls, 'Not when asking failed'
   end
 
   def test_stable_publication_requires_explicit_dispatch_and_keeps_tap_in_actions

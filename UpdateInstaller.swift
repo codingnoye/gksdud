@@ -77,8 +77,7 @@ enum UpdateProcessLauncher {
 // A new bundle must satisfy the currently installed app's certificate-bound identity.
 enum UpdateValidation {
     static let identifier = Bundle.main.bundleIdentifier ?? "io.gksdud.inputswitch"
-    // The app inside an update archive: gksdud.app, or gksdud-dev.app for canary.
-    static let appFolder = UpdateChannel.current.appName + ".app"
+    static let appFolder = BuildKind.appName + ".app"
     static let strict = SecCSFlags(rawValue: kSecCSCheckAllArchitectures | kSecCSStrictValidate | kSecCSCheckNestedCode)
     static func signedCode(_ path: URL) throws -> SecStaticCode {
         var code: SecStaticCode?
