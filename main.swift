@@ -1292,6 +1292,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     @objc func requestPressAccess() {
         returningFromPermissionSettings = true
         permissionSettingsWasActive = false
+        UpdateValidation.forgetUnusablePermissions()
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
         // Let the system prompt offer Settings; do not open it before the user chooses.
         _ = AXIsProcessTrustedWithOptions(options)

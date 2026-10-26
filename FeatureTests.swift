@@ -767,6 +767,11 @@ func runUpdateInstallTests() throws {
     featureCheck(!forget(true) && resets.suffix(1) == ["PostEvent"], "Only the one still left")
     failing = []
     featureCheck(!forget(true) && !forget(true) && resets.count == 10, "Until it is removed")
+    resets = []
+    UpdateValidation.forgetUnusablePermissions(trusted: { true }) { resets.append($0); return true }
+    featureCheck(resets.isEmpty, "A permission that applies is kept")
+    UpdateValidation.forgetUnusablePermissions(trusted: { false }) { resets.append($0); return false }
+    featureCheck(resets == ["Accessibility", "PostEvent"], "Asking without it removes what is left, whatever the record says")
     // Real children: timeout must reap the process before replacement can roll back.
     for arguments in [["5"], ["-c", "trap '' TERM; exec /bin/sleep 5"]] {
         var pid: pid_t = 0

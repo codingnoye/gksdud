@@ -125,12 +125,7 @@ enum UpdateValidation {
     // One left behind could never be allowed again, so a failed removal is tried a few times, then again on every launch.
     // Whether to ask for it again: on every launch until it is given.
     static func forgetSelfSignedPermissions(defaults: UserDefaults, developerID: Bool = UpdateValidation.runsWithDeveloperID,
-                                            trusted: () -> Bool = { AXIsProcessTrusted() }, reset: (String) -> Bool = { service in
-        (0..<3).contains { attempt in
-            if attempt > 0 { Thread.sleep(forTimeInterval: 0.3) }
-            return (try? UpdateValidation.command("/usr/bin/tccutil", ["reset", service, UpdateValidation.identifier])) != nil
-        }
-    }) -> Bool {
+                                            trusted: () -> Bool = { AXIsProcessTrusted() }, reset: (String) -> Bool = resetPermission) -> Bool {
         // Whether the last launch was the Developer ID build.
         let otherBuildRan = !defaults.bool(forKey: "permissions.developerID")
         defaults.set(developerID, forKey: "permissions.developerID")
@@ -143,6 +138,19 @@ enum UpdateValidation {
         let ask = services.contains("Accessibility") || defaults.bool(forKey: "permissions.ask") && !trusted()
         defaults.set(ask, forKey: "permissions.ask")
         return ask
+    }
+    // The record of the last launch can miss one, as when the settings were removed but not the permission, and the system
+    // prompt never replaces it. Asked while not allowed, there is nothing to lose: removed, allowing adds one for this build,
+    // and the running app takes it without a relaunch.
+    static func forgetUnusablePermissions(trusted: () -> Bool = { AXIsProcessTrusted() }, reset: (String) -> Bool = resetPermission) {
+        guard !trusted() else { return }
+        for service in ["Accessibility", "PostEvent"] { _ = reset(service) }
+    }
+    static func resetPermission(_ service: String) -> Bool {
+        (0..<3).contains { attempt in
+            if attempt > 0 { Thread.sleep(forTimeInterval: 0.3) }
+            return (try? command("/usr/bin/tccutil", ["reset", service, identifier])) != nil
+        }
     }
     static func candidate(_ new: URL, installed: URL, version: String) throws {
         let requirement = try installedRequirement(installed)
