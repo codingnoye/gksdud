@@ -345,24 +345,26 @@ final class KeyboardManager {
         var next = KeyboardReconcileResult()
         let devices: [KeyboardDevice]
         do { devices = try snapshot(); failures.removeValue(forKey: "enumeration") }
-        catch { failed("enumeration", name: "키보드 목록", error: error); next.pending = 1; next.foreignTargets = result.foreignTargets; result = next; return next }
+        catch { failed("enumeration", name: "키보드 목록", error: error); next.pending = 1; next.foreignTargets = result.foreignTargets; next.blockedTargets = result.blockedTargets; result = next; return next }
         let present = Set(devices.map(\.registryID))
         failures = failures.filter { present.contains($0.key) }
         var failedIDs: Set<String> = []
-        var stale = false
+        var stale = false, unread = away
         for device in devices {
             let selected = active && isSelected(device)
             if selected { next.selected += 1 }
             // With only Space combinations chosen, a keyboard has nothing to map.
             let keys = selected && !away ? sources(for: device, default: fallback) : []
             var own = selected && !away ? extras.filter { !keys.contains($0.source) } : []
-            if selected, !away, let mappings = try? device.readMappings() {
-                let fKeys = Set(targets.map(\.usage)), ours = Set(keys + extras.map(\.source)), record = records[device.registryID]
-                next.foreignTargets.formUnion(mappings.compactMap { mapping in
-                    guard let target = mapping[dstKey]?.uint64Value, fKeys.contains(target), !ours.contains(mapping[srcKey]?.uint64Value ?? 0),
-                          !owns(record, mapping) else { return nil }
-                    return target
-                })
+            if selected, !away {
+                if let mappings = try? device.readMappings() {
+                    let fKeys = Set(targets.map(\.usage)), ours = Set(keys + extras.map(\.source)), record = records[device.registryID]
+                    next.foreignTargets.formUnion(mappings.compactMap { mapping in
+                        guard let target = mapping[dstKey]?.uint64Value, fKeys.contains(target), !ours.contains(mapping[srcKey]?.uint64Value ?? 0),
+                              !owns(record, mapping) else { return nil }
+                        return target
+                    })
+                } else { unread = true }
             }
             do {
                 // An extra key never costs the Korean/English keys: if its target is taken, it waits.
@@ -392,8 +394,8 @@ final class KeyboardManager {
             }
         }
         next.pending = failedIDs.count
-        // Away, other mappings are not read; the F-keys they last sent still count, so nothing moves onto them meanwhile.
-        if away && next.selected > 0 { next.foreignTargets.formUnion(result.foreignTargets) }
+        // Away or on a failed read, other mappings are not seen; the F-keys they last sent still count, so nothing moves onto them meanwhile.
+        if unread && next.selected > 0 { next.foreignTargets.formUnion(result.foreignTargets) }
         result = next
         return next
     }

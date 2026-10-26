@@ -999,6 +999,9 @@ func runSourceKeyTests() {
     precondition(repair([second]).foreignTargets == [f18], "Another mapping's F-key is known")
     precondition(manager.reconcile(sources: [command], target: f19, active: true, away: true, extras: [second]).foreignTargets == [f18],
         "and still counts while away, when it is not read")
+    taken.failRead = true
+    precondition(repair([second]).foreignTargets == [f18], "or when reading fails")
+    taken.failRead = false
     _ = repair([], active: false)
     // A run that ended without its undo left the key on its F-key; mapping it there again keeps no such original.
     let leftover = TestKeyboard("s3", serial: "leftover", mappings: [mapping(option, f18)])
