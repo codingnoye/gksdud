@@ -1720,7 +1720,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let keys = picker.selection ?? engine.defaultSources
         let target = switchTargets[targetPicker.indexOfSelectedItem]
         guard confirmMapping(keys, target: target) else { resetSelection(); return }
-        do { _ = try engine.apply(sources: keys, target: target); lastError = ""; stickyError = ""; repairFailed = false; ensureKeyTap(); refreshStatus() } catch { report(error); resetSelection() }
+        do { _ = try engine.apply(sources: keys, target: target); nextFailedKey = nil; lastError = ""; stickyError = ""; repairFailed = false; ensureKeyTap(); refreshStatus() } catch { report(error); resetSelection() }
     }
     func restoreNow() {
         optionInput.cancel()
