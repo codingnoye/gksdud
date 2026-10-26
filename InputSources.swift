@@ -251,7 +251,7 @@ extension AppDelegate {
         if switchLanding == nil && target.id == current.id { return true }
         // The input menu's next source is one shortcut away, as the previous one is: nothing is selected first. Not while a
         // switch that selected sources is on its way: their notices would look like this one going elsewhere.
-        if queuedSwitch == nil, switchLanding == nil || nextSent != nil, !nextFailed, let next = engine.liveNextTarget,
+        if queuedSwitch == nil, switchLanding == nil || nextSent != nil, let next = engine.liveNextTarget, next.name != nextFailedKey,
            menuNext(after: current.id) == target.id, Self.sourceForID(target.id) != nil,
            let nextPulse = nativeSwitchPulse(keyCode: next.keyCode, marker: nativePulseMarker) {
             addedSources.showError(nil)
@@ -265,6 +265,7 @@ extension AppDelegate {
             guard queuedSwitch == nil, plannedSwitch(to: target, from: current).selections.isEmpty else {
                 queuedSwitch = (target, pulse); holdKeys = true; return true
             }
+            nextSent = nil
             postSwitchPulse(pulse)
             sourceHistory.note(target.id)
             expectLanding(target, origin: current.id)
@@ -289,6 +290,8 @@ extension AppDelegate {
         addedSources.showError(nil)
         // The frontmost app can see the selections before the shortcut's switch reaches it.
         if !plan.selections.isEmpty { holdKeys = true }
+        // Its notices are not the next-source shortcut's.
+        nextSent = nil
         postSwitchPulse(pulse)
         // Where it lands, as long as the shortcut switches.
         sourceHistory.note(target.id)
@@ -323,14 +326,12 @@ extension AppDelegate {
             guard let self, self.landingGeneration == generation else { return }
             let landed = self.switchLanding == nil
             self.switchLanding = nil
-            // The next-source shortcut changed nothing, as when it was changed in System Settings: it is not used again until
-            // the settings or sources change, and this switch goes the usual way.
-            if !landed, let sent = self.nextSent, self.currentSource?.id == sent.from, sent.target == target.id {
-                self.nextSent = nil; self.nextFailed = true
-                if let pulse = nativeSwitchPulse(keyCode: self.engine.target.keyCode, marker: nativePulseMarker) {
-                    self.switchSource(to: target, from: self.currentSource ?? target, pulse: pulse)
-                }
-                return
+            // The next-source shortcut changed nothing, as when it was changed in System Settings: its F-key is not used again
+            // until the settings, the sources or that F-key change, or the Mac wakes, and this switch goes the usual way.
+            if !landed, let sent = self.nextSent, let current = self.currentSource, current.id == sent.from, sent.target == target.id {
+                self.nextSent = nil; self.nextFailedKey = self.engine.liveNextTarget?.name
+                if let pulse = nativeSwitchPulse(keyCode: self.engine.target.keyCode, marker: nativePulseMarker),
+                   self.switchSource(to: target, from: current, pulse: pulse) { return }
             }
             self.nextSent = nil
             if reselectsTarget(landed: landed, current: self.currentSource?.id, origin: origin, targetIsLayout: self.isLayout(target.id)),
@@ -485,7 +486,7 @@ extension AppDelegate {
         updateInputIndicator()
     }
     func addedSourcesChanged() {
-        cancelLongPress(); sourceCache = nil; missedNext = [:]; nextFailed = false; seedSourceHistory(); engine.refreshSystemFKeys()
+        cancelLongPress(); sourceCache = nil; missedNext = [:]; nextFailedKey = nil; seedSourceHistory(); engine.refreshSystemFKeys()
         ensureKeyTap(); repair()
         do { try engine.updateNextShortcut() } catch { addedSources.showError(error.localizedDescription) }
         releaseKoreanCapsLock()

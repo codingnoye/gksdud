@@ -517,16 +517,20 @@ final class Engine {
         // Process.waitUntilExit pumps the main run loop. A timer/wake callback must not
         // restore a shortcut halfway through activation or enter a second restoration.
         guard !isUpdatingSettings else { return }
-        if active { _ = try reconcile(); try followNextTarget() }
+        if active { _ = try reconcile(); if try followNextTarget() { _ = try reconcile() } }
         else { try restore() }
     }
-    // The free F-key can change as mappings are read, the first time on launch; the shortcut follows it. One that failed to
-    // activate is not written again every second.
-    func followNextTarget() throws {
+    // The free F-key can change as mappings are read, the first time on launch; the shortcut follows it, and the sources'
+    // automatic F-keys with it. Tried once per change, so a failing write or activation does not repeat every second.
+    @discardableResult func followNextTarget() throws -> Bool {
+        let wanted = nextTarget?.keyCode
         let managed = defaults.bool(forKey: "nextShortcutBackedUp") ? (defaults.object(forKey: "managedNextShortcutKeyCode") as? NSNumber)?.intValue : nil
-        guard nextTarget?.keyCode != managed || defaults.bool(forKey: "nextRestorePending") else { return }
+        guard wanted != managed || defaults.bool(forKey: "nextRestorePending"), followedNext != .some(wanted) else { return false }
+        followedNext = wanted
         try updateNextShortcut()
+        return true
     }
+    private var followedNext: Int??
     func restoreMappings() throws {
         let result = keyboards.reconcile(sources: defaultSources, target: target.usage, active: false)
         // Normal repair is non-modal. Explicit quit must preserve undo state if cleanup failed.
@@ -778,7 +782,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     // The next-source shortcut on its way, and where it went instead of the expected source, until the sources change.
     var nextSent: (from: String, target: String)?
     var missedNext: [String: String] = [:]
-    var nextFailed = false
+    var nextFailedKey: String?
     // Keys typed while such a switch is on its way.
     var holdKeys = false
     var heldKeys: [CGEvent] = []
@@ -1506,7 +1510,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     // A source's key maps or goes back to the keyboard as its source comes and goes.
     @objc func enabledSourcesChanged() {
         RunLoop.main.perform(inModes: [.common]) { [weak self] in
-            self?.sourceCache = nil; self?.nativeIconCache = [:]; self?.missedNext = [:]; self?.nextFailed = false; self?.repair(); self?.addedSources.refresh(force: true)
+            self?.sourceCache = nil; self?.nativeIconCache = [:]; self?.missedNext = [:]; self?.nextFailedKey = nil; self?.repair(); self?.addedSources.refresh(force: true)
         }
     }
     func updateInputIndicator() {
@@ -1706,7 +1710,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         do { try engine.restore(); lastError = ""; stickyError = ""; repairFailed = false; refreshStatus() } catch { report(error) }
         resetSelection(); syncCapsPreservation(); updatePressAccess(); refreshKeyboardState()
     }
-    func recover() { sourceCache = nil; observedCaps = nil; queuedSwitch = nil; releaseHeldKeys(); optionInput.cancel(); if capsRestoreTasks.isEmpty { englishCaps.switching = false }; cancelLongPress(); longPress = LongPressState(); pressGate.held.removeAll(); nativeRemote = NativeRemoteGate(); spaceGate = SpaceComboGate(); sourceKeyGate.held.removeAll(); for delay in [0.5, 2.0, 5.0] { DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.repair() } } }
+    func recover() { sourceCache = nil; nextFailedKey = nil; observedCaps = nil; queuedSwitch = nil; releaseHeldKeys(); optionInput.cancel(); if capsRestoreTasks.isEmpty { englishCaps.switching = false }; cancelLongPress(); longPress = LongPressState(); pressGate.held.removeAll(); nativeRemote = NativeRemoteGate(); spaceGate = SpaceComboGate(); sourceKeyGate.held.removeAll(); for delay in [0.5, 2.0, 5.0] { DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.repair() } } }
     // The tap does not see Caps Lock on another user's login window, and leaves it alone on the lock screen. Coming back
     // with English (or Korean showing the English case) selected, the lock as left there is the English case. A restore on
     // its way finishes first: unlocking can land in Korean while its input method turns the lock off.

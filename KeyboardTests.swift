@@ -1067,9 +1067,9 @@ func runSourceKeyTests() {
     precondition(Engine.ownsShortcut(hotkeys["61"], keyCode: targets[0].keyCode) && relaunched.liveNextTarget?.name == "F13",
         "On launch, F16 taken by another shortcut is stepped around")
     hotkeys["32"] = nil; relaunched.refreshSystemFKeys(); activations = 0
-    try? relaunched.followNextTarget()
+    _ = try? relaunched.followNextTarget()
     precondition(relaunched.liveNextTarget?.name == "F13" && activations == 0, "The one set stays while it is free")
-    nextDefaults.set(false, forKey: "addedSources"); try? relaunched.followNextTarget()
+    nextDefaults.set(false, forKey: "addedSources"); _ = try? relaunched.followNextTarget()
     precondition(NSDictionary(dictionary: hotkeys["61"] as! [String: Any]).isEqual(to: userNext), "Turned off, repair gives it back")
     // A restore written but not activated is activated the next time.
     nextDefaults.set(true, forKey: "addedSources"); try? relaunched.updateNextShortcut()
@@ -1083,6 +1083,23 @@ func runSourceKeyTests() {
     failing = false; try? flaky.restoreNextShortcut()
     precondition(activations == 2 && nextDefaults.object(forKey: "nextShortcutBackedUp") == nil
         && NSDictionary(dictionary: hotkeys["61"] as! [String: Any]).isEqual(to: userNext), "and is activated again")
+    // A mapping another app made that sends its F-key, found by the first repair after launch, moves it.
+    let mappedSuite = "io.gksdud.next-mapped-tests.\(UUID().uuidString)", mappedDefaults = UserDefaults(suiteName: mappedSuite)!
+    defer { mappedDefaults.removePersistentDomain(forName: mappedSuite) }
+    let other = TestKeyboard("next", serial: "next", mappings: [mapping(0x7000000e2, targets[3].usage)])
+    hotkeys = ["61": userNext]
+    let mapped = Engine(defaults: mappedDefaults, discover: { [other] },
+                        shortcutPreferences: ShortcutPreferences(read: { hotkeys }, write: { hotkeys = $0 }, activate: { activations += 1 }),
+                        inputMenu: InputMenuPreference(read: { nil }, write: { _ in }))
+    mapped.accessibilityTrusted = { true }
+    mappedDefaults.set(true, forKey: "active"); mappedDefaults.set(true, forKey: "addedSources")
+    try? mapped.resume()
+    precondition(mapped.liveNextTarget?.name == "F16", "Before any mapping is read, F16")
+    try? mapped.repair()
+    precondition(Engine.ownsShortcut(hotkeys["61"], keyCode: targets[0].keyCode) && mapped.liveNextTarget?.name == "F13"
+        && other.mappings.contains(mapping(0x7000000e2, targets[3].usage)), "then F13, leaving F16 to the other mapping")
+    activations = 0; try? mapped.repair()
+    precondition(activations == 0, "and it stays")
     nextDefaults.set(false, forKey: "active")
     precondition(nextInMenu(["us", "ko", "zh"], after: "zh") == "us" && nextInMenu(["us", "ko"], after: "us") == "ko"
         && nextInMenu(["us"], after: "us") == nil && nextInMenu(["us", "ko"], after: "ja") == nil, "The menu's next source, round the end")
