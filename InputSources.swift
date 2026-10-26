@@ -251,7 +251,7 @@ extension AppDelegate {
         if switchLanding == nil && target.id == current.id { return true }
         // The input menu's next source is one shortcut away, as the previous one is: nothing is selected first. Not while
         // another switch is on its way: its notices would look like this one going elsewhere.
-        if queuedSwitch == nil, switchLanding == nil, let next = engine.liveNextTarget, next.name != nextFailedKey,
+        if queuedSwitch == nil, switchLanding == nil, let next = engine.liveNextTarget, next.name != engine.nextFailedKey,
            menuNext(after: current.id) == target.id, Self.sourceForID(target.id) != nil,
            let nextPulse = nativeSwitchPulse(keyCode: next.keyCode, marker: nativePulseMarker) {
             addedSources.showError(nil)
@@ -326,7 +326,7 @@ extension AppDelegate {
             // The next-source shortcut changed nothing, as when it was changed in System Settings: its F-key is not used again
             // until the settings, the sources or that F-key change, or the Mac wakes, and this switch goes the usual way.
             if !landed, let sent = self.nextSent, let current = self.currentSource, current.id == sent.from, sent.target == target.id {
-                self.nextSent = nil; self.nextFailedKey = sent.key
+                self.nextSent = nil; self.engine.nextFailedKey = sent.key
                 if let pulse = nativeSwitchPulse(keyCode: self.engine.target.keyCode, marker: nativePulseMarker),
                    self.switchSource(to: target, from: current, pulse: pulse) { return }
             }
@@ -483,7 +483,7 @@ extension AppDelegate {
         updateInputIndicator()
     }
     func addedSourcesChanged() {
-        cancelLongPress(); sourceCache = nil; missedNext = [:]; nextFailedKey = nil; seedSourceHistory(); engine.refreshSystemFKeys()
+        cancelLongPress(); sourceCache = nil; missedNext = [:]; engine.nextFailedKey = nil; seedSourceHistory(); engine.refreshSystemFKeys()
         ensureKeyTap(); repair()
         do { try engine.updateNextShortcut() } catch { addedSources.showError(error.localizedDescription) }
         releaseKoreanCapsLock()

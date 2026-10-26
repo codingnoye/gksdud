@@ -1066,11 +1066,13 @@ func runSourceKeyTests() {
     try? relaunched.resume()
     precondition(Engine.ownsShortcut(hotkeys["61"], keyCode: targets[0].keyCode) && relaunched.liveNextTarget?.name == "F13",
         "On launch, F16 taken by another shortcut is stepped around")
-    hotkeys["32"] = nil; relaunched.refreshSystemFKeys(); activations = 0
+    hotkeys["32"] = nil; relaunched.refreshSystemFKeys(); activations = 0; relaunched.nextFailedKey = "F13"
     _ = try? relaunched.followNextTarget()
-    precondition(relaunched.liveNextTarget?.name == "F13" && activations == 0, "The one set stays while it is free")
+    precondition(relaunched.liveNextTarget?.name == "F13" && activations == 0 && relaunched.nextFailedKey == "F13",
+        "The one set stays while it is free, and so does its failure")
     nextDefaults.set(false, forKey: "addedSources"); _ = try? relaunched.followNextTarget()
-    precondition(NSDictionary(dictionary: hotkeys["61"] as! [String: Any]).isEqual(to: userNext), "Turned off, repair gives it back")
+    precondition(NSDictionary(dictionary: hotkeys["61"] as! [String: Any]).isEqual(to: userNext) && relaunched.nextFailedKey == nil,
+        "Turned off, repair gives it back and forgets the failure")
     // A restore written but not activated is activated the next time.
     nextDefaults.set(true, forKey: "addedSources"); try? relaunched.updateNextShortcut()
     var failing = true
@@ -1105,9 +1107,10 @@ func runSourceKeyTests() {
     mappedDefaults.set(true, forKey: "active"); mappedDefaults.set(true, forKey: "addedSources")
     try? mapped.resume()
     precondition(mapped.liveNextTarget?.name == "F16", "Before any mapping is read, F16")
-    try? mapped.repair()
+    mapped.nextFailedKey = "F16"; try? mapped.repair()
     precondition(Engine.ownsShortcut(hotkeys["61"], keyCode: targets[0].keyCode) && mapped.liveNextTarget?.name == "F13"
-        && other.mappings.contains(mapping(0x7000000e2, targets[3].usage)), "then F13, leaving F16 to the other mapping")
+        && other.mappings.contains(mapping(0x7000000e2, targets[3].usage)) && mapped.nextFailedKey == nil,
+        "then F13, leaving F16 to the other mapping, with the failure forgotten")
     activations = 0; try? mapped.repair()
     precondition(activations == 0, "and it stays")
     nextDefaults.set(false, forKey: "active")

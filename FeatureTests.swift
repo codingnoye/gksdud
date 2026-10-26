@@ -1056,16 +1056,16 @@ func runAddedSourceTests() {
     migrateDefaults.set(1, forKey: "addedSourceMode"); migrateDefaults.set("zh", forKey: "separateSource")
     migrateDefaults.set(NSNumber(value: spaceCombos[2]), forKey: "separateKey")
     migrating.migrateAddedSources(enabled: enabled + [us])
-    featureCheck(migrating.cycleSources == ["ko2", "abc", "us"] && migrating.sourceKeys == ["zh": spaceCombos[2]] && migrating.sourceKeyReturns
+    featureCheck(migrating.cycleSources == ["ko2", "abc"] && migrating.sourceKeys == ["zh": spaceCombos[2]] && migrating.sourceKeyReturns
         && ["addedSourceMode", "separateSource", "separateKey"].allSatisfy { migrateDefaults.object(forKey: $0) == nil }, "Separate becomes a cycle and a key")
     migrateDefaults.removeObject(forKey: "sourceKeyReturns")
     migrateDefaults.set(0, forKey: "addedSourceMode"); migrateDefaults.set("ja", forKey: "separateSource")
     migrating.migrateAddedSources(enabled: enabled)
-    featureCheck(migrating.cycleSources == ["ko2", "abc", "us"] && migrating.sourceKeys == ["zh": spaceCombos[2]]
+    featureCheck(migrating.cycleSources == ["ko2", "abc"] && migrating.sourceKeys == ["zh": spaceCombos[2]]
         && migrateDefaults.object(forKey: "separateSource") == nil && !migrating.sourceKeyReturns,
         "Cycling keeps its cycle and drops the unused separate settings; going back stays off")
     migrating.migrateAddedSources(enabled: [])
-    featureCheck(migrating.cycleSources == ["ko2", "abc", "us"], "Once only")
+    featureCheck(migrating.cycleSources == ["ko2", "abc"], "Once only")
     migrating.setSourceKey(spaceCombos[2], for: "ja")
     featureCheck(migrating.sourceKeys == ["ja": spaceCombos[2]], "One source per key")
     migrating.setSourceKey(sources[1], for: "ja"); migrating.setSourceKey(sources[3], for: "abc")
