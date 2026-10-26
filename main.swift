@@ -280,11 +280,11 @@ final class Engine {
     }
     // Saved settings of the earlier cycle-or-separate choice become the same behavior here: separate kept Korean and English
     // on the Korean/English key and gave one more source a key that goes there and back.
-    func migrateAddedSources(enabled: [InputSourceIdentity]) {
+    func migrateAddedSources(enabled: [InputSourceIdentity], history: SourceHistory = SourceHistory([])) {
         guard let mode = defaults.object(forKey: "addedSourceMode") as? NSNumber else { return }
         if mode.intValue == 1 {
-            // Separate went between one Korean and one English source; another layout of either language still counts as it.
-            cycleSources = [enabled.first(where: isKorean), enabled.first(where: isEnglish)].compactMap { $0?.id }
+            // Separate went between the most recent Korean and English sources; another layout of either language still counts as it.
+            cycleSources = [history.mostRecent(enabled.filter(isKorean)), history.mostRecent(enabled.filter(isEnglish))].compactMap { $0?.id }
             if let id = defaults.string(forKey: "separateSource"), let key = (defaults.object(forKey: "separateKey") as? NSNumber)?.uint64Value,
                hangulKeys.contains(key) { setSourceKey(key, for: id) }
             // The separate key went there and back.
@@ -1308,7 +1308,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         editEntry.submenu = editMenu; mainMenu.addItem(editEntry)
         NSApp.mainMenu = mainMenu
         if askForPermission { keepActivationUntilTrusted() }
-        engine.migrateAddedSources(enabled: enabledSources())
+        seedSourceHistory(); engine.migrateAddedSources(enabled: enabledSources(), history: sourceHistory)
         engine.availableSources = { [weak self] in self.map { Set($0.enabledSources().map(\.id)) } }
         buildWindow()
         updateMenu()

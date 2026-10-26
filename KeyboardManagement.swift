@@ -345,7 +345,7 @@ final class KeyboardManager {
         var next = KeyboardReconcileResult()
         let devices: [KeyboardDevice]
         do { devices = try snapshot(); failures.removeValue(forKey: "enumeration") }
-        catch { failed("enumeration", name: "키보드 목록", error: error); next.pending = 1; result = next; return next }
+        catch { failed("enumeration", name: "키보드 목록", error: error); next.pending = 1; next.foreignTargets = result.foreignTargets; result = next; return next }
         let present = Set(devices.map(\.registryID))
         failures = failures.filter { present.contains($0.key) }
         var failedIDs: Set<String> = []
@@ -392,6 +392,8 @@ final class KeyboardManager {
             }
         }
         next.pending = failedIDs.count
+        // Away, other mappings are not read; the F-keys they last sent still count, so nothing moves onto them meanwhile.
+        if away && next.selected > 0 { next.foreignTargets.formUnion(result.foreignTargets) }
         result = next
         return next
     }
