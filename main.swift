@@ -432,6 +432,7 @@ final class Engine {
         guard !isUpdatingSettings, active, accessibilityTrusted() else { return }
         try shortcut(target: target)
         try updateSystemInputMenu()
+        refreshSystemFKeys()
         try updateNextShortcut()
     }
     // The input menu's next-source shortcut (61), on an F-key of its own while added sources are on: a step of the cycle to
@@ -465,6 +466,7 @@ final class Engine {
             defaults.set(true, forKey: "nextShortcutBackedUp")
         }
         liveNextTarget = nil
+        defaults.removeObject(forKey: "nextRestorePending")
         keys["61"] = ["enabled": true, "value": ["type": "standard", "parameters": [65535, next.keyCode, 0]]] as [String: Any]
         defaults.set(next.keyCode, forKey: "managedNextShortcutKeyCode")
         try shortcutPreferences.write(keys)
@@ -479,12 +481,16 @@ final class Engine {
         defer { settingsUpdateDepth -= 1 }
         var keys = shortcutPreferences.read()
         let managed = (defaults.object(forKey: "managedNextShortcutKeyCode") as? NSNumber)?.intValue ?? -1
+        let original = defaults.object(forKey: "originalNextShortcut")
+        // Written but not activated last time.
+        let resumeActivation = defaults.bool(forKey: "nextRestorePending") && Self.sameShortcut(keys["61"], original)
         if Self.ownsShortcut(keys["61"], keyCode: managed) {
-            keys["61"] = defaults.object(forKey: "originalNextShortcut")
+            keys["61"] = original
+            defaults.set(true, forKey: "nextRestorePending")
             try shortcutPreferences.write(keys)
             try shortcutPreferences.activate()
-        }
-        for key in ["nextShortcutBackedUp", "originalNextShortcut", "managedNextShortcutKeyCode"] { defaults.removeObject(forKey: key) }
+        } else if resumeActivation { try shortcutPreferences.activate() }
+        for key in ["nextShortcutBackedUp", "originalNextShortcut", "managedNextShortcutKeyCode", "nextRestorePending"] { defaults.removeObject(forKey: key) }
     }
     func restoreShortcut() throws {
         settingsUpdateDepth += 1
@@ -511,8 +517,15 @@ final class Engine {
         // Process.waitUntilExit pumps the main run loop. A timer/wake callback must not
         // restore a shortcut halfway through activation or enter a second restoration.
         guard !isUpdatingSettings else { return }
-        if active { _ = try reconcile() }
+        if active { _ = try reconcile(); try followNextTarget() }
         else { try restore() }
+    }
+    // The free F-key can change as mappings are read, the first time on launch; the shortcut follows it. One that failed to
+    // activate is not written again every second.
+    func followNextTarget() throws {
+        let managed = defaults.bool(forKey: "nextShortcutBackedUp") ? (defaults.object(forKey: "managedNextShortcutKeyCode") as? NSNumber)?.intValue : nil
+        guard nextTarget?.keyCode != managed || defaults.bool(forKey: "nextRestorePending") else { return }
+        try updateNextShortcut()
     }
     func restoreMappings() throws {
         let result = keyboards.reconcile(sources: defaultSources, target: target.usage, active: false)
@@ -765,6 +778,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     // The next-source shortcut on its way, and where it went instead of the expected source, until the sources change.
     var nextSent: (from: String, target: String)?
     var missedNext: [String: String] = [:]
+    var nextFailed = false
     // Keys typed while such a switch is on its way.
     var holdKeys = false
     var heldKeys: [CGEvent] = []
@@ -1492,7 +1506,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     // A source's key maps or goes back to the keyboard as its source comes and goes.
     @objc func enabledSourcesChanged() {
         RunLoop.main.perform(inModes: [.common]) { [weak self] in
-            self?.sourceCache = nil; self?.nativeIconCache = [:]; self?.missedNext = [:]; self?.repair(); self?.addedSources.refresh(force: true)
+            self?.sourceCache = nil; self?.nativeIconCache = [:]; self?.missedNext = [:]; self?.nextFailed = false; self?.repair(); self?.addedSources.refresh(force: true)
         }
     }
     func updateInputIndicator() {

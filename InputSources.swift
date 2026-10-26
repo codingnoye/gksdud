@@ -249,9 +249,12 @@ extension AppDelegate {
     func switchSource(to target: InputSourceIdentity, from current: InputSourceIdentity, pulse: (CGEvent, CGEvent)) -> Bool {
         if switchLanding == target.id { queuedSwitch = nil; return true }
         if switchLanding == nil && target.id == current.id { return true }
-        // The input menu's next source is one shortcut away, as the previous one is: nothing is selected first.
-        if queuedSwitch == nil, let next = engine.liveNextTarget, menuNext(after: current.id) == target.id,
-           Self.sourceForID(target.id) != nil, let nextPulse = nativeSwitchPulse(keyCode: next.keyCode, marker: nativePulseMarker) {
+        // The input menu's next source is one shortcut away, as the previous one is: nothing is selected first. Not while a
+        // switch that selected sources is on its way: their notices would look like this one going elsewhere.
+        if queuedSwitch == nil, switchLanding == nil || nextSent != nil, !nextFailed, let next = engine.liveNextTarget,
+           menuNext(after: current.id) == target.id, Self.sourceForID(target.id) != nil,
+           let nextPulse = nativeSwitchPulse(keyCode: next.keyCode, marker: nativePulseMarker) {
+            addedSources.showError(nil)
             postSwitchPulse(nextPulse)
             nextSent = (current.id, target.id)
             sourceHistory.note(target.id)
@@ -319,7 +322,17 @@ extension AppDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             guard let self, self.landingGeneration == generation else { return }
             let landed = self.switchLanding == nil
-            self.switchLanding = nil; self.nextSent = nil
+            self.switchLanding = nil
+            // The next-source shortcut changed nothing, as when it was changed in System Settings: it is not used again until
+            // the settings or sources change, and this switch goes the usual way.
+            if !landed, let sent = self.nextSent, self.currentSource?.id == sent.from, sent.target == target.id {
+                self.nextSent = nil; self.nextFailed = true
+                if let pulse = nativeSwitchPulse(keyCode: self.engine.target.keyCode, marker: nativePulseMarker) {
+                    self.switchSource(to: target, from: self.currentSource ?? target, pulse: pulse)
+                }
+                return
+            }
+            self.nextSent = nil
             if reselectsTarget(landed: landed, current: self.currentSource?.id, origin: origin, targetIsLayout: self.isLayout(target.id)),
                let source = Self.sourceForID(target.id) { _ = TISSelectInputSource(source) }
             self.updateInputIndicator()
@@ -472,7 +485,7 @@ extension AppDelegate {
         updateInputIndicator()
     }
     func addedSourcesChanged() {
-        cancelLongPress(); sourceCache = nil; seedSourceHistory(); engine.refreshSystemFKeys()
+        cancelLongPress(); sourceCache = nil; missedNext = [:]; nextFailed = false; seedSourceHistory(); engine.refreshSystemFKeys()
         ensureKeyTap(); repair()
         do { try engine.updateNextShortcut() } catch { addedSources.showError(error.localizedDescription) }
         releaseKoreanCapsLock()

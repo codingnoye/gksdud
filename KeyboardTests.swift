@@ -1055,6 +1055,35 @@ func runSourceKeyTests() {
     hotkeys["61"] = edited
     try? next.restoreSystem()
     precondition(NSDictionary(dictionary: hotkeys["61"] as! [String: Any]).isEqual(to: edited), "A change made meanwhile is the user's and stays")
+    // Shortcuts are read before the next-source shortcut is placed on launch, and it moves when a free F-key changes.
+    hotkeys = ["61": userNext, "32": ["enabled": true, "value": ["type": "standard", "parameters": [65535, targets[3].keyCode, 8388608]]] as [String: Any]]
+    activations = 0
+    let relaunched = Engine(defaults: nextDefaults, discover: { [] },
+                            shortcutPreferences: ShortcutPreferences(read: { hotkeys }, write: { hotkeys = $0 }, activate: { activations += 1 }),
+                            inputMenu: InputMenuPreference(read: { nil }, write: { _ in }))
+    relaunched.accessibilityTrusted = { true }
+    nextDefaults.set(true, forKey: "active")
+    try? relaunched.resume()
+    precondition(Engine.ownsShortcut(hotkeys["61"], keyCode: targets[0].keyCode) && relaunched.liveNextTarget?.name == "F13",
+        "On launch, F16 taken by another shortcut is stepped around")
+    hotkeys["32"] = nil; relaunched.refreshSystemFKeys(); activations = 0
+    try? relaunched.followNextTarget()
+    precondition(relaunched.liveNextTarget?.name == "F13" && activations == 0, "The one set stays while it is free")
+    nextDefaults.set(false, forKey: "addedSources"); try? relaunched.followNextTarget()
+    precondition(NSDictionary(dictionary: hotkeys["61"] as! [String: Any]).isEqual(to: userNext), "Turned off, repair gives it back")
+    // A restore written but not activated is activated the next time.
+    nextDefaults.set(true, forKey: "addedSources"); try? relaunched.updateNextShortcut()
+    var failing = true
+    let flaky = Engine(defaults: nextDefaults, discover: { [] }, shortcutPreferences: ShortcutPreferences(read: { hotkeys }, write: { hotkeys = $0 }, activate: {
+        activations += 1; if failing { throw KeyboardError.verification }
+    }))
+    nextDefaults.set(false, forKey: "addedSources"); activations = 0
+    try? flaky.restoreNextShortcut()
+    precondition(nextDefaults.bool(forKey: "nextShortcutBackedUp") && activations == 1, "A failed activation keeps the backup")
+    failing = false; try? flaky.restoreNextShortcut()
+    precondition(activations == 2 && nextDefaults.object(forKey: "nextShortcutBackedUp") == nil
+        && NSDictionary(dictionary: hotkeys["61"] as! [String: Any]).isEqual(to: userNext), "and is activated again")
+    nextDefaults.set(false, forKey: "active")
     precondition(nextInMenu(["us", "ko", "zh"], after: "zh") == "us" && nextInMenu(["us", "ko"], after: "us") == "ko"
         && nextInMenu(["us"], after: "us") == nil && nextInMenu(["us", "ko"], after: "ja") == nil, "The menu's next source, round the end")
     let measured = [InputSourceIdentity(id: "abc", language: "en"), InputSourceIdentity(id: "ko", language: "ko"),
