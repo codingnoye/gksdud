@@ -455,7 +455,16 @@ final class Engine {
         var keys = shortcutPreferences.read()
         let backedUp = defaults.bool(forKey: "nextShortcutBackedUp")
         if backedUp && Self.ownsShortcut(keys["61"], keyCode: next.keyCode) {
+            // Written before but not activated.
+            if defaults.bool(forKey: "nextActivatePending") {
+                settingsUpdateDepth += 1
+                defer { settingsUpdateDepth -= 1 }
+                try shortcutPreferences.activate()
+                defaults.removeObject(forKey: "nextActivatePending")
+            }
+            defaults.set(next.keyCode, forKey: "managedNextShortcutKeyCode")
             if liveNextTarget?.name != next.name { liveNextTarget = next }
+            followedNext = nil
             return
         }
         settingsUpdateDepth += 1
@@ -469,9 +478,12 @@ final class Engine {
         defaults.removeObject(forKey: "nextRestorePending")
         keys["61"] = ["enabled": true, "value": ["type": "standard", "parameters": [65535, next.keyCode, 0]]] as [String: Any]
         defaults.set(next.keyCode, forKey: "managedNextShortcutKeyCode")
+        defaults.set(true, forKey: "nextActivatePending")
         try shortcutPreferences.write(keys)
         try shortcutPreferences.activate()
+        defaults.removeObject(forKey: "nextActivatePending")
         liveNextTarget = next
+        followedNext = nil
     }
     // Gives the user's own next-source shortcut back, unless it was changed since.
     func restoreNextShortcut() throws {
@@ -490,7 +502,10 @@ final class Engine {
             try shortcutPreferences.write(keys)
             try shortcutPreferences.activate()
         } else if resumeActivation { try shortcutPreferences.activate() }
-        for key in ["nextShortcutBackedUp", "originalNextShortcut", "managedNextShortcutKeyCode", "nextRestorePending"] { defaults.removeObject(forKey: key) }
+        for key in ["nextShortcutBackedUp", "originalNextShortcut", "managedNextShortcutKeyCode", "nextRestorePending", "nextActivatePending"] {
+            defaults.removeObject(forKey: key)
+        }
+        followedNext = nil
     }
     func restoreShortcut() throws {
         settingsUpdateDepth += 1
@@ -521,16 +536,18 @@ final class Engine {
         else { try restore() }
     }
     // The free F-key can change as mappings are read, the first time on launch; the shortcut follows it, and the sources'
-    // automatic F-keys with it. Tried once per change, so a failing write or activation does not repeat every second.
+    // automatic F-keys with it. Tried once per change, so a failing write or activation does not repeat every second; any
+    // explicit update or a wake tries again.
     @discardableResult func followNextTarget() throws -> Bool {
         let wanted = nextTarget?.keyCode
         let managed = defaults.bool(forKey: "nextShortcutBackedUp") ? (defaults.object(forKey: "managedNextShortcutKeyCode") as? NSNumber)?.intValue : nil
-        guard wanted != managed || defaults.bool(forKey: "nextRestorePending"), followedNext != .some(wanted) else { return false }
+        let pending = defaults.bool(forKey: "nextRestorePending") || defaults.bool(forKey: "nextActivatePending")
+        guard wanted != managed || pending, followedNext != .some(wanted) else { return false }
         followedNext = wanted
         try updateNextShortcut()
         return true
     }
-    private var followedNext: Int??
+    var followedNext: Int??
     func restoreMappings() throws {
         let result = keyboards.reconcile(sources: defaultSources, target: target.usage, active: false)
         // Normal repair is non-modal. Explicit quit must preserve undo state if cleanup failed.
@@ -780,7 +797,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     var switchLanding: String?
     var queuedSwitch: (target: InputSourceIdentity, pulse: (CGEvent, CGEvent))?
     // The next-source shortcut on its way, and where it went instead of the expected source, until the sources change.
-    var nextSent: (from: String, target: String)?
+    var nextSent: (from: String, target: String, key: String)?
     var missedNext: [String: String] = [:]
     var nextFailedKey: String?
     // Keys typed while such a switch is on its way.
@@ -1249,6 +1266,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
     func postSwitchPulse(_ pulse: (CGEvent, CGEvent)) {
         noteSwitchSent()
+        // Notices from here on are this switch's, not those of a next-source shortcut sent before.
+        nextSent = nil
         // With the lock as it is now, not as when its key went down: the session takes the lock from posted events, and a
         // pulse read as off made restoring the case set the lock again mid-switch, which switched back.
         let caps = currentCaps
@@ -1710,7 +1729,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         do { try engine.restore(); lastError = ""; stickyError = ""; repairFailed = false; refreshStatus() } catch { report(error) }
         resetSelection(); syncCapsPreservation(); updatePressAccess(); refreshKeyboardState()
     }
-    func recover() { sourceCache = nil; nextFailedKey = nil; observedCaps = nil; queuedSwitch = nil; releaseHeldKeys(); optionInput.cancel(); if capsRestoreTasks.isEmpty { englishCaps.switching = false }; cancelLongPress(); longPress = LongPressState(); pressGate.held.removeAll(); nativeRemote = NativeRemoteGate(); spaceGate = SpaceComboGate(); sourceKeyGate.held.removeAll(); for delay in [0.5, 2.0, 5.0] { DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.repair() } } }
+    func recover() { sourceCache = nil; nextFailedKey = nil; engine.followedNext = nil; observedCaps = nil; queuedSwitch = nil; releaseHeldKeys(); optionInput.cancel(); if capsRestoreTasks.isEmpty { englishCaps.switching = false }; cancelLongPress(); longPress = LongPressState(); pressGate.held.removeAll(); nativeRemote = NativeRemoteGate(); spaceGate = SpaceComboGate(); sourceKeyGate.held.removeAll(); for delay in [0.5, 2.0, 5.0] { DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.repair() } } }
     // The tap does not see Caps Lock on another user's login window, and leaves it alone on the lock screen. Coming back
     // with English (or Korean showing the English case) selected, the lock as left there is the English case. A restore on
     // its way finishes first: unlocking can land in Korean while its input method turns the lock off.

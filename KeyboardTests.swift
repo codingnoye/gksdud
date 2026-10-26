@@ -1083,6 +1083,16 @@ func runSourceKeyTests() {
     failing = false; try? flaky.restoreNextShortcut()
     precondition(activations == 2 && nextDefaults.object(forKey: "nextShortcutBackedUp") == nil
         && NSDictionary(dictionary: hotkeys["61"] as! [String: Any]).isEqual(to: userNext), "and is activated again")
+    // So is an update, by the next explicit one; repair tries it once, not every second.
+    nextDefaults.set(true, forKey: "addedSources"); failing = true; activations = 0
+    try? flaky.updateNextShortcut()
+    precondition(activations == 1 && flaky.liveNextTarget == nil && nextDefaults.bool(forKey: "nextActivatePending"), "Written, not activated")
+    _ = try? flaky.followNextTarget(); _ = try? flaky.followNextTarget()
+    precondition(activations == 2, "Repair tries once")
+    failing = false; try? flaky.updateNextShortcut()
+    precondition(activations == 3 && flaky.liveNextTarget != nil && !nextDefaults.bool(forKey: "nextActivatePending"), "The next update activates it")
+    nextDefaults.set(false, forKey: "addedSources"); try? flaky.updateNextShortcut()
+    precondition(NSDictionary(dictionary: hotkeys["61"] as! [String: Any]).isEqual(to: userNext), "and off gives it back")
     // A mapping another app made that sends its F-key, found by the first repair after launch, moves it.
     let mappedSuite = "io.gksdud.next-mapped-tests.\(UUID().uuidString)", mappedDefaults = UserDefaults(suiteName: mappedSuite)!
     defer { mappedDefaults.removePersistentDomain(forName: mappedSuite) }

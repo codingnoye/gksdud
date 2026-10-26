@@ -249,14 +249,14 @@ extension AppDelegate {
     func switchSource(to target: InputSourceIdentity, from current: InputSourceIdentity, pulse: (CGEvent, CGEvent)) -> Bool {
         if switchLanding == target.id { queuedSwitch = nil; return true }
         if switchLanding == nil && target.id == current.id { return true }
-        // The input menu's next source is one shortcut away, as the previous one is: nothing is selected first. Not while a
-        // switch that selected sources is on its way: their notices would look like this one going elsewhere.
-        if queuedSwitch == nil, switchLanding == nil || nextSent != nil, let next = engine.liveNextTarget, next.name != nextFailedKey,
+        // The input menu's next source is one shortcut away, as the previous one is: nothing is selected first. Not while
+        // another switch is on its way: its notices would look like this one going elsewhere.
+        if queuedSwitch == nil, switchLanding == nil, let next = engine.liveNextTarget, next.name != nextFailedKey,
            menuNext(after: current.id) == target.id, Self.sourceForID(target.id) != nil,
            let nextPulse = nativeSwitchPulse(keyCode: next.keyCode, marker: nativePulseMarker) {
             addedSources.showError(nil)
             postSwitchPulse(nextPulse)
-            nextSent = (current.id, target.id)
+            nextSent = (current.id, target.id, next.name)
             sourceHistory.note(target.id)
             expectLanding(target, origin: current.id)
             return true
@@ -265,7 +265,6 @@ extension AppDelegate {
             guard queuedSwitch == nil, plannedSwitch(to: target, from: current).selections.isEmpty else {
                 queuedSwitch = (target, pulse); holdKeys = true; return true
             }
-            nextSent = nil
             postSwitchPulse(pulse)
             sourceHistory.note(target.id)
             expectLanding(target, origin: current.id)
@@ -290,8 +289,6 @@ extension AppDelegate {
         addedSources.showError(nil)
         // The frontmost app can see the selections before the shortcut's switch reaches it.
         if !plan.selections.isEmpty { holdKeys = true }
-        // Its notices are not the next-source shortcut's.
-        nextSent = nil
         postSwitchPulse(pulse)
         // Where it lands, as long as the shortcut switches.
         sourceHistory.note(target.id)
@@ -329,7 +326,7 @@ extension AppDelegate {
             // The next-source shortcut changed nothing, as when it was changed in System Settings: its F-key is not used again
             // until the settings, the sources or that F-key change, or the Mac wakes, and this switch goes the usual way.
             if !landed, let sent = self.nextSent, let current = self.currentSource, current.id == sent.from, sent.target == target.id {
-                self.nextSent = nil; self.nextFailedKey = self.engine.liveNextTarget?.name
+                self.nextSent = nil; self.nextFailedKey = sent.key
                 if let pulse = nativeSwitchPulse(keyCode: self.engine.target.keyCode, marker: nativePulseMarker),
                    self.switchSource(to: target, from: current, pulse: pulse) { return }
             }
