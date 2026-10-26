@@ -1810,7 +1810,7 @@ if CommandLine.arguments.dropFirst().first == "--install-update" {
     #if TESTS
     if runTestMode() { exit(0) }
     #endif
-    // Before anything asks about Accessibility: a process keeps the answer it got first.
+    // Before anything asks about Accessibility, so that the first answer is already for this build.
     let askForPermission = UpdateValidation.forgetSelfSignedPermissions(defaults: .standard)
     let app = NSApplication.shared
     let delegate = AppDelegate()
