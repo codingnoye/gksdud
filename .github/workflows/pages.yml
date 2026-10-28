@@ -1,12 +1,9 @@
 name: Pages
 
-# The download page points at one release. A stable release deploys it from the Release workflow,
-# a change to the page deploys it for the latest stable release, and any release, a canary or a prerelease, can be chosen by hand.
+# The download page points at one release. Only a stable release deploys it, from the Release workflow;
+# a change to the page waits for the next one. Any release, a canary or a prerelease, can be deployed by hand.
 # Pages takes deployments from main only.
 on:
-  push:
-    branches: [main]
-    paths: ['site/**', 'scripts/build-site.py', '.github/workflows/pages.yml']
   workflow_call:
     inputs:
       tag:
