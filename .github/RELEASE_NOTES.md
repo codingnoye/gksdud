@@ -4,7 +4,7 @@
 
 ### 설치
 
-아래 첨부파일의 `gksdud-<버전명>.dmg`를 열고, gksdud를 `응용 프로그램` 으로 끌어옮겨 설치하세요.
+아래 첨부파일의 `gksdud-<버전명>.dmg`를 열고, gksdud를 `Applications`로 끌어옮겨 설치하세요.
 
 Homebrew로도 설치할 수 있습니다.
 
