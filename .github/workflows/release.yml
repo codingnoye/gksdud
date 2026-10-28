@@ -2,11 +2,11 @@ name: Release
 
 on:
   # Every push to main publishes a canary; prereleases come from their tags, vX.Y.Z.P.
-  # A push of only documents or test tools leaves the app as it was; its commits go in the next canary.
+  # A push of only documents, the download page or test tools leaves the app as it was; its commits go in the next canary.
   push:
     branches: [main]
     tags: ['v*.*.*.*']
-    paths-ignore: ['**.md', 'docs/**', 'skills/**', 'tests/**']
+    paths-ignore: ['**.md', 'docs/**', 'site/**', 'skills/**', 'tests/**']
   workflow_dispatch:
     inputs:
       source_ref:
@@ -140,7 +140,7 @@ jobs:
           mkdir "$RUNNER_TEMP/gksdud-notary"
           printf '%s' "$NOTARY_KEY_BASE64" | base64 --decode > "$RUNNER_TEMP/gksdud-notary/AuthKey.p8"
 
-      - name: Build, self-test and notarize Universal app
+      - name: Build, self-test and notarize Universal app and disk image
         working-directory: release-source
         env:
           GKSDUD_SIGN_MODE: developer-id
@@ -174,6 +174,7 @@ jobs:
           TAG: ${{ steps.version.outputs.tag }}
           FILENAME: ${{ steps.version.outputs.filename }}
           SELF_SIGNED_FILENAME: ${{ steps.version.outputs.self_signed_filename }}
+          DMG_FILENAME: ${{ steps.version.outputs.dmg_filename }}
           GKSDUD_RELEASE_TAG: ${{ steps.version.outputs.tag }}
           GKSDUD_SOURCE_ROOT: ${{ github.workspace }}/release-source
           GKSDUD_APP_VERSION: ${{ steps.version.outputs.version }}
@@ -183,8 +184,10 @@ jobs:
           if printf '%s\n' "$releases" | grep -Fxq "$TAG"; then
             existing_dir=$(mktemp -d "$RUNNER_TEMP/gksdud-existing.XXXXXX")
             names=("$FILENAME" ${SELF_SIGNED_FILENAME:+"$SELF_SIGNED_FILENAME"})
-            gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir "$existing_dir" \
-              "${names[@]/#/--pattern=}" --pattern SHA256SUMS
+            gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir "$existing_dir" --pattern SHA256SUMS
+            # Releases before the disk image have none.
+            if grep -Fq "  $DMG_FILENAME" "$existing_dir/SHA256SUMS"; then names+=("$DMG_FILENAME"); fi
+            gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir "$existing_dir" "${names[@]/#/--pattern=}"
             ruby -rdigest -e 'dir, *names = ARGV; expected = names.map { |name| "#{Digest::SHA256.file(File.join(dir, name)).hexdigest}  #{name}\n" }.join; abort "Published checksum mismatch" unless File.read(File.join(dir, "SHA256SUMS")) == expected' "$existing_dir" "${names[@]}"
             ruby scripts/prepare-release.rb "$GITHUB_REPOSITORY" "${names[@]/#/$existing_dir/}"
             echo 'exists=true' >> "$GITHUB_OUTPUT"
@@ -209,6 +212,7 @@ jobs:
           ASSET_VERSION: ${{ steps.version.outputs.asset_version }}
           FILENAME: ${{ steps.version.outputs.filename }}
           SELF_SIGNED_FILENAME: ${{ steps.version.outputs.self_signed_filename }}
+          DMG_FILENAME: ${{ steps.version.outputs.dmg_filename }}
           SOURCE_ROOT: ${{ github.workspace }}/release-source
         run: |
           set -euo pipefail
@@ -237,6 +241,7 @@ jobs:
           fi
           gh release create "$TAG" \
             "$SOURCE_ROOT/outputs/$FILENAME" ${SELF_SIGNED_FILENAME:+"$SOURCE_ROOT/outputs/$SELF_SIGNED_FILENAME"} \
+            "$SOURCE_ROOT/outputs/$DMG_FILENAME" \
             "$SOURCE_ROOT/outputs/release-$ASSET_VERSION/SHA256SUMS" \
             --repo "$GITHUB_REPOSITORY" --verify-tag \
             "${options[@]}"

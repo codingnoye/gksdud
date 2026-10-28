@@ -37,6 +37,8 @@ class ReleaseTests < Minitest::Test
     # The name an app takes for the version it updates to.
     assert_equal 'gksdud-1.2.0.1.zip', pre.filename
     assert_equal 'gksdud-1.2.0.1.3.zip', canary.filename
+    # Every channel carries the disk image for downloads.
+    assert_equal %w[gksdud-1.2.0.dmg gksdud-1.2.0.1.dmg gksdud-1.2.0.1.3.dmg], [stable, pre, canary].map(&:dmg_filename)
     # Apps up to 1.7.1 download the old name, which holds the self-signed copy while they move to Developer ID.
     assert ReleaseMetadata::SELF_SIGNED_COPY
     assert_equal 'gksdud-1.2.0-macos-universal.zip', stable.self_signed_filename
@@ -245,7 +247,7 @@ class ReleaseTests < Minitest::Test
     assert_includes args, '--draft'
     refute_includes args, '--prerelease'
     assert_equal ['release-source/outputs/gksdud-1.2.0.zip', 'release-source/outputs/gksdud-1.2.0-macos-universal.zip',
-                  'release-source/outputs/release-1.2.0/SHA256SUMS'], args[3, 3]
+                  'release-source/outputs/gksdud-1.2.0.dmg', 'release-source/outputs/release-1.2.0/SHA256SUMS'], args[3, 4]
     assert_includes args, '.github/RELEASE_NOTES.md'
     assert_includes args, '--verify-tag'
   end
@@ -258,7 +260,8 @@ class ReleaseTests < Minitest::Test
     assert_includes args, '--latest=false'
     refute_includes args, '--draft'
     assert_includes args, 'gksdud 1.2.0.1 Pre-release'
-    assert_equal ['release-source/outputs/gksdud-1.2.0.1.zip', 'release-source/outputs/release-1.2.0.1-pre/SHA256SUMS'], args[3, 2]
+    assert_equal ['release-source/outputs/gksdud-1.2.0.1.zip', 'release-source/outputs/gksdud-1.2.0.1.dmg',
+                  'release-source/outputs/release-1.2.0.1-pre/SHA256SUMS'], args[3, 3]
     assert_includes args, '--generate-notes'
     assert_includes args, '--verify-tag'
     assert notes.start_with?("#{message}\n\n### 테스트용"), notes
@@ -286,7 +289,8 @@ class ReleaseTests < Minitest::Test
       refute_includes args, '--draft'
       refute_includes args, '--generate-notes'
       assert_includes args, 'gksdud 1.2.0.0.3 Canary'
-      assert_equal ['release-source/outputs/gksdud-1.2.0.0.3.zip', 'release-source/outputs/release-1.2.0.0.3-canary/SHA256SUMS'], args[3, 2]
+      assert_equal ['release-source/outputs/gksdud-1.2.0.0.3.zip', 'release-source/outputs/gksdud-1.2.0.0.3.dmg',
+                    'release-source/outputs/release-1.2.0.0.3-canary/SHA256SUMS'], args[3, 3]
       # Since the previous canary, newest first, each its hash linked to the commit and its title alone.
       expected = [second, first].zip(['Typo', '[FEAT] Channel (#81)']).map do |(short, full), title|
         "- [#{short}](https://github.com/codingnoye/gksdud/commit/#{full}) #{title}\n"
