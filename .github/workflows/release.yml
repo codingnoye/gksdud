@@ -49,8 +49,8 @@ jobs:
     permissions:
       contents: write
     outputs:
-      # Set once the stable release is published, even if a later step fails.
-      stable_tag: ${{ steps.publish.outcome == 'success' && steps.version.outputs.tag || '' }}
+      # Set once this run publishes the stable release, even if a later step fails; not when it was published before.
+      stable_tag: ${{ steps.publish.outputs.published == 'true' && steps.version.outputs.tag || '' }}
     defaults:
       run:
         shell: bash

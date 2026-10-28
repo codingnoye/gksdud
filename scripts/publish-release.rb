@@ -35,3 +35,5 @@ Tempfile.create(['gksdud-release-notes-', '.md']) do |file|
                    '--notes-file', file.path, '--draft=false', latest)
   abort 'Could not publish the verified draft' unless success
 end
+# The download page follows a release published now, not one published before and run again.
+File.write(ENV['GITHUB_OUTPUT'], "published=true\n", mode: 'a') if ENV['GITHUB_OUTPUT']

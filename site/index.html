@@ -71,7 +71,7 @@ main { --vh: 100vh; transform: translateY(calc(var(--i, 0) * var(--vh) * -1)); t
 @media (prefers-reduced-motion: reduce) { main { transition: none; } }
 .chapter { position: relative; height: var(--vh); background: var(--bg); color: var(--fg); }
 .stage {
-  height: 100%; overflow: hidden;
+  height: 100%; overflow: hidden; overflow: clip;
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 30px;
   padding: 84px 24px 40px;
 }
@@ -91,6 +91,7 @@ main { --vh: 100vh; transform: translateY(calc(var(--i, 0) * var(--vh) * -1)); t
 .pages { flex: 1 1 0; min-height: 0; width: 100%; display: grid; grid-template: 100% / 100%; }
 .page { grid-area: 1 / 1; min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 22px; opacity: 0; transform: translateX(40px); transition: opacity .45s, transform .45s; pointer-events: none; }
 .page.on { opacity: 1; transform: none; pointer-events: auto; }
+.stage:focus, .page:focus { outline: none; }
 .desc { margin: 0; flex: none; font-size: clamp(16px, 1.5vw, 19px); font-weight: 600; letter-spacing: -.01em; text-align: center; word-break: keep-all; }
 .page.past { transform: translateX(-40px); }
 
@@ -671,7 +672,7 @@ chapters.forEach((el, ci) => {
   if (!pages.length) screens.push({ ci, el, id: el.id, title: el.dataset.title, view: stage });
   else pages.forEach(page => screens.push({ ci, el, id: page.dataset.id, title: page.dataset.title, group: el.dataset.title, page, view: page }));
 });
-screens.forEach(s => { s.play = scenes[s.id](s.view); });
+screens.forEach(s => { s.play = scenes[s.id](s.view); s.view.tabIndex = -1; });
 const toc = $('.toc ol'), main = $('main');
 const bar = '<span class="bar"><i></i></span>';
 toc.innerHTML = screens.map((s, i) => {
@@ -713,6 +714,8 @@ function show(i) {
   at = i;
   if (s.page) $$('.page', s.el).forEach(p => { p.classList.toggle('on', p === s.page); p.classList.toggle('past', screens.findIndex(o => o.page === p) < i); });
   s.play.render(0);
+  // Focus goes with the screen: left on one that is gone, the next Tab would bring it back or Enter press its hidden buttons.
+  if (!s.view.contains(document.activeElement)) s.view.focus({ preventScroll: true });
   main.style.setProperty('--i', s.ci);
   items.forEach((li, j) => { li.classList.toggle('on', j === i); li.style.setProperty('--p', +(j < i)); });
   groups.forEach(g => g.classList.toggle('on', +g.dataset.ci === s.ci));
@@ -766,8 +769,9 @@ addEventListener('wheel', e => {
   move(d);
 }, { passive: false });
 let touchY = null;
-addEventListener('touchstart', e => { touchY = e.touches[0].clientY; }, { passive: true });
-addEventListener('touchmove', e => e.preventDefault(), { passive: false });
+// One finger swipes; two pinch, which zooms.
+addEventListener('touchstart', e => { touchY = e.touches.length === 1 ? e.touches[0].clientY : null; }, { passive: true });
+addEventListener('touchmove', e => { if (e.touches.length === 1 && touchY !== null) e.preventDefault(); }, { passive: false });
 addEventListener('touchend', e => {
   if (touchY === null) return;
   const dy = touchY - e.changedTouches[0].clientY;
@@ -790,7 +794,7 @@ addEventListener('focusin', e => {
   const first = screens.findIndex(o => o.el.contains(e.target));
   if (i >= 0) show(i); else if (first >= 0 && screens[first].ci !== s.ci) show(first);
 });
-addEventListener('hashchange', () => { const i = screens.findIndex(s => '#' + s.id === location.hash); if (i >= 0) show(i); });
+addEventListener('hashchange', () => { const i = screens.findIndex(s => '#' + s.id === location.hash); if (i >= 0 || !location.hash) show(Math.max(0, i)); });
 addEventListener('resize', fit);
 (document.fonts?.ready ?? Promise.resolve()).then(fit);
 fit();

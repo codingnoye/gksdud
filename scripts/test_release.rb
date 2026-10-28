@@ -395,18 +395,20 @@ class ReleaseTests < Minitest::Test
       env = { 'PATH' => "#{dir}:#{ENV.fetch('PATH')}", 'RELEASE_SUMMARY' => summary, 'RELEASE_WARNING' => warning, 'MAKE_LATEST' => latest,
               'RELEASE_JSON' => JSON.generate(tagName: actual_tag, isDraft: draft, isPrerelease: prerelease),
               'CAPTURE' => "#{dir}/args.json", 'NOTES' => "#{dir}/notes.md",
-              'VIEW_EXIT' => view_exit.to_s, 'EDIT_EXIT' => edit_exit.to_s }
+              'VIEW_EXIT' => view_exit.to_s, 'EDIT_EXIT' => edit_exit.to_s, 'GITHUB_OUTPUT' => "#{dir}/output" }
       output, status = Open3.capture2e(env, '/usr/bin/ruby', "#{ROOT}/scripts/publish-release.rb", 'codingnoye/gksdud', 'v1.2.0')
       args = File.exist?("#{dir}/args.json") ? JSON.parse(File.read("#{dir}/args.json")) : nil
       notes = File.exist?("#{dir}/notes.md") ? File.read("#{dir}/notes.md") : nil
-      [status, args, notes, output]
+      published = File.exist?("#{dir}/output") ? File.read("#{dir}/output") : nil
+      [status, args, notes, output, published]
     end
   end
 
   def test_publish_uses_literal_summary_and_never_uploads_assets
     summary = "- Option+` fix\n- Literal $(touch nope) \\1 text"
-    status, args, notes, output = publication_result(summary: summary)
+    status, args, notes, output, published = publication_result(summary: summary)
     assert status.success?, output
+    assert_equal "published=true\n", published, 'The download page moves to a release published now'
     assert_equal ['release', 'edit', 'v1.2.0', '--repo', 'codingnoye/gksdud', '--notes-file'], args.first(6)
     assert_equal ['--draft=false', '--latest'], args.last(2)
     assert_equal 9, args.length
@@ -429,10 +431,11 @@ class ReleaseTests < Minitest::Test
   end
 
   def test_published_release_is_not_edited_on_retry
-    status, args, notes, output = publication_result(draft: false)
+    status, args, notes, output, published = publication_result(draft: false)
     assert status.success?, output
     assert_nil args
     assert_nil notes
+    assert_nil published, 'Running an older release again keeps the download page'
   end
 
   def test_publication_rejects_invalid_release_missing_summary_and_failed_lookup
