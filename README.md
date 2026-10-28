@@ -40,8 +40,8 @@ brew install --cask codingnoye/tap/gksdud
 
 ### B. 직접 설치
 
-1. [릴리즈 페이지](https://github.com/codingnoye/gksdud/releases/latest)에서 ZIP 압축 파일을 내려받습니다.
-2. ZIP 압축을 풀고 안에 있는 `gksdud.app`을 **Applications** 폴더로 옮깁니다.
+1. [릴리즈 페이지](https://github.com/codingnoye/gksdud/releases/latest)에서 `gksdud-<버전명>.dmg` 파일을 내려받습니다.
+2. DMG를 열고 gksdud를 **Applications**로 끌어옮깁니다.
 3. gksdud를 실행합니다.
 
 ## 사용하기
