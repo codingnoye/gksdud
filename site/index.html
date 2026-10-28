@@ -706,7 +706,8 @@ const REST = 2600, SLIDE = 400, TURN = 250;
 const reduced = matchMedia('(prefers-reduced-motion: reduce)');
 // Playback reads one clock and never goes back within a run, whatever the frame timestamps do.
 let at = -1, started = 0, played = 0;
-function show(i) {
+// keep: focus already went where it should, onto a control of this screen outside its page.
+function show(i, keep = false) {
   const s = screens[i], prev = screens[at];
   if (i === at) return;
   started = performance.now() + (!prev ? 0 : prev.ci !== s.ci ? SLIDE : TURN);
@@ -715,7 +716,7 @@ function show(i) {
   if (s.page) $$('.page', s.el).forEach(p => { p.classList.toggle('on', p === s.page); p.classList.toggle('past', screens.findIndex(o => o.page === p) < i); });
   s.play.render(0);
   // Focus goes with the screen: left on one that is gone, the next Tab would bring it back or Enter press its hidden buttons.
-  if (!s.view.contains(document.activeElement)) s.view.focus({ preventScroll: true });
+  if (!keep && !s.view.contains(document.activeElement)) s.view.focus({ preventScroll: true });
   main.style.setProperty('--i', s.ci);
   items.forEach((li, j) => { li.classList.toggle('on', j === i); li.style.setProperty('--p', +(j < i)); });
   groups.forEach(g => g.classList.toggle('on', +g.dataset.ci === s.ci));
@@ -792,7 +793,7 @@ addEventListener('focusin', e => {
   if ((s.page || s.el).contains(e.target)) return;
   const i = screens.findIndex(o => o.page ? o.page.contains(e.target) : o.el.contains(e.target));
   const first = screens.findIndex(o => o.el.contains(e.target));
-  if (i >= 0) show(i); else if (first >= 0 && screens[first].ci !== s.ci) show(first);
+  if (i >= 0) show(i, true); else if (first >= 0 && screens[first].ci !== s.ci) show(first, true);
 });
 addEventListener('hashchange', () => { const i = screens.findIndex(s => '#' + s.id === location.hash); if (i >= 0 || !location.hash) show(Math.max(0, i)); });
 addEventListener('resize', fit);
