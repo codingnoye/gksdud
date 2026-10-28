@@ -1,8 +1,8 @@
 # Shared tag validation and asset naming for the release workflow and verifier.
 class ReleaseMetadata
-  # While apps up to 1.7.1 move to Developer ID: they install only updates signed with the self-signed certificate, found
-  # by the old archive name, so stable releases also carry that copy. False once the move is over.
-  SELF_SIGNED_COPY = true
+  # While apps up to 1.7.1 moved to Developer ID: they install only updates signed with the self-signed certificate, found
+  # by the old archive name, so stable releases also carried that copy. Those left install the disk image by hand.
+  SELF_SIGNED_COPY = false
 
   attr_reader :version, :tag, :channel
 
@@ -43,6 +43,11 @@ class ReleaseMetadata
     "#{app}-#{version}.zip"
   end
 
+  # The disk image to drag the app to Applications, for downloads; the app and Homebrew take the archive.
+  def dmg_filename
+    "#{app}-#{version}.dmg"
+  end
+
   # The name apps up to 1.7.1 download; prereleases and canary releases are never their updates.
   def self_signed_filename
     "#{app}-#{version}-macos-universal.zip" if SELF_SIGNED_COPY && channel == 'stable'
@@ -50,7 +55,8 @@ class ReleaseMetadata
 
   def outputs
     { version: version, tag: tag, channel: channel, prerelease: prerelease?,
-      asset_version: asset_version, filename: filename, self_signed_filename: self_signed_filename.to_s }
+      asset_version: asset_version, filename: filename, self_signed_filename: self_signed_filename.to_s,
+      dmg_filename: dmg_filename }
   end
 end
 

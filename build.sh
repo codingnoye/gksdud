@@ -117,20 +117,72 @@ if [[ -n ${self_signed:-} ]]; then
   sign_self_signed "$copy" "$identifier"
   codesign --verify --deep --strict "$copy"
 fi
-if [[ ${#notary[@]} -gt 0 ]]; then
-  ditto -c -k --keepParent --norsrc "$stage/$app.app" "$stage/notarize.zip"
-  result=$(xcrun notarytool submit "$stage/notarize.zip" "${notary[@]}" --wait --timeout 30m --output-format json) || true
+# Tries a command up to five times, waiting longer each time; for Apple's and hdiutil's passing failures.
+retry() {
+  local attempt
+  for attempt in 1 2 3 4 5; do
+    "$@" && return 0
+    [[ -z ${retry_cleanup:-} ]] || $retry_cleanup
+    [[ $attempt -lt 5 ]] && sleep $((attempt * 3))
+  done
+  return 1
+}
+# Notarizes a zip of the app or the disk image, and staples the ticket to the item.
+notarize() {
+  local result id
+  result=$(xcrun notarytool submit "$1" "${notary[@]}" --wait --timeout 30m --output-format json) || true
   if [[ $(plutil -extract status raw - <<<"$result" 2>/dev/null) != Accepted ]]; then
     echo "Notarization failed: $result" >&2
     id=$(plutil -extract id raw - <<<"$result" 2>/dev/null) && xcrun notarytool log "$id" "${notary[@]}" >&2 || true
     exit 1
   fi
-  xcrun stapler staple "$stage/$app.app"
+  retry xcrun stapler staple "$2"
+}
+if [[ ${#notary[@]} -gt 0 ]]; then
+  ditto -c -k --keepParent --norsrc "$stage/$app.app" "$stage/notarize.zip"
+  notarize "$stage/notarize.zip" "$stage/$app.app"
   spctl --assess --type execute -vv "$stage/$app.app"
 fi
 version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$stage/$app.app/Contents/Info.plist")
 ditto -c -k --keepParent --norsrc "$stage/$app.app" "$output_dir/$app-$version.zip"
 [[ -z ${copy:-} ]] || ditto -c -k --keepParent --norsrc "$copy" "$output_dir/$app-$version-macos-universal.zip"
+# The disk image to drag the app to Applications, with the window DiskImage.swift lays out on its volume.
+swiftc -module-cache-path "$stage/module-cache" DiskImage.swift -o "$stage/disk-image"
+mkdir "$stage/dmg"
+ditto "$stage/$app.app" "$stage/dmg/$app.app"
+ln -s /Applications "$stage/dmg/Applications"
+"$stage/disk-image" background "$stage/dmg/.background.tiff"
+cp "$stage/$app.app/Contents/Resources/AppIcon.icns" "$stage/dmg/.VolumeIcon.icns"
+chflags hidden "$stage/dmg/.background.tiff" "$stage/dmg/.VolumeIcon.icns"
+# The image is laid out mounted read-write, then compressed. Free space compresses to nothing, so it has room to spare.
+size=$(( $(du -sk "$stage/dmg" | cut -f1) * 12 / 10240 + 16 ))m
+image="$stage/layout.dmg"
+# The image's disks while attached, mounted or not; a failed attach or detach can leave one attached.
+disks() {
+  hdiutil info | awk -v image="$image" '/^image-path/ { sub(/^image-path *: /, ""); current = ($0 == image) }
+    current && /^\/dev\/disk[0-9]+[ \t]/ { print $1 }'
+}
+unmount() { local disk; for disk in $(disks); do hdiutil detach -quiet -force "$disk" || true; done; }
+detach() { local disk; for disk in $(disks); do hdiutil detach -quiet "$disk" || return 1; done; }
+layout_image() {
+  hdiutil create -quiet -ov -volname "$app" -srcfolder "$stage/dmg" -fs HFS+ -format UDRW -size "$size" "$image" &&
+    hdiutil attach -quiet -nobrowse -noautoopen -mountpoint "$stage/volume" "$image"
+}
+# hdiutil now and then finds an image busy; a failed attempt is detached before the next.
+retry_cleanup=unmount retry layout_image
+trap unmount EXIT
+"$stage/disk-image" layout "$stage/volume"
+rm -rf "$stage/volume/.fseventsd"
+retry detach || unmount
+if [[ -n $(disks) ]]; then echo "Cannot detach $image" >&2; exit 1; fi
+trap - EXIT
+retry_cleanup=unmount retry hdiutil convert -quiet -ov "$image" -format UDZO -o "$stage/$app.dmg"
+codesign --force "${sign_args[@]}" --identifier "$identifier.dmg" "$stage/$app.dmg"
+if [[ ${#notary[@]} -gt 0 ]]; then
+  notarize "$stage/$app.dmg" "$stage/$app.dmg"
+  spctl --assess --type open --context context:primary-signature -vv "$stage/$app.dmg"
+fi
+cp "$stage/$app.dmg" "$output_dir/$app-$version.dmg"
 codesign -d -r- "$stage/$app.app"
 echo "Built app: $stage/$app.app"
 echo "Test app: $test_app"

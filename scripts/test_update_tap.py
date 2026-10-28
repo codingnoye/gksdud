@@ -30,9 +30,11 @@ class TapTests(unittest.TestCase):
         new = tap.updated_cask(old, "2.0.0", "b" * 64)
         self.assertIn('/download/v#{version}/gksdud-#{version}.zip"\n', new)
         self.assertNotIn("self-signed", new)
-        self.assertIn("  caveats <<~EOS\n" + tap.REGRANT_CAVEAT + "    Accessibility permission is required.\n  EOS\n", new)
-        with patch.object(tap, "MOVING_TO_DEVELOPER_ID", False):
-            self.assertNotIn(tap.REGRANT_CAVEAT, tap.updated_cask(new, "2.0.1", "c" * 64))
+        self.assertIn("  caveats <<~EOS\n    Accessibility permission is required.\n  EOS\n", new)
+        with patch.object(tap, "MOVING_TO_DEVELOPER_ID", True):
+            moving = tap.updated_cask(old, "2.0.0", "b" * 64)
+        self.assertIn("  caveats <<~EOS\n" + tap.REGRANT_CAVEAT + "    Accessibility permission is required.\n  EOS\n", moving)
+        self.assertNotIn(tap.REGRANT_CAVEAT, tap.updated_cask(moving, "2.0.1", "c" * 64))
         self.assertEqual(tap.updated_cask(new, "2.0.0", "b" * 64), new)
 
     def test_tag_validation(self):
