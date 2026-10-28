@@ -49,7 +49,8 @@ jobs:
     permissions:
       contents: write
     outputs:
-      stable_tag: ${{ github.event_name == 'workflow_dispatch' && steps.version.outputs.prerelease == 'false' && steps.version.outputs.tag || '' }}
+      # Set once the stable release is published, even if a later step fails.
+      stable_tag: ${{ steps.publish.outcome == 'success' && steps.version.outputs.tag || '' }}
     defaults:
       run:
         shell: bash
@@ -260,6 +261,7 @@ jobs:
             while read -r tag; do gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag; done
 
       - name: Publish verified stable draft
+        id: publish
         if: github.event_name == 'workflow_dispatch' && steps.version.outputs.prerelease == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -291,10 +293,10 @@ jobs:
             gh api --method DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/$TAG" || true
           fi
 
-  # The download page moves to a stable release as soon as it is published.
+  # The download page moves to a stable release as soon as it is published, whatever happens to the Homebrew update after.
   pages:
     needs: release
-    if: needs.release.outputs.stable_tag != ''
+    if: always() && needs.release.outputs.stable_tag != ''
     permissions:
       contents: read
       pages: write

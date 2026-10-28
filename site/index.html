@@ -24,7 +24,8 @@
 }
 .chapter.alt { --bg: #f5f5f7; --fill: #fff; }
 * { box-sizing: border-box; }
-html, body { height: 100%; overflow: hidden; overscroll-behavior: none; }
+/* The deck moves the page; nothing scrolls it, not focus or a link to an anchor either. */
+html, body { height: 100%; overflow: hidden; overflow: clip; overscroll-behavior: none; }
 body { margin: 0; background: #fff; color: #1d1d1f; font-family: var(--font); -webkit-font-smoothing: antialiased; }
 a { color: inherit; }
 
@@ -66,7 +67,8 @@ nav.toc { position: fixed; z-index: 10; left: 40px; top: 50%; transform: transla
 .toc li.group.on .bar { background: currentColor; }
 
 /* The page is a deck: one chapter fills the screen and the deck slides to the next. */
-main { --vh: 100vh; --vh: 100dvh; transform: translateY(calc(var(--i, 0) * var(--vh) * -1)); transition: transform .6s cubic-bezier(.65, 0, .35, 1); }
+main { --vh: 100vh; transform: translateY(calc(var(--i, 0) * var(--vh) * -1)); transition: transform .6s cubic-bezier(.65, 0, .35, 1); }
+@supports (height: 100dvh) { main { --vh: 100dvh; } }
 @media (prefers-reduced-motion: reduce) { main { transition: none; } }
 .chapter { position: relative; height: var(--vh); background: var(--bg); color: var(--fg); }
 .stage {
@@ -235,6 +237,7 @@ footer { position: absolute; bottom: 22px; left: 0; right: 0; display: flex; jus
 footer a { text-decoration: none; }
 footer a:hover { color: var(--fg); }
 
+@media (max-height: 700px) { .steps { display: none; } }
 @media (max-width: 1079px) {
   nav.toc { display: none; }
   .now { display: block; position: absolute; left: 50%; transform: translateX(-50%); }
@@ -740,6 +743,8 @@ addEventListener('click', e => { if (!e.target.closest('a, button, header, nav, 
 // Small strokes add up before they count, and a reversal right after a move is the gesture settling, not a new one.
 let lastWheel = 0, wheelSum = 0, wheelLocked = false, peak = 0, floor = 0, slowing = false, lastMove = { t: 0, d: 0 };
 addEventListener('wheel', e => {
+  // A pinch arrives as a wheel with Control; it zooms.
+  if (e.ctrlKey) return;
   e.preventDefault();
   const t = performance.now();
   const dy = e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? innerHeight : 1), abs = Math.abs(dy);
@@ -777,10 +782,19 @@ addEventListener('keydown', e => {
   if (e.metaKey || e.ctrlKey || e.altKey) return;
   if (e.key === 'Home' || e.key === 'End') { e.preventDefault(); show(e.key === 'Home' ? 0 : screens.length - 1); return; }
   const d = { ArrowDown: 1, ArrowRight: 1, PageDown: 1, ' ': e.shiftKey ? -1 : 1, ArrowUp: -1, ArrowLeft: -1, PageUp: -1 }[e.key];
-  if (!d) return;
+  if (!d || (e.key === ' ' && e.target.closest('a, button'))) return;
   e.preventDefault();
   move(d);
 });
+// Focus moved by Tab, or a link to a screen, shows the screen it is on.
+addEventListener('focusin', e => {
+  const s = screens[at];
+  if ((s.page || s.el).contains(e.target)) return;
+  const i = screens.findIndex(o => o.page ? o.page.contains(e.target) : o.el.contains(e.target));
+  const first = screens.findIndex(o => o.el.contains(e.target));
+  if (i >= 0) show(i); else if (first >= 0 && screens[first].ci !== s.ci) show(first);
+});
+addEventListener('hashchange', () => { const i = screens.findIndex(s => '#' + s.id === location.hash); if (i >= 0) show(i); });
 addEventListener('resize', fit);
 (document.fonts?.ready ?? Promise.resolve()).then(fit);
 fit();
