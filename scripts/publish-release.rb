@@ -20,20 +20,27 @@ abort output unless status.success?
 release = JSON.parse(output)
 abort 'Expected the requested stable release' unless release.fetch('tagName') == tag &&
   release.fetch('isPrerelease') == false
-unless release.fetch('isDraft')
-  puts 'Stable release is already published. No release metadata or assets changed.'
-  exit
+# The download page follows the highest stable release: this one, published now or run again, unless a higher one is out.
+def newest?(repo, tag)
+  output, status = Open3.capture2e('gh', 'release', 'list', '--repo', repo, '--exclude-drafts', '--exclude-pre-releases',
+                                   '--limit', '100', '--json', 'tagName')
+  return warn("Could not list releases; the download page stays: #{output}") unless status.success?
+  stable = JSON.parse(output).map { |item| item.fetch('tagName') }.grep(/\Av\d+\.\d+\.\d+\z/)
+  stable.max_by { |name| Gem::Version.new(name.delete_prefix('v')) } == tag
 end
 
-notes = File.read(File.expand_path('../.github/RELEASE_NOTES.md', __dir__))
-marker = '<!-- 게시 전 이 버전의 사용자용 변경 요약을 짧게 작성하세요. 앱이 이 구역을 표시합니다. -->'
-abort 'Expected one release summary placeholder' unless notes.scan(marker).length == 1
-Tempfile.create(['gksdud-release-notes-', '.md']) do |file|
-  file.write(notes.sub(marker) { summary })
-  file.flush
-  success = system('gh', 'release', 'edit', tag, '--repo', repo,
-                   '--notes-file', file.path, '--draft=false', latest)
-  abort 'Could not publish the verified draft' unless success
+if release.fetch('isDraft')
+  notes = File.read(File.expand_path('../.github/RELEASE_NOTES.md', __dir__))
+  marker = '<!-- 게시 전 이 버전의 사용자용 변경 요약을 짧게 작성하세요. 앱이 이 구역을 표시합니다. -->'
+  abort 'Expected one release summary placeholder' unless notes.scan(marker).length == 1
+  Tempfile.create(['gksdud-release-notes-', '.md']) do |file|
+    file.write(notes.sub(marker) { summary })
+    file.flush
+    success = system('gh', 'release', 'edit', tag, '--repo', repo,
+                     '--notes-file', file.path, '--draft=false', latest)
+    abort 'Could not publish the verified draft' unless success
+  end
+else
+  puts 'Stable release is already published. No release metadata or assets changed.'
 end
-# The download page follows a release published now, not one published before and run again.
-File.write(ENV['GITHUB_OUTPUT'], "published=true\n", mode: 'a') if ENV['GITHUB_OUTPUT']
+File.write(ENV['GITHUB_OUTPUT'], "newest=true\n", mode: 'a') if ENV['GITHUB_OUTPUT'] && newest?(repo, tag)

@@ -378,7 +378,8 @@ class ReleaseTests < Minitest::Test
     assert_equal 'false', create_tag.fetch('if')[/== '([^']+)'/, 1]
   end
 
-  def publication_result(draft: true, prerelease: false, actual_tag: 'v1.2.0', summary: 'Input fixes', warning: '', latest: 'true', view_exit: 0, edit_exit: 0)
+  def publication_result(draft: true, prerelease: false, actual_tag: 'v1.2.0', summary: 'Input fixes', warning: '', latest: 'true', view_exit: 0, edit_exit: 0,
+                         stable_tags: 'v1.1.10 v1.2.0 v1.0.0')
     Dir.mktmpdir('gksdud-publish-test-') do |dir|
       File.write("#{dir}/gh", <<~RUBY)
         #!/usr/bin/ruby
@@ -386,6 +387,10 @@ class ReleaseTests < Minitest::Test
         if ARGV.first(2) == ['release', 'view']
           puts ENV.fetch('RELEASE_JSON')
           exit ENV.fetch('VIEW_EXIT').to_i
+        end
+        if ARGV.first(2) == ['release', 'list']
+          puts JSON.generate(ENV.fetch('STABLE_TAGS').split.map { |name| { tagName: name } })
+          exit
         end
         File.write(ENV.fetch('CAPTURE'), JSON.generate(ARGV))
         File.write(ENV.fetch('NOTES'), File.read(ARGV.fetch(ARGV.index('--notes-file') + 1)))
@@ -395,7 +400,7 @@ class ReleaseTests < Minitest::Test
       env = { 'PATH' => "#{dir}:#{ENV.fetch('PATH')}", 'RELEASE_SUMMARY' => summary, 'RELEASE_WARNING' => warning, 'MAKE_LATEST' => latest,
               'RELEASE_JSON' => JSON.generate(tagName: actual_tag, isDraft: draft, isPrerelease: prerelease),
               'CAPTURE' => "#{dir}/args.json", 'NOTES' => "#{dir}/notes.md",
-              'VIEW_EXIT' => view_exit.to_s, 'EDIT_EXIT' => edit_exit.to_s, 'GITHUB_OUTPUT' => "#{dir}/output" }
+              'VIEW_EXIT' => view_exit.to_s, 'EDIT_EXIT' => edit_exit.to_s, 'GITHUB_OUTPUT' => "#{dir}/output", 'STABLE_TAGS' => stable_tags }
       output, status = Open3.capture2e(env, '/usr/bin/ruby', "#{ROOT}/scripts/publish-release.rb", 'codingnoye/gksdud', 'v1.2.0')
       args = File.exist?("#{dir}/args.json") ? JSON.parse(File.read("#{dir}/args.json")) : nil
       notes = File.exist?("#{dir}/notes.md") ? File.read("#{dir}/notes.md") : nil
@@ -408,7 +413,9 @@ class ReleaseTests < Minitest::Test
     summary = "- Option+` fix\n- Literal $(touch nope) \\1 text"
     status, args, notes, output, published = publication_result(summary: summary)
     assert status.success?, output
-    assert_equal "published=true\n", published, 'The download page moves to a release published now'
+    assert_equal "newest=true\n", published, 'The download page moves to the highest stable release'
+    _, _, _, output, published = publication_result(stable_tags: 'v1.2.0 v1.10.0 v2.0.0.1')
+    assert_nil published, "A lower version published after a higher one leaves the page: #{output}"
     assert_equal ['release', 'edit', 'v1.2.0', '--repo', 'codingnoye/gksdud', '--notes-file'], args.first(6)
     assert_equal ['--draft=false', '--latest'], args.last(2)
     assert_equal 9, args.length
@@ -435,6 +442,8 @@ class ReleaseTests < Minitest::Test
     assert status.success?, output
     assert_nil args
     assert_nil notes
+    assert_equal "newest=true\n", published, 'Running the highest release again deploys its page again'
+    _, _, _, _, published = publication_result(draft: false, stable_tags: 'v1.2.0 v1.3.0')
     assert_nil published, 'Running an older release again keeps the download page'
   end
 
