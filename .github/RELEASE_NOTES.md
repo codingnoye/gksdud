@@ -18,7 +18,6 @@ Homebrew 설치는 `brew update && brew upgrade --cask codingnoye/tap/gksdud`로
 
 ### 참고
 
-- `gksdud-<버전명>-macos-universal.zip`은 애플 서명을 받기 전 자체서명 버전의 업데이트 호환용 파일입니다. 일반적으로는 다운받으실 필요는 없습니다.
 - v1.8.0 미만의 자체 서명 버전을 사용중이며 업데이트가 실패한다면 삭제 후 재설치로 해결 가능합니다!
 
 MIT License, © 2026 CodingNoye

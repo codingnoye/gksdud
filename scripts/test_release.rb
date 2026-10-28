@@ -39,9 +39,9 @@ class ReleaseTests < Minitest::Test
     assert_equal 'gksdud-1.2.0.1.3.zip', canary.filename
     # Every channel carries the disk image for downloads.
     assert_equal %w[gksdud-1.2.0.dmg gksdud-1.2.0.1.dmg gksdud-1.2.0.1.3.dmg], [stable, pre, canary].map(&:dmg_filename)
-    # Apps up to 1.7.1 download the old name, which holds the self-signed copy while they move to Developer ID.
-    assert ReleaseMetadata::SELF_SIGNED_COPY
-    assert_equal 'gksdud-1.2.0-macos-universal.zip', stable.self_signed_filename
+    # Apps up to 1.7.1 download the old name, which held the self-signed copy while they moved to Developer ID.
+    refute ReleaseMetadata::SELF_SIGNED_COPY
+    assert_nil stable.self_signed_filename
     assert_nil canary.self_signed_filename
     assert_nil pre.self_signed_filename
     # The Homebrew note about asking again ends with the copy.
@@ -246,8 +246,8 @@ class ReleaseTests < Minitest::Test
     assert_equal ['release', 'create', 'v1.2.0'], args.first(3)
     assert_includes args, '--draft'
     refute_includes args, '--prerelease'
-    assert_equal ['release-source/outputs/gksdud-1.2.0.zip', 'release-source/outputs/gksdud-1.2.0-macos-universal.zip',
-                  'release-source/outputs/gksdud-1.2.0.dmg', 'release-source/outputs/release-1.2.0/SHA256SUMS'], args[3, 4]
+    assert_equal ['release-source/outputs/gksdud-1.2.0.zip', 'release-source/outputs/gksdud-1.2.0.dmg',
+                  'release-source/outputs/release-1.2.0/SHA256SUMS'], args[3, 3]
     assert_includes args, '.github/RELEASE_NOTES.md'
     assert_includes args, '--verify-tag'
   end
