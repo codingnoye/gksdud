@@ -2,11 +2,11 @@ name: Release
 
 on:
   # Every push to main publishes a canary; prereleases come from their tags, vX.Y.Z.P.
-  # A push of only documents, the download page or test tools leaves the app as it was; its commits go in the next canary.
+  # A push of only documents or test tools leaves the app as it was; its commits go in the next canary.
   push:
     branches: [main]
     tags: ['v*.*.*.*']
-    paths-ignore: ['**.md', 'docs/**', 'site/**', 'skills/**', 'tests/**']
+    paths-ignore: ['**.md', 'docs/**', 'skills/**', 'tests/**']
   workflow_dispatch:
     inputs:
       source_ref:
