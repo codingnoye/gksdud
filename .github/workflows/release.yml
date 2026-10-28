@@ -2,11 +2,11 @@ name: Release
 
 on:
   # Every push to main publishes a canary; prereleases come from their tags, vX.Y.Z.P.
-  # A push of only documents or test tools leaves the app as it was; its commits go in the next canary.
+  # A push of only documents, the download page or test tools leaves the app as it was; its commits go in the next canary.
   push:
     branches: [main]
     tags: ['v*.*.*.*']
-    paths-ignore: ['**.md', 'docs/**', 'skills/**', 'tests/**']
+    paths-ignore: ['**.md', 'docs/**', 'site/**', 'scripts/build-site.py', 'scripts/test_build_site.py', 'skills/**', 'tests/**']
   workflow_dispatch:
     inputs:
       source_ref:
@@ -48,6 +48,9 @@ jobs:
     environment: release
     permissions:
       contents: write
+    outputs:
+      # Set once the stable release is out and the highest one, even if a later step fails or the run is a rerun.
+      stable_tag: ${{ steps.publish.outputs.newest == 'true' && steps.version.outputs.tag || '' }}
     defaults:
       run:
         shell: bash
@@ -258,6 +261,7 @@ jobs:
             while read -r tag; do gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag; done
 
       - name: Publish verified stable draft
+        id: publish
         if: github.event_name == 'workflow_dispatch' && steps.version.outputs.prerelease == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -288,3 +292,15 @@ jobs:
           if ! answer=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" 2>&1 >/dev/null) && [[ $answer == *'HTTP 404'* ]]; then
             gh api --method DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/$TAG" || true
           fi
+
+  # The download page moves to a stable release as soon as it is published, whatever happens to the Homebrew update after.
+  pages:
+    needs: release
+    if: always() && needs.release.outputs.stable_tag != ''
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/pages.yml
+    with:
+      tag: ${{ needs.release.outputs.stable_tag }}

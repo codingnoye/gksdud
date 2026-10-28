@@ -264,7 +264,7 @@ class ReleaseTests < Minitest::Test
                   'release-source/outputs/release-1.2.0.1-pre/SHA256SUMS'], args[3, 3]
     assert_includes args, '--generate-notes'
     assert_includes args, '--verify-tag'
-    assert notes.start_with?("#{message}\n\n### 테스트용"), notes
+    assert notes.start_with?("#{message}\n\n### 프리릴리즈"), notes
     _, notes = release_arguments('v1.2.0.1')
     assert_equal File.read("#{ROOT}/.github/PRERELEASE_NOTES.md"), notes, 'A lightweight tag has no message'
   end
@@ -378,7 +378,8 @@ class ReleaseTests < Minitest::Test
     assert_equal 'false', create_tag.fetch('if')[/== '([^']+)'/, 1]
   end
 
-  def publication_result(draft: true, prerelease: false, actual_tag: 'v1.2.0', summary: 'Input fixes', warning: '', latest: 'true', view_exit: 0, edit_exit: 0)
+  def publication_result(draft: true, prerelease: false, actual_tag: 'v1.2.0', summary: 'Input fixes', warning: '', latest: 'true', view_exit: 0, edit_exit: 0,
+                         stable_tags: 'v1.1.10 v1.2.0 v1.0.0')
     Dir.mktmpdir('gksdud-publish-test-') do |dir|
       File.write("#{dir}/gh", <<~RUBY)
         #!/usr/bin/ruby
@@ -386,6 +387,10 @@ class ReleaseTests < Minitest::Test
         if ARGV.first(2) == ['release', 'view']
           puts ENV.fetch('RELEASE_JSON')
           exit ENV.fetch('VIEW_EXIT').to_i
+        end
+        if ARGV.first(2) == ['release', 'list']
+          puts JSON.generate(ENV.fetch('STABLE_TAGS').split.map { |name| { tagName: name } })
+          exit
         end
         File.write(ENV.fetch('CAPTURE'), JSON.generate(ARGV))
         File.write(ENV.fetch('NOTES'), File.read(ARGV.fetch(ARGV.index('--notes-file') + 1)))
@@ -395,18 +400,22 @@ class ReleaseTests < Minitest::Test
       env = { 'PATH' => "#{dir}:#{ENV.fetch('PATH')}", 'RELEASE_SUMMARY' => summary, 'RELEASE_WARNING' => warning, 'MAKE_LATEST' => latest,
               'RELEASE_JSON' => JSON.generate(tagName: actual_tag, isDraft: draft, isPrerelease: prerelease),
               'CAPTURE' => "#{dir}/args.json", 'NOTES' => "#{dir}/notes.md",
-              'VIEW_EXIT' => view_exit.to_s, 'EDIT_EXIT' => edit_exit.to_s }
+              'VIEW_EXIT' => view_exit.to_s, 'EDIT_EXIT' => edit_exit.to_s, 'GITHUB_OUTPUT' => "#{dir}/output", 'STABLE_TAGS' => stable_tags }
       output, status = Open3.capture2e(env, '/usr/bin/ruby', "#{ROOT}/scripts/publish-release.rb", 'codingnoye/gksdud', 'v1.2.0')
       args = File.exist?("#{dir}/args.json") ? JSON.parse(File.read("#{dir}/args.json")) : nil
       notes = File.exist?("#{dir}/notes.md") ? File.read("#{dir}/notes.md") : nil
-      [status, args, notes, output]
+      published = File.exist?("#{dir}/output") ? File.read("#{dir}/output") : nil
+      [status, args, notes, output, published]
     end
   end
 
   def test_publish_uses_literal_summary_and_never_uploads_assets
     summary = "- Option+` fix\n- Literal $(touch nope) \\1 text"
-    status, args, notes, output = publication_result(summary: summary)
+    status, args, notes, output, published = publication_result(summary: summary)
     assert status.success?, output
+    assert_equal "newest=true\n", published, 'The download page moves to the highest stable release'
+    _, _, _, output, published = publication_result(stable_tags: 'v1.2.0 v1.10.0 v2.0.0.1')
+    assert_nil published, "A lower version published after a higher one leaves the page: #{output}"
     assert_equal ['release', 'edit', 'v1.2.0', '--repo', 'codingnoye/gksdud', '--notes-file'], args.first(6)
     assert_equal ['--draft=false', '--latest'], args.last(2)
     assert_equal 9, args.length
@@ -429,10 +438,13 @@ class ReleaseTests < Minitest::Test
   end
 
   def test_published_release_is_not_edited_on_retry
-    status, args, notes, output = publication_result(draft: false)
+    status, args, notes, output, published = publication_result(draft: false)
     assert status.success?, output
     assert_nil args
     assert_nil notes
+    assert_equal "newest=true\n", published, 'Running the highest release again deploys its page again'
+    _, _, _, _, published = publication_result(draft: false, stable_tags: 'v1.2.0 v1.3.0')
+    assert_nil published, 'Running an older release again keeps the download page'
   end
 
   def test_publication_rejects_invalid_release_missing_summary_and_failed_lookup

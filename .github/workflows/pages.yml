@@ -1,0 +1,73 @@
+name: Pages
+
+# The download page points at one release. Only a stable release deploys it, from the Release workflow;
+# a change to the page waits for the next one. By hand, the page of any branch or tag can be deployed
+# for any release, say the page of a prerelease for the latest stable release.
+# Pages takes deployments from runs on main only; the page itself may come from elsewhere.
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: Release the page downloads
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      source:
+        description: Branch, tag or commit whose page to deploy
+        required: true
+        type: string
+        default: main
+      tag:
+        description: Release the page downloads, for example v2.2.0 or v2.2.0.0.3 (empty for the latest stable)
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    if: github.repository == 'codingnoye/gksdud'
+    name: Deploy download page
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      # The build script from main, the page from the chosen source.
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ inputs.source || 'main' }}
+          path: page-source
+          sparse-checkout: site
+          persist-credentials: false
+      - name: Build the page for the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [[ -z $TAG ]]; then
+            TAG=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)
+          fi
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" > "$RUNNER_TEMP/release.json"
+          python3 scripts/build-site.py "$RUNNER_TEMP/release.json" page-source/site "$RUNNER_TEMP/site"
+      - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5
+        with:
+          path: ${{ runner.temp }}/site
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5

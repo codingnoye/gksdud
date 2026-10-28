@@ -1,0 +1,816 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>gksdud - 씹힘 없고 빠릿빠릿한 Mac 한영 전환</title>
+<meta name="description" content="Karabiner도, 복잡한 설정도 없이 앱 하나로 씹힘 없는 한영 전환을 설정하는 Mac 유틸">
+<meta property="og:title" content="gksdud - 씹힘 없고 빠릿빠릿한 Mac 한영 전환">
+<meta property="og:description" content="Karabiner도, 복잡한 설정도 없이 앱 하나로 씹힘 없는 한영 전환을 설정하는 Mac 유틸">
+<meta property="og:type" content="website">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<style>
+:root {
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Apple SD Gothic Neo", "Helvetica Neue", "Noto Sans KR", sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --blue: #0071e3;
+}
+.chapter, body {
+  --bg: #fff; --fg: #1d1d1f; --fg2: #6e6e73; --line: rgba(0, 0, 0, .08);
+  --card: #fff; --shadow: 0 30px 60px -20px rgba(0, 0, 0, .18), 0 0 0 1px rgba(0, 0, 0, .05);
+  --fill: #f5f5f7; --red: #e30000;
+  --board: linear-gradient(#e6e7eb, #d9dade); --board-edge: rgba(0, 0, 0, .08);
+  --key: #fff; --key-fg: #1d1d1f; --key-fg2: #86868b; --key-shadow: 0 1px 0 rgba(0, 0, 0, .18), 0 0 0 .5px rgba(0, 0, 0, .08); --key-down: #d2d2d7;
+}
+.chapter.alt { --bg: #f5f5f7; --fill: #fff; }
+* { box-sizing: border-box; }
+/* The deck moves the page; nothing scrolls it, not focus or a link to an anchor either. */
+html, body { height: 100%; overflow: hidden; overflow: clip; overscroll-behavior: none; }
+body { margin: 0; background: #fff; color: #1d1d1f; font-family: var(--font); -webkit-font-smoothing: antialiased; }
+a { color: inherit; }
+
+/* Header */
+header {
+  position: fixed; inset: 0 0 auto; z-index: 20; height: 52px; padding: 0 22px;
+  display: flex; align-items: center; justify-content: space-between;
+  background: rgba(255, 255, 255, .72); color: #1d1d1f;
+  backdrop-filter: saturate(1.8) blur(20px); -webkit-backdrop-filter: saturate(1.8) blur(20px);
+  border-bottom: 1px solid rgba(0, 0, 0, .06);
+}
+.brand { display: flex; align-items: center; gap: 9px; font-weight: 600; font-size: 17px; text-decoration: none; letter-spacing: -.02em; }
+.brand img { width: 24px; height: 24px; border-radius: 6px; }
+.links { display: flex; align-items: center; gap: 8px; }
+.btn {
+  display: inline-flex; align-items: center; gap: 7px; padding: 7px 13px; border-radius: 9px;
+  background: #1d1d1f; color: #fff; font-weight: 600; font-size: 13px; text-decoration: none;
+  transition: background .2s, transform .15s, box-shadow .2s;
+}
+.btn:hover { background: #3a3a3c; }
+.btn:active { transform: scale(.97); }
+.btn svg { width: 1.1em; height: 1.1em; flex: none; }
+.btn.big { padding: 16px 30px 16px 24px; gap: 12px; border-radius: 16px; font-size: 18px; box-shadow: 0 14px 30px -14px rgba(0, 0, 0, .55); }
+.btn.big:hover { transform: translateY(-2px); box-shadow: 0 20px 36px -14px rgba(0, 0, 0, .55); }
+.btn.big svg { width: 22px; height: 22px; }
+
+/* Table of contents */
+nav.toc { position: fixed; z-index: 10; left: 40px; top: 50%; transform: translateY(-50%); color: #1d1d1f; }
+.toc ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.toc a { display: flex; align-items: center; gap: 12px; padding: 6px 0; text-decoration: none; font-size: 13px; font-weight: 500; opacity: .42; transition: opacity .25s; }
+.toc a:hover { opacity: .8; }
+.toc .bar { width: 2px; height: 20px; border-radius: 1px; background: currentColor; opacity: .25; position: relative; overflow: hidden; flex: none; }
+.toc li.on a { opacity: 1; font-weight: 600; }
+.toc li.on .bar { opacity: 1; background: color-mix(in srgb, currentColor 25%, transparent); }
+.toc li.on .bar i { position: absolute; inset: 0 0 auto; height: calc(var(--p, 0) * 100%); background: currentColor; }
+.toc li.sub a { padding: 4px 0 4px 14px; font-size: 12.5px; }
+.toc li.sub .bar { height: 16px; }
+.toc li.group.on .bar { background: currentColor; }
+
+/* The page is a deck: one chapter fills the screen and the deck slides to the next. */
+main { --vh: 100vh; transform: translateY(calc(var(--i, 0) * var(--vh) * -1)); transition: transform .6s cubic-bezier(.65, 0, .35, 1); }
+@supports (height: 100dvh) { main { --vh: 100dvh; } }
+@media (prefers-reduced-motion: reduce) { main { transition: none; } }
+.chapter { position: relative; height: var(--vh); background: var(--bg); color: var(--fg); }
+.stage {
+  height: 100%; overflow: hidden; overflow: clip;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 30px;
+  padding: 84px 24px 40px;
+}
+@media (min-width: 1080px) { .stage { padding-left: 200px; } }
+
+.copy { text-align: center; max-width: 760px; flex: none; }
+.eyebrow { margin: 0 0 10px; font-size: clamp(15px, 1.4vw, 19px); font-weight: 600; color: var(--fg2); letter-spacing: -.01em; }
+.copy h2 { margin: 0; font-size: clamp(36px, 5.2vw, 68px); line-height: 1.07; letter-spacing: -.03em; font-weight: 700; word-break: keep-all; }
+.copy p:not(.eyebrow) { margin: 16px auto 0; max-width: 600px; font-size: clamp(17px, 1.6vw, 21px); line-height: 1.45; color: var(--fg2); font-weight: 500; letter-spacing: -.01em; word-break: keep-all; }
+.fit { flex: none; position: relative; }
+.demo { position: absolute; left: 0; top: 0; transform-origin: 0 0; width: 760px; display: flex; flex-direction: column; align-items: center; gap: 24px; }
+
+/* Pages: screens that share the heading of their chapter */
+.tabs { display: flex; gap: 4px; padding: 4px; border-radius: 12px; background: var(--fill); flex: none; }
+.tabs a { padding: 7px 14px; border-radius: 9px; font-size: 14px; font-weight: 600; color: var(--fg2); text-decoration: none; transition: background .25s, color .25s, box-shadow .25s; }
+.tabs a.on { background: var(--bg); color: var(--fg); box-shadow: 0 1px 3px rgba(0, 0, 0, .12); }
+.pages { flex: 1 1 0; min-height: 0; width: 100%; display: grid; grid-template: 100% / 100%; }
+.page { grid-area: 1 / 1; min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 22px; opacity: 0; transform: translateX(40px); transition: opacity .45s, transform .45s; pointer-events: none; }
+.page.on { opacity: 1; transform: none; pointer-events: auto; }
+.stage:focus, .page:focus { outline: none; }
+.desc { margin: 0; flex: none; font-size: clamp(16px, 1.5vw, 19px); font-weight: 600; letter-spacing: -.01em; text-align: center; word-break: keep-all; }
+.page.past { transform: translateX(-40px); }
+
+/* Window */
+.win { width: 100%; background: var(--card); border-radius: 16px; box-shadow: var(--shadow); overflow: hidden; }
+.win-bar { height: 40px; display: flex; align-items: center; gap: 8px; padding: 0 14px; border-bottom: 1px solid var(--line); font-size: 13px; font-weight: 600; color: var(--fg2); }
+.win-bar i { width: 12px; height: 12px; border-radius: 50%; background: #ff5f57; }
+.win-bar i:nth-child(2) { background: #febc2e; }
+.win-bar i:nth-child(3) { background: #28c840; margin-right: 8px; }
+.win-body { padding: 10px 26px; }
+.line { display: grid; grid-template-columns: 116px 26px 1fr 30px; align-items: center; gap: 12px; min-height: 66px; }
+.line + .line { border-top: 1px solid var(--line); }
+.lab { font-size: 15px; font-weight: 600; line-height: 1.25; }
+.t { font-size: 29px; letter-spacing: -.01em; white-space: pre; overflow: hidden; }
+.t::after { content: ""; display: inline-block; width: 2px; height: 1.05em; margin-left: 1px; vertical-align: -.15em; background: var(--blue); animation: blink 1s steps(1) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+.t em { font-style: normal; color: var(--red); text-decoration: underline wavy var(--red); text-decoration-thickness: 1.5px; text-underline-offset: 5px; }
+.s { display: flex; }
+.s svg { width: 26px; height: auto; }
+.c { font-size: 14px; font-weight: 700; color: #fff; background: var(--blue); border-radius: 6px; text-align: center; padding: 2px 0; opacity: 0; transition: opacity .15s; }
+.c.on { opacity: 1; }
+
+/* Keyboard */
+.kbd { width: 760px; padding: 14px; border-radius: 20px; background: var(--board); box-shadow: 0 0 0 1px var(--board-edge), 0 24px 50px -24px rgba(0, 0, 0, .35); display: flex; flex-direction: column; gap: 6px; }
+.row { display: flex; gap: 6px; height: 46px; }
+.key {
+  position: relative; flex: var(--w, 1) 1 0; min-width: 0; border-radius: 7px; background: var(--key); box-shadow: var(--key-shadow);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; line-height: 1.05;
+  font-size: 15px; color: var(--key-fg); transition: transform .06s, background .12s, color .12s;
+}
+.key b { font-weight: 400; }
+.key i { font-style: normal; font-size: 12px; color: var(--key-fg2); }
+.key.mod { font-size: 11px; color: var(--key-fg2); padding: 5px 7px; justify-content: space-between; }
+.key.mod.l { align-items: flex-start; }
+.key.mod.r { align-items: flex-end; }
+.key.mod .sym { font-size: 14px; color: var(--key-fg); }
+.key .led { position: absolute; left: 8px; top: 7px; width: 5px; height: 5px; border-radius: 50%; background: var(--key-down); }
+.key .led.on { background: #30d158; box-shadow: 0 0 6px #30d158; }
+.key.caps .sym { visibility: hidden; }
+.key.arr { font-size: 9px; color: var(--key-fg2); }
+.key.ud { background: none; box-shadow: none; gap: 2px; justify-content: stretch; }
+.key.ud span { flex: 1; width: 100%; border-radius: 5px; background: var(--key); box-shadow: var(--key-shadow); font-size: 7px; color: var(--key-fg2); display: flex; align-items: center; justify-content: center; }
+.key.down { transform: translateY(1.5px); background: var(--key-down); }
+.key.target { background: var(--blue); color: #fff; }
+.key.target i, .key.target .sym, .key.target.mod { color: #fff; }
+.key.target.down { background: #0058b0; }
+/* The role of a chosen key takes the place of its name. */
+.key[data-tag] .nm { visibility: hidden; }
+.key[data-tag]::after { content: attr(data-tag); position: absolute; bottom: 6px; left: 0; right: 0; text-align: center; white-space: nowrap; font-size: 13px; font-weight: 700; }
+.key.l[data-tag]::after { left: 8px; text-align: left; }
+.key.r[data-tag]::after { right: 8px; text-align: right; }
+
+/* Chips */
+.chips { position: relative; display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; max-width: 760px; }
+.chip { position: relative; z-index: 1; padding: 9px 16px; border-radius: 999px; box-shadow: inset 0 0 0 1.5px var(--line); font-size: 15px; font-weight: 600; color: var(--fg2); transition: color .3s, box-shadow .3s; }
+.chip.on { color: var(--bg); box-shadow: none; }
+/* One highlight slides to the chosen chip. */
+.pill { position: absolute; left: 0; top: 0; z-index: 0; background: var(--fg); transition: transform .45s cubic-bezier(.3, .8, .25, 1), width .45s cubic-bezier(.3, .8, .25, 1), height .45s, opacity .3s; }
+/* A chosen key turns blue at once: a fade would show its label changing before its color. */
+#key .key { transition: none; }
+
+/* Hero */
+.hero .stage { gap: 0; }
+.hero-icon { width: min(210px, 26vh); aspect-ratio: 1; filter: drop-shadow(0 24px 48px rgba(0, 0, 0, .16)) drop-shadow(0 1px 3px rgba(0, 0, 0, .14)); will-change: transform; }
+.hero-icon svg { width: 100%; height: 100%; display: block; }
+.hero h1 { margin: 30px 0 0; font-size: clamp(56px, 9vw, 112px); letter-spacing: -.05em; line-height: 1; font-weight: 700; }
+.hero .tag { margin: 18px 0 0; font-size: clamp(22px, 2.8vw, 34px); font-weight: 600; letter-spacing: -.025em; text-align: center; word-break: keep-all; }
+.hero .sub { margin: 10px 0 0; color: var(--fg2); font-size: clamp(16px, 1.6vw, 20px); font-weight: 500; text-align: center; word-break: keep-all; }
+.cta { margin-top: 34px; display: flex; flex-direction: column; align-items: center; gap: 12px; }
+.meta { font-size: 13px; color: var(--fg2); font-weight: 500; }
+.meta:empty { display: none; }
+.brew { display: inline-flex; align-items: center; gap: 10px; margin-top: 6px; padding: 10px 10px 10px 18px; border-radius: 12px; background: var(--fill); font-family: var(--mono); font-size: 13.5px; }
+.brew button { border: 0; padding: 4px 9px; border-radius: 7px; background: transparent; color: var(--fg2); cursor: pointer; font: 600 13px var(--font); }
+.brew button:hover { background: rgba(0, 0, 0, .06); color: var(--fg); }
+.hint { position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%); color: var(--fg2); }
+@media (min-width: 1080px) { .hint { left: calc(50% + 100px); } }
+.hint svg { width: 20px; display: block; animation: bob 1.6s ease-in-out infinite; }
+@media (max-height: 820px) { .hint { display: none; } }
+@keyframes bob { 50% { transform: translateY(5px); } }
+
+/* More features */
+.tiles { width: 760px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+.tile { height: 178px; padding: 18px; border-radius: 20px; background: var(--fill); display: flex; flex-direction: column; justify-content: space-between; }
+.page.on .tile { animation: rise .5s both; }
+.page.on .tile:nth-child(2) { animation-delay: .06s; }
+.page.on .tile:nth-child(3) { animation-delay: .12s; }
+.page.on .tile:nth-child(4) { animation-delay: .18s; }
+.page.on .tile:nth-child(5) { animation-delay: .24s; }
+.page.on .tile:nth-child(6) { animation-delay: .3s; }
+@keyframes rise { from { opacity: 0; transform: translateY(14px); } }
+.tile .v { flex: 1; display: flex; align-items: center; justify-content: center; gap: 10px; }
+.tile b { font-size: 16px; font-weight: 700; letter-spacing: -.01em; }
+.cap { position: relative; min-width: 62px; height: 46px; padding: 0 12px; border-radius: 9px; background: var(--bg); box-shadow: var(--key-shadow); display: inline-flex; align-items: center; justify-content: center; font-size: 16px; font-weight: 600; transition: transform .08s, background .15s, color .15s; }
+.cap.blue { background: var(--blue); color: #fff; }
+.cap.down { transform: translateY(2px); }
+.cap.blue.down { background: #0058b0; }
+.cap .led { position: absolute; left: 7px; top: 7px; width: 5px; height: 5px; border-radius: 50%; background: rgba(255, 255, 255, .35); }
+.cap .led.on { background: #30d158; box-shadow: 0 0 6px #30d158; }
+.cap .hold { position: absolute; left: 7px; right: 7px; bottom: 5px; height: 3px; border-radius: 2px; background: rgba(255, 255, 255, .3); overflow: hidden; }
+.cap .hold::before { content: ""; display: block; height: 100%; width: calc(var(--hold, 0) * 100%); background: #fff; }
+.tile .big { font-size: 30px; font-weight: 600; }
+.tile .arrow { color: var(--fg2); font-size: 18px; }
+.tile .mb { display: flex; gap: 8px; }
+.tile .mb svg { width: 44px; height: auto; }
+.tile .kb { flex-direction: column; align-items: stretch; gap: 7px; font-size: 13px; font-weight: 600; }
+.tile .kb div { display: flex; justify-content: space-between; align-items: center; padding: 7px 10px; border-radius: 9px; background: var(--bg); }
+.tile .kb span { font-size: 11px; padding: 2px 8px; border-radius: 6px; background: var(--blue); color: #fff; }
+.tile .kb span.off { background: var(--key-down); color: var(--fg2); }
+.tile .macs { display: flex; align-items: center; gap: 10px; }
+.tile .macs i { width: 58px; height: 38px; border-radius: 6px; border: 2.5px solid var(--fg); position: relative; }
+.tile .macs i::after { content: ""; position: absolute; left: -8px; right: -8px; bottom: -8px; height: 4px; border-radius: 2px; background: var(--fg); }
+.tile s { text-decoration: line-through 2px var(--red); color: var(--fg2); }
+
+/* Terminal */
+.term { width: 760px; background: #1d1d1f; color: #f5f5f7; border-radius: 16px; overflow: hidden; box-shadow: var(--shadow); }
+.term .win-bar { border-color: rgba(255, 255, 255, .08); color: #86868b; }
+.term pre { margin: 0; padding: 18px 22px 22px; height: 300px; font: 15.5px/1.75 var(--mono); white-space: pre-wrap; }
+.term .p { color: #30d158; }
+.term .o { color: #c7c7cc; }
+.term .cm { color: #8e8e93; }
+.term .cur { display: inline-block; width: .6em; height: 1.1em; vertical-align: -.2em; background: #f5f5f7; animation: blink 1s steps(1) infinite; }
+
+/* Languages */
+.langs { position: relative; width: 760px; padding: 30px 34px; border-radius: 26px; background: var(--fill); display: grid; grid-template-columns: auto auto 1fr; align-items: center; gap: 22px 18px; }
+.lname { font-size: 20px; font-weight: 700; }
+.langs .cap { min-width: 62px; height: 54px; font-size: 21px; }
+.flow { display: flex; align-items: center; gap: 10px; }
+.src { position: relative; z-index: 1; padding: 12px 16px; border-radius: 12px; box-shadow: inset 0 0 0 1.5px var(--line); font-size: 19px; font-weight: 600; color: var(--fg2); transition: color .3s, box-shadow .3s; }
+.src.on { color: var(--bg); box-shadow: none; }
+.flow .arrow { color: var(--fg2); font-size: 18px; }
+.slot { width: 92px; height: 47px; border-radius: 12px; border: 1.5px dashed rgba(0, 0, 0, .16); }
+[hidden] { display: none !important; }
+
+/* Download */
+.dl .stage { gap: 0; }
+.dl .hero-icon { width: min(140px, 18vh); }
+.dl h2 { margin: 28px 0 0; font-size: clamp(40px, 5.6vw, 72px); letter-spacing: -.035em; line-height: 1.07; text-align: center; }
+.steps { margin: 40px 0 0; padding: 0; list-style: none; display: grid; grid-template-columns: repeat(3, minmax(0, 220px)); gap: 14px; counter-reset: s; }
+.steps li { padding: 20px 20px 22px; border-radius: 18px; background: var(--fill); font-size: 14px; line-height: 1.5; color: var(--fg2); counter-increment: s; word-break: keep-all; }
+.steps li::before { content: counter(s); display: block; font-weight: 700; font-size: 21px; color: var(--fg); margin-bottom: 6px; }
+footer { position: absolute; bottom: 22px; left: 0; right: 0; display: flex; justify-content: center; gap: 20px; font-size: 12px; color: var(--fg2); }
+@media (min-width: 1080px) { footer { padding-left: 200px; } }
+footer a { text-decoration: none; }
+footer a:hover { color: var(--fg); }
+
+@media (max-height: 700px) { .steps { display: none; } }
+@media (max-width: 1079px) {
+  nav.toc { display: none; }
+}
+@media (max-width: 720px) {
+  .links .btn span { display: none; }
+  .steps { grid-template-columns: 1fr; max-width: 320px; margin-top: 24px; }
+  .steps li { padding: 12px 16px; }
+  .steps li::before { display: inline; margin-right: 8px; font-size: 17px; }
+}
+</style>
+</head>
+<body>
+
+<header>
+  <a class="brand" href="#intro"><img src="icon.svg" alt="">gksdud</a>
+  <div class="links">
+    <a class="btn" href="https://github.com/codingnoye/gksdud" aria-label="GitHub"><svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg><span>GitHub</span></a>
+    <a class="btn" data-download href="https://github.com/codingnoye/gksdud/releases/latest"><svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1a.9.9 0 0 1 .9.9v7.4l2.4-2.4a.9.9 0 1 1 1.3 1.3l-4 4a.9.9 0 0 1-1.2 0l-4-4a.9.9 0 1 1 1.3-1.3l2.4 2.4V1.9A.9.9 0 0 1 8 1ZM2 13.2h12a.9.9 0 0 1 0 1.8H2a.9.9 0 0 1 0-1.8Z"/></svg><span>다운로드</span></a>
+  </div>
+</header>
+
+<nav class="toc" aria-label="목차"><ol></ol></nav>
+
+<main>
+  <section class="chapter hero" id="intro" data-title="소개">
+    <div class="stage">
+      <div class="hero-icon"><svg viewBox="0 0 512 512" aria-label="gksdud"></svg></div>
+      <h1>gksdud</h1>
+      <p class="tag">씹힘 없고 빠릿빠릿한 Mac 한영 전환</p>
+      <p class="sub">Karabiner도, 복잡한 설정도 없이 앱 하나로</p>
+      <div class="cta">
+        <a class="btn big" data-download href="https://github.com/codingnoye/gksdud/releases/latest"><svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1a.9.9 0 0 1 .9.9v7.4l2.4-2.4a.9.9 0 1 1 1.3 1.3l-4 4a.9.9 0 0 1-1.2 0l-4-4a.9.9 0 1 1 1.3-1.3l2.4 2.4V1.9A.9.9 0 0 1 8 1ZM2 13.2h12a.9.9 0 0 1 0 1.8H2a.9.9 0 0 1 0-1.8Z"/></svg>Mac용 다운로드</a>
+        <span class="meta" data-meta></span>
+        <span class="brew"><span>brew install --cask codingnoye/tap/gksdud</span><button type="button" data-copy="brew install --cask codingnoye/tap/gksdud">복사</button></span>
+      </div>
+      <div class="hint"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg></div>
+    </div>
+  </section>
+
+  <section class="chapter alt" id="key" data-title="한영 키 지정">
+    <div class="stage">
+      <div class="copy">
+        <h2>클릭 한 번으로 한영 키 설정</h2>
+        <p>편한 키를 한영키로 손쉽게 설정하세요</p>
+      </div>
+      <div class="fit"><div class="demo">
+        <div class="chips">
+          <span class="chip" data-opt="rcmd">⌘</span><span class="chip" data-opt="ropt">⌥</span>
+          <span class="chip" data-opt="caps">Caps Lock</span><span class="chip" data-opt="ctrlspace">⌃ Space</span>
+          <span class="chip" data-opt="cmdspace">⌘ Space</span><span class="chip" data-opt="optspace">⌥ Space</span>
+          <span class="chip" data-opt="shiftspace">⇧ Space</span>
+        </div>
+        <div class="kbd"></div>
+      </div></div>
+    </div>
+  </section>
+
+  <section class="chapter" id="instant" data-title="씹히지 않는 전환">
+    <div class="stage">
+      <div class="copy">
+        <h2>빠릿빠릿한 한영 전환</h2>
+        <p>한영 누를 때 한 글자씩 씹히지 않아요.</p>
+      </div>
+      <div class="fit"><div class="demo">
+        <div class="win"><div class="win-bar"><i></i><i></i><i></i>메모</div><div class="win-body">
+          <div class="line" data-line="a"><div class="lab">기존 방식</div><div class="s"></div><div class="t"></div><div class="c">⇪</div></div>
+          <div class="line" data-line="b"><div class="lab">gksdud</div><div class="s"></div><div class="t"></div><div class="c">⇪</div></div>
+        </div></div>
+        <div class="kbd"></div>
+      </div></div>
+    </div>
+  </section>
+
+  <section class="chapter alt" id="extras" data-title="다양한 추가 기능">
+    <div class="stage">
+      <div class="copy">
+        <h2>한영 전환이 끝이 아니에요</h2>
+        <p>맥 입력기의 여러 불편한 점을 고쳐요.</p>
+      </div>
+      <div class="tabs"></div>
+      <div class="pages">
+        <div class="page" data-id="symbols" data-title="특수문자">
+          <p class="desc">한글 상태에서도 ₩ 대신 `를 입력하는 등 다양한 옵션이 있어요</p>
+          <div class="fit"><div class="demo">
+            <div class="win"><div class="win-bar"><i></i><i></i><i></i>메모</div><div class="win-body">
+              <div class="line" data-line="a"><div class="lab">macOS 기본</div><div class="s"></div><div class="t"></div><div class="c">⇪</div></div>
+              <div class="line" data-line="b"><div class="lab">gksdud</div><div class="s"></div><div class="t"></div><div class="c">⇪</div></div>
+            </div></div>
+            <div class="kbd"></div>
+          </div></div>
+        </div>
+        <div class="page" data-id="case" data-title="대소문자 보존">
+          <p class="desc">한글을 거쳐 돌아와도 대문자가 그대로예요</p>
+          <div class="fit"><div class="demo">
+            <div class="win"><div class="win-bar"><i></i><i></i><i></i>메모</div><div class="win-body">
+              <div class="line" data-line="a"><div class="lab">macOS 기본</div><div class="s"></div><div class="t"></div><div class="c">⇪</div></div>
+              <div class="line" data-line="b"><div class="lab">gksdud</div><div class="s"></div><div class="t"></div><div class="c">⇪</div></div>
+            </div></div>
+            <div class="kbd"></div>
+          </div></div>
+        </div>
+        <div class="page" data-id="more" data-title="그 외 다양한 기능">
+          <p class="desc">필요한 기능만 골라서 켜세요</p>
+          <div class="fit"><div class="demo">
+            <div class="tiles">
+              <div class="tile"><div class="v"><span class="cap blue" data-hold><span class="led"></span>⌘<span class="hold"></span></span></div><b>길게 눌러 대문자</b></div>
+              <div class="tile"><div class="v mb" data-mb></div><b>메뉴바 아이콘 대체</b></div>
+              <div class="tile"><div class="v"><span class="cap">⌥ 2</span><span class="arrow">→</span><span class="big">™</span></div><b>⌥ 특수문자도 영어처럼</b></div>
+              <div class="tile"><div class="v kb"><div>내장 키보드<span>On</span></div><div>외장 키보드<span class="off">Off</span></div></div><b>키보드별 설정</b></div>
+              <div class="tile"><div class="v macs"><i></i><span class="arrow">⇄</span><i></i></div><b>유니버설 컨트롤</b></div>
+              <div class="tile"><div class="v"><span class="cap">⌥ G</span><span class="arrow">→</span><s class="big">©</s></div><b>⌥ 문자 입력 막기</b></div>
+            </div>
+          </div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="chapter" id="languages" data-title="다국어">
+    <div class="stage">
+      <div class="copy">
+        <h2>다른 언어도 '딸깍'</h2>
+        <p>중국어 일본어 등도 한영 키로 순환하거나 별도 키로 바로 전환해요</p>
+      </div>
+      <div class="fit"><div class="demo">
+        <div class="langs">
+          <span class="cap blue" data-key="cycle">⌘</span><span class="lname">순환</span>
+          <div class="flow"><span class="src" data-src="ko">한국어</span><span class="arrow">→</span><span class="src" data-src="en">ABC</span><span class="arrow" data-before="ja">→</span><span class="src" data-src="ja">日本語</span><span class="arrow">↺</span></div>
+          <span class="cap blue" data-key="separate">⌥</span><span class="lname">분리</span>
+          <div class="flow"><span class="slot"></span></div>
+        </div>
+      </div></div>
+    </div>
+  </section>
+
+  <section class="chapter alt" id="cli" data-title="CLI">
+    <div class="stage">
+      <div class="copy">
+        <h2>스크립트로도</h2>
+        <p>Hammerspoon, Raycast, 셸 스크립트에서 설정을 바꾸고, 일시정지하고, 입력 소스를 전환하세요.</p>
+      </div>
+      <div class="fit"><div class="demo">
+        <div class="term"><div class="win-bar"><i></i><i></i><i></i>터미널</div><pre></pre></div>
+      </div></div>
+    </div>
+  </section>
+
+  <section class="chapter dl" id="download" data-title="다운로드">
+    <div class="stage">
+      <div class="hero-icon"><svg viewBox="0 0 512 512" aria-hidden="true"></svg></div>
+      <h2>지금 바로 써보세요</h2>
+      <div class="cta">
+        <a class="btn big" data-download href="https://github.com/codingnoye/gksdud/releases/latest"><svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1a.9.9 0 0 1 .9.9v7.4l2.4-2.4a.9.9 0 1 1 1.3 1.3l-4 4a.9.9 0 0 1-1.2 0l-4-4a.9.9 0 1 1 1.3-1.3l2.4 2.4V1.9A.9.9 0 0 1 8 1ZM2 13.2h12a.9.9 0 0 1 0 1.8H2a.9.9 0 0 1 0-1.8Z"/></svg>Mac용 다운로드</a>
+        <span class="meta" data-meta></span>
+        <span class="brew"><span>brew install --cask codingnoye/tap/gksdud</span><button type="button" data-copy="brew install --cask codingnoye/tap/gksdud">복사</button></span>
+      </div>
+      <ol class="steps">
+        <li>DMG를 열고 gksdud를 응용 프로그램 폴더로 끌어 옮깁니다.</li>
+        <li>gksdud를 실행하면 메뉴 바에 아이콘이 표시됩니다.</li>
+        <li>접근성 권한을 허용한 뒤 활성화합니다.</li>
+      </ol>
+      <footer>
+        <a href="https://github.com/codingnoye/gksdud">GitHub</a>
+        <a href="https://github.com/codingnoye/gksdud/releases">릴리즈</a>
+        <a href="https://fairy.hada.io/@gksdud">후원</a>
+        <span>MIT, © 2026 CodingNoye</span>
+      </footer>
+    </div>
+  </section>
+</main>
+
+<script>
+(() => {
+const $ = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+const clamp = (v, a = 0, b = 1) => Math.min(b, Math.max(a, v));
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+// {text} marks a dropped or wrong character.
+const fmt = s => esc(s).replace(/\{(.+?)\}/g, '<em>$1</em>');
+let uid = 0;
+
+// Icons, drawn with the app's own geometry (DudIcon.swift).
+function face(kind) {
+  let eyes = '';
+  for (const x of [157.6, 354.4]) {
+    if (kind === 'ko') eyes += `<path d="M${x - 14} 190H${x + 14}M${x - 42} 218H${x + 42}"/><circle cx="${x}" cy="282.2" r="38"/>`;
+    else if (kind === 'up') eyes += `<path d="M${x - 40} 208.2H${x - 16}A56 56 0 0 1 ${x - 16} 320.2H${x - 40}Z"/>`;
+    else eyes += `<path d="M${x + 48} 185.8V272.2"/><circle cx="${x}" cy="272.2" r="48"/>`;
+  }
+  return `<g fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="18">${eyes}<path stroke-width="16" d="M232 285.4V302.2A24 24 0 0 0 280 302.2V285.4"/></g>`;
+}
+const appIcon = kind => `<rect x="32" y="32" width="448" height="448" rx="100" fill="#f8f5ef"/><g stroke="#2d2d2b">${face(kind)}</g>`;
+function badge(label, filled) {
+  const size = label.length === 1 ? 11.5 : label.length === 2 ? 9 : 8;
+  const text = fill => `<text x="11" y="10.4" text-anchor="middle" dominant-baseline="central" font-family="-apple-system,system-ui,sans-serif" font-weight="600" font-size="${size}" fill="${fill}">${esc(label)}</text>`;
+  if (!filled) return `<svg viewBox="0 0 22 20"><rect x="1.15" y="1.65" width="19.7" height="16.7" rx="2.6" fill="none" stroke="currentColor" stroke-width=".8"/>${text('currentColor')}</svg>`;
+  const id = 'm' + ++uid;
+  return `<svg viewBox="0 0 22 20"><mask id="${id}"><rect width="22" height="20" fill="#fff"/>${text('#000')}</mask><rect x=".75" y="1.25" width="20.5" height="17.5" rx="3" fill="currentColor" mask="url(#${id})"/></svg>`;
+}
+const SOURCE = { ko: ['한', true], en: ['A', false] };
+function setHTML(el, key, html) { if (el && el.dataset.key !== key) { el.dataset.key = key; el.innerHTML = html(); } }
+
+// Keyboard
+const KO = { q: 'ㅂ', w: 'ㅈ', e: 'ㄷ', r: 'ㄱ', t: 'ㅅ', y: 'ㅛ', u: 'ㅕ', i: 'ㅑ', o: 'ㅐ', p: 'ㅔ', a: 'ㅁ', s: 'ㄴ', d: 'ㅇ', f: 'ㄹ', g: 'ㅎ', h: 'ㅗ', j: 'ㅓ', k: 'ㅏ', l: 'ㅣ', z: 'ㅋ', x: 'ㅌ', c: 'ㅊ', v: 'ㅍ', b: 'ㅠ', n: 'ㅜ', m: 'ㅡ' };
+const letters = s => [...s].map(c => [c, c.toUpperCase(), KO[c]]);
+const ROWS = [
+  [['grave', '`', '₩'], ...[...'1234567890'].map(c => [c, c]), ['minus', '-'], ['equal', '='], ['del', 'delete', '', 1.5, 'mod r']],
+  [['tab', 'tab', '', 1.5, 'mod l'], ...letters('qwertyuiop'), ['lbr', '['], ['rbr', ']'], ['bsl', '\\']],
+  [['caps', 'caps lock', '', 1.75, 'mod l caps', '⇪'], ...letters('asdfghjkl'), ['semi', ';'], ['quote', "'"], ['ret', 'return', '', 1.75, 'mod r']],
+  [['lshift', 'shift', '', 2.25, 'mod l', '⇧'], ...letters('zxcvbnm'), ['comma', ','], ['dot', '.'], ['slash', '/'], ['rshift', 'shift', '', 2.25, 'mod r', '⇧']],
+  [['fn', 'fn', '', 1, 'mod l', ''], ['lctrl', 'control', '', 1, 'mod l', '⌃'], ['lopt', 'option', '', 1, 'mod l', '⌥'], ['lcmd', 'command', '', 1.25, 'mod l', '⌘'],
+    ['space', '', '', 5], ['rcmd', 'command', '', 1.25, 'mod r', '⌘'], ['ropt', 'option', '', 1, 'mod r', '⌥'], ['left', '◀', '', 1, 'arr'], ['ud', '', '', 1, 'ud'], ['right', '▶', '', 1, 'arr']],
+];
+function keyboard(el) {
+  el.innerHTML = ROWS.map(row => `<div class="row">${row.map(([id, label, ko = '', w = 1, cls = '', sym]) => {
+    const inner = cls === 'ud' ? '<span>▲</span><span>▼</span>'
+      : cls.startsWith('mod') ? `${cls.includes('caps') ? '<span class="led"></span>' : ''}<span class="sym">${sym ?? ''}</span><span class="nm">${label}</span>`
+      : `<b>${esc(label)}</b>${ko ? `<i>${ko}</i>` : ''}`;
+    return `<div class="key ${cls}" data-k="${id}" style="--w:${w}">${inner}</div>`;
+  }).join('')}</div>`).join('');
+  const keys = Object.fromEntries($$('.key', el).map(k => [k.dataset.k, k]));
+  const led = $('.led', el);
+  return f => {
+    const down = new Set(f.keys), target = new Set(f.target), tag = f.tagOn ?? null;
+    for (const [id, k] of Object.entries(keys)) {
+      k.classList.toggle('down', down.has(id));
+      k.classList.toggle('target', target.has(id));
+      const t = target.has(id) && (tag === null || tag === id) ? f.tag : '';
+      if (t) k.dataset.tag = t; else delete k.dataset.tag;
+    }
+    led.classList.toggle('on', !!f.led);
+  };
+}
+
+// A scene is a list of frames played over time; each frame changes only what it names, and keys and ms reset.
+const STEP = 380, TYPE = 140;
+function frames(list, base) {
+  let prev = { keys: [], target: ['rcmd'], tag: '한/A', tagOn: null, led: false, ...base };
+  return list.map(d => (prev = { ...prev, keys: [], ms: STEP, ...d }));
+}
+// Plays t milliseconds in: show the frame of that moment.
+function timeline(ms, show) {
+  const total = ms.reduce((x, y) => x + y, 0);
+  let last = -1;
+  return {
+    duration: total,
+    render(t) {
+      let i = 0, at = 0;
+      while (i < ms.length - 1 && t >= at + ms[i]) at += ms[i++];
+      if (i !== last) { last = i; show(i); }
+    },
+  };
+}
+// Drawn by progress p over a fixed length.
+const single = (ms, draw) => ({ duration: ms, render: t => draw(ms ? clamp(t / ms) : 1) });
+function scene(stage, list, base, extra) {
+  const F = frames(list, base);
+  const kbEl = $('.kbd', stage), kb = kbEl && keyboard(kbEl);
+  const lines = $$('[data-line]', stage).map(el => ({ name: el.dataset.line, t: $('.t', el), s: $('.s', el), c: $('.c', el) }));
+  return timeline(F.map(f => f.ms), i => {
+    const f = F[i];
+    kb && kb(f);
+    for (const l of lines) {
+      const text = f[l.name] ?? '';
+      if (l.t.dataset.v !== text) { l.t.dataset.v = text; l.t.innerHTML = fmt(text); }
+      const src = f['s' + l.name] || 'ko';
+      setHTML(l.s, src, () => badge(...SOURCE[src]));
+      l.c.classList.toggle('on', !!f['c' + l.name]);
+    }
+    extra && extra(f, stage);
+  });
+}
+// Typing: each step is [key, text for line a, text for line b].
+const typed = steps => steps.map(([k, a, b]) => ({ keys: [k], ms: TYPE, ...(a !== undefined && { a }), ...(b !== undefined && { b }) }));
+const both = (keys, texts, prefix = '') => keys.map((k, i) => [k, prefix + texts[i], prefix + texts[i]]);
+const ANNYEONG = ['ㅇ', '아', '안', '안ㄴ', '안녀', '안녕'];
+const DKSSUD = ['d', 'k', 's', 's', 'u', 'd'];
+
+// A highlight behind the chips of a track that slides to the chosen one; it follows layout changes on resize.
+const pills = [];
+function pill(track) {
+  const el = document.createElement('span');
+  el.className = 'pill';
+  track.prepend(el);
+  let target = null, placed = false;
+  const place = (to, animate = true) => {
+    target = to;
+    if (!to) return;
+    if (!animate || !placed) el.style.transition = 'none';
+    el.style.width = to.offsetWidth + 'px';
+    el.style.height = to.offsetHeight + 'px';
+    el.style.borderRadius = getComputedStyle(to).borderRadius;
+    el.style.transform = `translate(${to.offsetLeft}px, ${to.offsetTop}px)`;
+    if (el.style.transition) { el.offsetWidth; el.style.transition = ''; }
+    placed = true;
+  };
+  pills.push(() => place(target, false));
+  return to => { if (to !== target) place(to); };
+}
+
+const scenes = {};
+
+scenes.intro = stage => {
+  const svg = $('.hero-icon svg', stage), icon = $('.hero-icon', stage);
+  let kind;
+  return single(4800, p => {
+    const k = p < .3 ? 'en' : p < .55 ? 'ko' : p < .8 ? 'up' : 'en';
+    if (k !== kind) { kind = k; svg.innerHTML = appIcon(k); }
+    icon.style.transform = `rotate(${Math.sin(p * Math.PI * 2) * 4}deg)`;
+  });
+};
+
+scenes.key = stage => {
+  const chips = $$('.chip', stage), move = pill($('.chips', stage));
+  const pick = (opt, target, tag = '한/A', tagOn = null) => [{ opt, target, tag, tagOn, ms: 800 }];
+  return scene(stage, [
+    ...pick('rcmd', ['rcmd']), ...pick('ropt', ['ropt']), ...pick('caps', ['caps']),
+    ...pick('ctrlspace', ['lctrl', 'space'], '⌃ + Space', 'space'), ...pick('cmdspace', ['lcmd', 'space'], '⌘ + Space', 'space'),
+    ...pick('optspace', ['lopt', 'space'], '⌥ + Space', 'space'), ...pick('shiftspace', ['lshift', 'space'], '⇧ + Space', 'space'),
+  ], {}, f => {
+    const on = chips.find(c => c.dataset.opt === f.opt);
+    chips.forEach(c => c.classList.toggle('on', c === on));
+    move(on);
+  });
+};
+
+scenes.instant = stage => scene(stage, [
+  { a: '안녕 ', b: '안녕 ', sa: 'ko', sb: 'ko', ms: 700 },
+  { keys: ['rcmd'], sb: 'en', ms: 260 },
+  { keys: ['rcmd', 'h'], a: '안녕 ㅗ', b: '안녕 h', ms: 260 },
+  { keys: ['rcmd'], ms: 160 },
+  { sa: 'en', a: '안녕 {ㅗ}', ms: 300 },
+  ...typed([['i', '안녕 {ㅗ}i', '안녕 hi'], ['space', '안녕 {ㅗ}i ', '안녕 hi '], ['t', '안녕 {ㅗ}i t', '안녕 hi t'], ['h', '안녕 {ㅗ}i th', '안녕 hi th'], ['e', '안녕 {ㅗ}i the', '안녕 hi the'], ['r', '안녕 {ㅗ}i ther', '안녕 hi ther'], ['e', '안녕 {ㅗ}i there', '안녕 hi there']]),
+  { ms: 400 },
+]);
+
+scenes.symbols = stage => scene(stage, [
+  { a: '', b: '', sa: 'ko', sb: 'ko', target: [], ms: 600 },
+  ...[1, 2, 3].map(n => ({ keys: ['grave'], a: '₩'.repeat(n), b: '`'.repeat(n), ms: 280 })),
+  { ms: 400 },
+]);
+
+scenes.case = stage => scene(stage, [
+  { a: 'HELLO ', b: 'HELLO ', sa: 'en', sb: 'en', ca: true, cb: true, led: true, ms: 700 },
+  { keys: ['rcmd'], sa: 'ko', sb: 'ko', ca: false, cb: false, led: false },
+  ...typed(both(DKSSUD, ANNYEONG, 'HELLO ')),
+  { keys: ['space'], a: 'HELLO 안녕 ', b: 'HELLO 안녕 ', ms: TYPE },
+  { keys: ['rcmd'], sa: 'en', sb: 'en', cb: true, led: true },
+  ...[...'world'].map((c, i) => ({ keys: [c], a: `HELLO 안녕 {${'world'.slice(0, i + 1)}}`, b: 'HELLO 안녕 ' + 'world'.slice(0, i + 1).toUpperCase(), ms: TYPE })),
+  { ms: 400 },
+]);
+
+scenes.more = stage => {
+  const hold = $('[data-hold]', stage), led = $('.led', hold), mb = $('[data-mb]', stage);
+  return single(3200, p => {
+    const h = clamp((p - .1) / .25);
+    hold.classList.toggle('down', p > .1 && p < .45);
+    hold.style.setProperty('--hold', p < .45 ? h : 0);
+    led.classList.toggle('on', p >= .35);
+    const ko = Math.floor(p * 4) % 2 === 0;
+    setHTML(mb, String(ko), () => badge(ko ? '한' : 'A', ko));
+  });
+};
+
+// The cycle key goes round three sources; then Japanese moves to the separate key, which jumps to it and back.
+scenes.languages = stage => {
+  const srcs = $$('.src', stage), caps = $$('[data-key]', stage), move = pill($('.langs', stage));
+  const ja = $('[data-src="ja"]', stage), arrow = $('[data-before="ja"]', stage), slot = $('.slot', stage), demo = ja.closest('.demo');
+  const transition = 'transform .6s cubic-bezier(.3, .8, .25, 1), color .3s, box-shadow .3s';
+  // Moves Japanese between the rows, sliding it from where it was.
+  const separate = sep => {
+    if (sep === slot.hidden) return;
+    const from = ja.getBoundingClientRect();
+    if (sep) { slot.before(ja); slot.hidden = arrow.hidden = true; }
+    else { arrow.after(ja); slot.hidden = arrow.hidden = false; }
+    const to = ja.getBoundingClientRect(), k = demo.getBoundingClientRect().width / demo.offsetWidth || 1;
+    ja.style.transition = 'none';
+    ja.style.transform = `translate(${(from.left - to.left) / k}px, ${(from.top - to.top) / k}px)`;
+    ja.offsetWidth;
+    ja.style.transition = transition;
+    ja.style.transform = '';
+  };
+  const F = [{ src: 'ko', sep: false, ms: 800 }];
+  const press = (key, src) => F.push({ src, key, ms: 160 }, { src, ms: 760 });
+  press('cycle', 'en'); press('cycle', 'ja'); press('cycle', 'ko');
+  F.push({ sep: true, ms: 1200 });
+  press('cycle', 'en'); press('separate', 'ja'); press('separate', 'en'); press('cycle', 'ko');
+  let state = {};
+  const S = F.map(f => (state = { ...state, key: null, ...f }));
+  return timeline(S.map(f => f.ms), i => {
+    const f = S[i];
+    separate(f.sep);
+    const on = srcs.find(el => el.dataset.src === f.src);
+    srcs.forEach(el => el.classList.toggle('on', el === on));
+    caps.forEach(cap => cap.classList.toggle('down', cap.dataset.key === f.key));
+    move(on);
+  });
+};
+
+scenes.cli = stage => {
+  const pre = $('pre', stage);
+  const cmds = [
+    ['gksdud get keys', 'right-command'],
+    ['gksdud set long-press=on', '✓ long-press: off → on'],
+    ['gksdud source ko', 'com.apple.keylayout.ABC → com.apple.inputmethod.Korean.2SetKorean'],
+    ['gksdud pause', '✓ paused: off → on', '# 게임하는 동안 잠깐'],
+  ];
+  const F = [], prompt = '<span class="p">~ %</span> ', cur = '<span class="cur"></span>';
+  let done = '';
+  for (const [cmd, out, note] of cmds) {
+    const full = cmd + (note ? '  ' + note : '');
+    for (let i = 0; i <= full.length; i += 2) {
+      const s = full.slice(0, i);
+      const html = note && i > cmd.length ? esc(cmd) + `<span class="cm">${esc(s.slice(cmd.length))}</span>` : esc(s);
+      F.push(done + prompt + html + cur);
+    }
+    done += prompt + esc(cmd) + (note ? `<span class="cm">  ${esc(note)}</span>` : '') + '\n' + `<span class="o">${esc(out)}</span>\n`;
+    F.push(...Array(10).fill(done + prompt + cur));
+  }
+  return timeline(F.map(() => 55), i => { pre.innerHTML = F[i]; });
+};
+
+scenes.download = stage => { $('.hero-icon svg', stage).innerHTML = appIcon('en'); return single(0, () => {}); };
+
+// Screens: a chapter, or each page of a chapter with pages.
+const chapters = $$('.chapter');
+const screens = [];
+chapters.forEach((el, ci) => {
+  const stage = $('.stage', el), copy = $('.copy', stage);
+  if (copy) copy.insertAdjacentHTML('afterbegin', `<p class="eyebrow">${el.dataset.title}</p>`);
+  const pages = $$('.page', el);
+  if (!pages.length) screens.push({ ci, el, id: el.id, title: el.dataset.title, view: stage });
+  else pages.forEach(page => screens.push({ ci, el, id: page.dataset.id, title: page.dataset.title, group: el.dataset.title, page, view: page }));
+});
+screens.forEach(s => { s.play = scenes[s.id](s.view); s.view.tabIndex = -1; });
+const toc = $('.toc ol'), main = $('main');
+const bar = '<span class="bar"><i></i></span>';
+toc.innerHTML = screens.map((s, i) => {
+  const head = s.group && s.page === $('.page', s.el) ? `<li class="group" data-ci="${s.ci}"><a href="#${s.id}" data-go="${i}">${bar}${s.group}</a></li>` : '';
+  return head + `<li class="${s.group ? 'sub' : ''}" data-s="${i}"><a href="#${s.id}" data-go="${i}">${bar}${s.title}</a></li>`;
+}).join('');
+$$('.tabs').forEach(tabs => {
+  tabs.innerHTML = screens.map((s, i) => s.el.contains(tabs) ? `<a href="#${s.id}" data-go="${i}" data-s="${i}">${s.title}</a>` : '').join('');
+});
+const items = $$('li[data-s]', toc), groups = $$('li.group', toc);
+
+function fit() {
+  const boxes = $$('.fit');
+  boxes.forEach(box => { box.style.width = box.style.height = '0px'; });
+  for (const box of boxes) {
+    const demo = $('.demo', box), area = box.closest('.page') || box.closest('.stage'), cs = getComputedStyle(area);
+    const flow = [...area.children].filter(el => getComputedStyle(el).position !== 'absolute');
+    const used = flow.filter(el => el !== box).reduce((h, el) => h + el.offsetHeight, 0);
+    const availH = area.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom) - used - (parseFloat(cs.rowGap) || 0) * (flow.length - 1);
+    const availW = area.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+    const s = Math.max(.3, Math.min(1, availW / demo.offsetWidth, availH / demo.offsetHeight));
+    demo.style.transform = `scale(${s})`;
+    box.style.width = demo.offsetWidth * s + 'px';
+    box.style.height = demo.offsetHeight * s + 'px';
+  }
+  pills.forEach(p => p());
+}
+
+// The screen plays on its own and starts over after a rest; moving goes a whole screen.
+const REST = 2600, SLIDE = 400, TURN = 250;
+const reduced = matchMedia('(prefers-reduced-motion: reduce)');
+// Playback reads one clock and never goes back within a run, whatever the frame timestamps do.
+let at = -1, started = 0, played = 0;
+// keep: focus already went where it should, onto a control of this screen outside its page.
+function show(i, keep = false) {
+  const s = screens[i], prev = screens[at];
+  if (i === at) return;
+  started = performance.now() + (!prev ? 0 : prev.ci !== s.ci ? SLIDE : TURN);
+  played = 0;
+  at = i;
+  if (s.page) $$('.page', s.el).forEach(p => { p.classList.toggle('on', p === s.page); p.classList.toggle('past', screens.findIndex(o => o.page === p) < i); });
+  s.play.render(0);
+  // Focus goes with the screen: left on one that is gone, the next Tab would bring it back or Enter press its hidden buttons.
+  if (!keep && !s.view.contains(document.activeElement)) s.view.focus({ preventScroll: true });
+  main.style.setProperty('--i', s.ci);
+  items.forEach((li, j) => { li.classList.toggle('on', j === i); li.style.setProperty('--p', +(j < i)); });
+  groups.forEach(g => g.classList.toggle('on', +g.dataset.ci === s.ci));
+  $$('.tabs a').forEach(a => a.classList.toggle('on', +a.dataset.s === i));
+  history.replaceState(null, '', i ? '#' + s.id : location.pathname + location.search);
+}
+const move = d => show(clamp(at + d, 0, screens.length - 1));
+function frame() {
+  const s = screens[at], d = s.play.duration, t = performance.now();
+  let e = reduced.matches ? d : Math.max(played, t - started);
+  if (d && e >= d + REST) { started = t; e = 0; }
+  played = e;
+  s.play.render(Math.min(e, d));
+  items[at].style.setProperty('--p', d && s.id !== 'intro' ? clamp(e / d) : 1);
+  requestAnimationFrame(frame);
+}
+
+$$('[data-go]').forEach(a => a.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); show(+a.dataset.go); }));
+$('.brand').addEventListener('click', e => { e.preventDefault(); show(0); });
+// A click anywhere but a control moves on.
+addEventListener('click', e => { if (!e.target.closest('a, button, header, nav, .brew') && !getSelection().toString()) move(1); });
+// A wheel gesture counts once, however long its momentum runs. Momentum only slows down,
+// so a stroke that speeds up again once it has been slowing, or one after a pause, is a new gesture.
+// Small strokes add up before they count, and a reversal right after a move is the gesture settling, not a new one.
+let lastWheel = 0, wheelSum = 0, wheelLocked = false, peak = 0, floor = 0, slowing = false, lastMove = { t: 0, d: 0 };
+addEventListener('wheel', e => {
+  // A pinch arrives as a wheel with Control; it zooms.
+  if (e.ctrlKey) return;
+  e.preventDefault();
+  const t = performance.now();
+  const dy = e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? innerHeight : 1), abs = Math.abs(dy);
+  if (t - lastWheel > 300) { wheelLocked = false; wheelSum = 0; }
+  lastWheel = t;
+  if (wheelLocked) {
+    if (!slowing) {
+      if (abs >= peak) peak = floor = abs;
+      else if (abs < peak * .7) { slowing = true; floor = abs; }
+      return;
+    }
+    if (abs <= floor * 1.8 + 6) { floor = Math.min(floor, abs); return; }
+    wheelLocked = false;
+  }
+  if (abs < Math.abs(e.deltaX)) return;
+  if (Math.sign(dy) !== Math.sign(wheelSum)) wheelSum = 0;
+  wheelSum += dy;
+  if (Math.abs(wheelSum) < 30) return;
+  const d = Math.sign(wheelSum);
+  wheelLocked = true; wheelSum = 0; peak = floor = abs; slowing = false;
+  if (d !== lastMove.d && t - lastMove.t < 600) return;
+  lastMove = { t, d };
+  move(d);
+}, { passive: false });
+let touchY = null;
+// One finger swipes; two pinch, which zooms.
+addEventListener('touchstart', e => { touchY = e.touches.length === 1 ? e.touches[0].clientY : null; }, { passive: true });
+addEventListener('touchmove', e => { if (e.touches.length === 1 && touchY !== null) e.preventDefault(); }, { passive: false });
+addEventListener('touchend', e => {
+  if (touchY === null) return;
+  const dy = touchY - e.changedTouches[0].clientY;
+  touchY = null;
+  if (Math.abs(dy) > 40) move(Math.sign(dy));
+});
+addEventListener('keydown', e => {
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.key === 'Home' || e.key === 'End') { e.preventDefault(); show(e.key === 'Home' ? 0 : screens.length - 1); return; }
+  const d = { ArrowDown: 1, ArrowRight: 1, PageDown: 1, ' ': e.shiftKey ? -1 : 1, ArrowUp: -1, ArrowLeft: -1, PageUp: -1 }[e.key];
+  if (!d || (e.key === ' ' && e.target.closest('a, button'))) return;
+  e.preventDefault();
+  move(d);
+});
+// Focus moved by Tab, or a link to a screen, shows the screen it is on.
+addEventListener('focusin', e => {
+  const s = screens[at];
+  if ((s.page || s.el).contains(e.target)) return;
+  const i = screens.findIndex(o => o.page ? o.page.contains(e.target) : o.el.contains(e.target));
+  const first = screens.findIndex(o => o.el.contains(e.target));
+  if (i >= 0) show(i, true); else if (first >= 0 && screens[first].ci !== s.ci) show(first, true);
+});
+addEventListener('hashchange', () => { const i = screens.findIndex(s => '#' + s.id === location.hash); if (i >= 0 || !location.hash) show(Math.max(0, i)); });
+addEventListener('resize', fit);
+(document.fonts?.ready ?? Promise.resolve()).then(fit);
+fit();
+screens.forEach(s => s.play.render(0));
+main.style.transition = 'none';
+show(Math.max(0, screens.findIndex(s => '#' + s.id === location.hash)));
+main.offsetHeight;
+main.style.transition = '';
+requestAnimationFrame(frame);
+
+// Copy button
+$$('[data-copy]').forEach(b => b.addEventListener('click', async () => {
+  try { await navigator.clipboard.writeText(b.dataset.copy); b.textContent = '✓'; setTimeout(() => { b.textContent = '복사'; }, 1400); } catch {}
+}));
+})();
+</script>
+</body>
+</html>
