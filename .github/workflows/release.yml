@@ -6,7 +6,7 @@ on:
   push:
     branches: [main]
     tags: ['v*.*.*.*']
-    paths-ignore: ['**.md', 'docs/**', 'site/**', 'skills/**', 'tests/**']
+    paths-ignore: ['**.md', 'docs/**', 'site/**', 'scripts/build-site.py', 'scripts/test_build_site.py', 'skills/**', 'tests/**']
   workflow_dispatch:
     inputs:
       source_ref:
@@ -48,6 +48,8 @@ jobs:
     environment: release
     permissions:
       contents: write
+    outputs:
+      stable_tag: ${{ github.event_name == 'workflow_dispatch' && steps.version.outputs.prerelease == 'false' && steps.version.outputs.tag || '' }}
     defaults:
       run:
         shell: bash
@@ -288,3 +290,15 @@ jobs:
           if ! answer=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" 2>&1 >/dev/null) && [[ $answer == *'HTTP 404'* ]]; then
             gh api --method DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/$TAG" || true
           fi
+
+  # The download page moves to a stable release as soon as it is published.
+  pages:
+    needs: release
+    if: needs.release.outputs.stable_tag != ''
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/pages.yml
+    with:
+      tag: ${{ needs.release.outputs.stable_tag }}

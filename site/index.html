@@ -410,7 +410,6 @@ footer a:hover { color: var(--fg); }
 
 <script>
 (() => {
-const REPO = 'codingnoye/gksdud';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const clamp = (v, a = 0, b = 1) => Math.min(b, Math.max(a, v));
@@ -796,17 +795,6 @@ requestAnimationFrame(frame);
 $$('[data-copy]').forEach(b => b.addEventListener('click', async () => {
   try { await navigator.clipboard.writeText(b.dataset.copy); b.textContent = '✓'; setTimeout(() => { b.textContent = '복사'; }, 1400); } catch {}
 }));
-
-// Download points at the disk image of the latest release, or its notarized ZIP; without the API it stays on the release page.
-fetch(`https://api.github.com/repos/${REPO}/releases/latest`, { headers: { Accept: 'application/vnd.github+json' } })
-  .then(r => r.ok ? r.json() : Promise.reject())
-  .then(rel => {
-    const asset = ['dmg', 'zip'].map(ext => rel.assets.find(a => new RegExp(`^gksdud-\\d+(\\.\\d+)*\\.${ext}$`).test(a.name))).find(Boolean);
-    if (!asset) return;
-    $$('[data-download]').forEach(a => { a.href = asset.browser_download_url; });
-    $$('[data-meta]').forEach(m => { m.textContent = rel.tag_name; });
-  })
-  .catch(() => {});
 })();
 </script>
 </body>
