@@ -264,7 +264,7 @@ class ReleaseTests < Minitest::Test
                   'release-source/outputs/release-1.2.0.1-pre/SHA256SUMS'], args[3, 3]
     assert_includes args, '--generate-notes'
     assert_includes args, '--verify-tag'
-    assert notes.start_with?("#{message}\n\n### 테스트용"), notes
+    assert notes.start_with?("#{message}\n\n### 프리릴리즈"), notes
     _, notes = release_arguments('v1.2.0.1')
     assert_equal File.read("#{ROOT}/.github/PRERELEASE_NOTES.md"), notes, 'A lightweight tag has no message'
   end
