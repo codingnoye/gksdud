@@ -137,22 +137,23 @@ func runEnglishSwitchTests() {
         featureCheck(!escape(.keyDown, "ko", modifier), "Modified ESC stays a shortcut")
     }
     do {
-        let grave = Int64(kVK_ANSI_Grave), leftOption = CGEventFlags([.maskAlternate]).union(BackquoteSwap.leftOption)
+        let grave = Int64(kVK_ANSI_Grave), option = CGEventFlags([.maskAlternate]).union(BackquoteSwap.rightOption)
         var swap = BackquoteSwap()
         func press(_ flags: CGEventFlags, korean: Bool = true, code: Int64 = grave, down: Bool = true, repeated: Bool = false) -> CGEventFlags {
             var result = flags; swap.handle(code: code, down: down, repeated: repeated, flags: &result) { korean }; return result
         }
-        featureCheck(press([]) == leftOption && press([], down: false) == leftOption && !swap.swapping, "₩ alone types ` in Korean")
-        featureCheck(press(leftOption) == [] && press(leftOption, down: false) == [], "Option+₩ types ₩ in Korean")
-        featureCheck(press([.maskAlternate, BackquoteSwap.anyOption]) == [], "Either Option key's device bit goes too")
-        featureCheck(press(.maskAlphaShift) == leftOption.union(.maskAlphaShift), "Caps Lock stays")
+        featureCheck(press([]) == option && press([], down: false) == option && !swap.swapping, "₩ alone types ` in Korean")
+        featureCheck(press(option) == [] && press(option, down: false) == [], "Option+₩ types ₩ in Korean")
+        featureCheck(press([.maskAlternate, BackquoteSwap.anyOption]) == [] && press([.maskAlternate, CGEventFlags(rawValue: 0x20)]) == [],
+            "Either Option key's device bit goes too")
+        featureCheck(press(.maskAlphaShift) == option.union(.maskAlphaShift), "Caps Lock stays")
         for kept: CGEventFlags in [.maskShift, .maskCommand, .maskControl, .maskSecondaryFn, [.maskShift, .maskAlternate]] {
             featureCheck(press(kept) == kept && press(kept, down: false) == kept, "Shift and shortcuts stay")
         }
         featureCheck(press([], korean: false) == [] && press([], korean: false, down: false) == [], "Other input sources stay")
         featureCheck(press([], code: Int64(kVK_ANSI_A)) == [] && press([], code: 10) == [], "Only the ₩ key")
         _ = press([])
-        featureCheck(press([], korean: false, repeated: true) == leftOption && press([], korean: false, down: false) == leftOption,
+        featureCheck(press([], korean: false, repeated: true) == option && press([], korean: false, down: false) == option,
             "Repeats and the release follow their press")
         _ = press([], korean: false)
         featureCheck(press([], repeated: true) == [] && press([], down: false) == [], "Even when the source became Korean meanwhile")
