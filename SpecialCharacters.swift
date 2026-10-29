@@ -27,10 +27,10 @@ struct OptionKeyPolicy {
 
 // In Korean, ₩ and ` trade places as in English: the key alone types `, with Option ₩. Only the Option flag changes, and
 // the Korean input method types both (Option+₩ is ` there), so a composition ends as with any symbol. Shift (~) and
-// shortcuts stay.
+// shortcuts stay. The added Option is the right one: terminals that send Meta for Option mostly do it for the left.
 struct BackquoteSwap {
     private(set) var swapping = false
-    static let leftOption = CGEventFlags(rawValue: 0x20), anyOption = CGEventFlags(rawValue: CGEventFlags.maskAlternate.rawValue | 0x60)
+    static let rightOption = CGEventFlags(rawValue: 0x40), anyOption = CGEventFlags(rawValue: CGEventFlags.maskAlternate.rawValue | 0x60)
     // 3-set final types * on that key, with ` under Option; no ₩ to trade.
     static func swaps(_ source: InputSourceIdentity?) -> Bool {
         guard let id = source?.id else { return false }
@@ -44,7 +44,7 @@ struct BackquoteSwap {
         }
         guard swapping else { return }
         if !down { swapping = false }
-        if flags.contains(.maskAlternate) { flags.remove(Self.anyOption) } else { flags.insert([.maskAlternate, Self.leftOption]) }
+        if flags.contains(.maskAlternate) { flags.remove(Self.anyOption) } else { flags.insert([.maskAlternate, Self.rightOption]) }
     }
     mutating func reset() { swapping = false }
 }
