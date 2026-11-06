@@ -127,7 +127,7 @@ unless metadata.prerelease?
     url "https://github.com/#{repo}/releases/download/v\#{version}/gksdud-\#{version}.zip"
     name "gksdud"
     desc "Korean-English input switching from the menu bar"
-    homepage "https://github.com/#{repo}"
+    homepage "https://gksdud.noye.dev"
 
     depends_on macos: :ventura
 
