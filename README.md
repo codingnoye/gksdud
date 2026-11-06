@@ -1,32 +1,64 @@
-# gksdud - 씹힘 없고 빠릿빠릿한 Mac 한영 전환
+<div align="center">
 
-<img width="99" height="109" alt="스크린샷 2026-09-16 오후 11 39 46" src="https://github.com/user-attachments/assets/44f53a4b-4490-475c-80b4-f3fd3b5a8ca8" />
+<img width="128" alt="gksdud" src="docs/images/icon.png" />
 
-`Karabiner`도, 복잡한 설정도 없이
+# gksdud
 
-앱 하나로 **씹힘 없는 한영 전환**을 설정하는 유틸
+**씹힘 없고 빠릿빠릿한 Mac 한영 전환**
+
+`Karabiner`도, 복잡한 설정도 없이 앱 하나로
+
+[![Download](https://img.shields.io/badge/Download-1d1d1f?style=for-the-badge&logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjMyIDMyIDQ0OCA0NDgiPjxyZWN0IHg9IjMyIiB5PSIzMiIgd2lkdGg9IjQ0OCIgaGVpZ2h0PSI0NDgiIHJ4PSIxMDAiIGZpbGw9IiNGOEY1RUYiLz48ZyBmaWxsPSJub25lIiBzdHJva2U9IiMyRDJEMkIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIgc3Ryb2tlLXdpZHRoPSIxOCI+PHBhdGggZD0iTTIwNS42IDE4NS44VjI3Mi4yTTQwMi40IDE4NS44VjI3Mi4yIi8+PGNpcmNsZSBjeD0iMTU3LjYiIGN5PSIyNzIuMiIgcj0iNDgiLz48Y2lyY2xlIGN4PSIzNTQuNCIgY3k9IjI3Mi4yIiByPSI0OCIvPjxwYXRoIHN0cm9rZS13aWR0aD0iMTYiIGQ9Ik0yMzIgMjg1LjRWMzAyLjJBMjQgMjQgMCAwIDAgMjgwIDMwMi4yVjI4NS40Ii8+PC9nPjwvc3ZnPgo=)](https://gksdud.noye.dev) [![Homebrew](https://img.shields.io/badge/Homebrew-FBB040?style=for-the-badge&logo=homebrew&logoColor=white)](#a-homebrew로-설치)
+
+[![Release](https://img.shields.io/github/v/release/codingnoye/gksdud?color=0071e3)](https://github.com/codingnoye/gksdud/releases/latest) [![License](https://img.shields.io/github/license/codingnoye/gksdud?color=6e6e73)](LICENSE) [![Sponsor](https://img.shields.io/badge/sponsor-Fairy-ff7eb6)](https://fairy.hada.io/@gksdud)
+
+</div>
 
 ## 주요 기능
 
-<img width="320" alt="preference demo" src="https://github.com/user-attachments/assets/aec4ba4f-fb0c-4ec8-bee9-d66f570353f3" />
+- **클릭 한 번으로 한영 키 설정**: `⌘`, `⌥`, `Caps Lock`, `⌃/⌘/⌥/⇧ + Space` 등 편한 키를 한영 키로 쉽게 설정
+- **빠릿빠릿한 한영 전환**: 씹히지 않는 한영 전환
+- **다른 언어도 '딸깍'**: 중국어, 일본어 등도 한영 키로 순환하거나, 원한다면 **별도 키**로 바로 전환해요
+- **한영 전환이 끝이 아니에요**: 대소문자, 특수문자, 키보드별 설정 등 맥 입력기의 여러 불편한 점을 고쳐요
+- **스크립팅/AI친화**: Hammerspoon, Raycast, 스크립트에서 설정을 바꾸고, 일시정지하고, 입력 소스를 전환하세요. AI에게 `gksdud cli 이용해서, Ghostty 켜면 영어로 전환되게 해줘.`라고 해보세요.
+
+## 기능 소개
+
+### 한영 키와 빠른 전환
+
+<img width="320" alt="설정 화면" src="docs/images/settings.gif" />
 
 잠깐만 써봐도 체감될 만큼 빠릿빠릿하게 한영 전환됩니다.
 - **한영 키 변경**: `우측 ⌘` 등의 키를 선택해 한영 키로 사용
+  - 키보드마다 한영 키를 따로 정하거나 끌 수 있어요
 - **딜레이, 키 씹힘 개선**: 기존 방법들의 **딜레이**, **글자 씹힘**, **전환 씹힘** 없는 전환 구현
 
-<img width="502" alt="화면 기록 2026-09-16 오후 10 23 57" src="https://github.com/user-attachments/assets/faf9f36d-bbff-4c5f-8a53-785948fc32cc" />
+### 길게 눌러 대소문자 전환
+
+<img width="502" alt="길게 눌러 대소문자 전환" src="https://github.com/user-attachments/assets/faf9f36d-bbff-4c5f-8a53-785948fc32cc" />
 
 새로운 방식의, 한영전환 딜레이 없는 꾹 눌러 대소전환 기능입니다.
 - **한영키 길게 눌러 대소문자 전환**: 기존 방식과 다르게 누를때 즉시 한영 전환된 후, 길게 유지한다면 대소문자 변환하는 방식으로 **딜레이 없음**
 - **한영 전환 대소문자 보존**: 영문 대문자 상태에서 한글로 전환해도 영어로 돌아오면 대문자 유지
 
-<img width="210" alt="menu bar demo" src="https://github.com/user-attachments/assets/9719494e-8f66-4768-859e-c7c4f5cb2db4" />
+### 메뉴바
+
+<img width="302" alt="메뉴바" src="docs/images/menubar.gif" />
 
 기존 메뉴바의 입력기 아이콘을 대체해 공간을 절약합니다. 아이콘도 바꿀 수 있어요.
 
+### 다국어 설정
+
+<img width="560" alt="입력 소스 설정" src="docs/images/input-sources.png" />
+
+- **다국어 지원**: 중국어, 일본어 등 다른 입력 소스도 전환 가능
+- **전환키 분리 설정**: 한영 키로 같이 순회하거나, 언어별 전용 키로 전환 설정 가능
+
+### 그 외
+
 - **특수문자 입력**: 한글 상태에서도 `⌥+문자` 특수문자를 영어처럼 입력하거나, Option 문자 입력을 비활성화
 - **₩와 `` ` `` 반전**: 한글 상태에서도 영어처럼 ₩ 대신 `` ` ``를 입력하고, `⌥+₩`로 ₩를 입력
-- **다국어 지원 (beta)**: 중국어·일본어 등 다른 입력 소스를 한영 키로 순회하거나, 별도 키로 전환
+- **유니버설 컨트롤 호환**: 유니버설 컨트롤로 다른 Mac의 키보드를 쓸 때도 한영 전환
 - **CLI**: Hammerspoon 등에서 설정 변경, 일시정지, 입력 소스 전환 ([CLI 문서](docs/cli.md))
 - 그 외에도 맥 입력기의 불편한 점들을 개선하기 위한 다양한 기능을 제공합니다!
 
@@ -40,7 +72,7 @@ brew install --cask codingnoye/tap/gksdud
 
 ### B. 직접 설치
 
-1. [릴리즈 페이지](https://github.com/codingnoye/gksdud/releases/latest)에서 `gksdud-<버전명>.dmg` 파일을 내려받습니다.
+1. [다운로드 페이지](https://gksdud.noye.dev) 또는 [릴리즈 페이지](https://github.com/codingnoye/gksdud/releases/latest)에서 `gksdud-<버전명>.dmg` 파일을 내려받습니다.
 2. DMG를 열고 gksdud를 **Applications**로 끌어옮깁니다.
 3. gksdud를 실행합니다.
 
