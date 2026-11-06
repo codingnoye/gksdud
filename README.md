@@ -103,4 +103,4 @@ brew install --cask codingnoye/tap/gksdud
 
 ## 라이선스
 
-[MIT](LICENSE) ,  © 2026 CodingNoye ,  codingnoye@gmail.com
+[Apache-2.0](LICENSE) ,  © 2026 CodingNoye ,  codingnoye@gmail.com

@@ -16,4 +16,4 @@ brew install --cask codingnoye/tap/gksdud
 
 앱에서 바로 업데이트하거나, Homebrew로 설치했다면 `brew upgrade --cask codingnoye/tap/gksdud`로도 업데이트할 수 있습니다.
 
-MIT License, © 2026 CodingNoye
+Apache License 2.0, © 2026 CodingNoye
