@@ -809,14 +809,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     // The source a switch is on its way to, and one that waits for it to land.
     var switchLanding: String?
     var sourceArrival: SourceArrival?
-    var sourceRetries = 1
     var queuedSwitch: (target: InputSourceIdentity, pulse: (CGEvent, CGEvent))?
-    // The next-source shortcut on its way, and where it went instead of the expected source, until the sources change.
+    // The next-source shortcut on its way. Unexpected arrivals cannot be attributed to this shortcut.
     var nextSent: (from: String, target: String, key: String)?
-    var missedNext: [String: String] = [:]
     // Keys typed while such a switch is on its way.
     var holdKeys = false
     var heldKeys: [CGEvent] = []
+    var bufferedSourceKeys: Set<Int64> = []
+    var sourceDiscardedKeys = SourceDiscardedKeys()
+    var postHeldKey: (CGEvent) -> Void = { $0.post(tap: .cghidEventTap) }
     var sourceCache: (list: [InputSourceIdentity], layouts: Set<String>)?
     // With added sources, selections that end where they started notify too; they change nothing to restore.
     var sourceNotifications = SourceNotifications()
@@ -922,6 +923,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 }
                 // Keys this app posts again, such as ones held while a switch landed, act only once.
                 let ours = event.getIntegerValueField(.eventSourceUserData) == owner.nativePulseMarker
+                if !ours && owner.sourceDiscardedKeys.consumes(event) { return nil }
                 if type == .leftMouseDown || type == .rightMouseDown || type == .otherMouseDown { owner.sourceMouseDown() }
                 if !ours && (type == .keyDown || type == .flagsChanged) {
                     owner.spaceGate.note(type: type, code: event.getIntegerValueField(.keyboardEventKeycode), flags: event.flags)
@@ -960,8 +962,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 // Keys typed before a switch with selections lands wait for it, so they reach the source it lands on.
                 if owner.holdKeys && code != Int64(owner.engine.target.keyCode) && owner.sourceKeyTarget(code) == nil
                     && !owner.pressGate.held.contains(code) && !owner.sourceKeyGate.held.contains(code) && owner.longPress.key != code {
-                    owner.holdKey(event)
-                    return nil
+                    if owner.holdKey(event) { return nil }
                 }
                 owner.swapBackquote(event)
                 // A source's key's F-key only switches, on press like the Korean/English key.
@@ -1581,7 +1582,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     // A source's key maps or goes back to the keyboard as its source comes and goes.
     @objc func enabledSourcesChanged() {
         RunLoop.main.perform(inModes: [.common]) { [weak self] in
-            self?.sourceCache = nil; self?.nativeIconCache = [:]; self?.missedNext = [:]; self?.engine.nextFailure.clear(); self?.repair(); self?.addedSources.refresh(force: true)
+            self?.sourceCache = nil; self?.nativeIconCache = [:]; self?.engine.nextFailure.clear(); self?.repair(); self?.addedSources.refresh(force: true)
         }
     }
     func updateInputIndicator() {
@@ -1686,7 +1687,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         menuInputTimer = nil
     }
     func selectLanguage(_ prefix: String) {
-        cancelSourceSwitch()
+        cancelSourceSwitch(discardKeys: true)
         if let source = menuLanguageSource(prefix).flatMap({ Self.sourceForID($0.id) }) { rememberCapsBeforeSwitch(); _ = TISSelectInputSource(source) }
         updateInputIndicator()
     }

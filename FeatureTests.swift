@@ -1119,10 +1119,6 @@ func runAddedSourceTests() {
     featureCheck(plan(ko, zh, next: "ko2", previous: "abc") == SwitchPlan(selections: ["zh", "ko2"], risky: false))
     featureCheck(plan(ko, abc, next: "ja", previous: "ja") == SwitchPlan(selections: ["abc", "ko2"], risky: true)
         && plan(ko, abc, next: nil, previous: nil).risky, "Only a lost setup leaves Korean's syllable at risk")
-    featureCheck(reselectsTarget(landed: false, current: "ja", origin: "ja", targetIsLayout: true), "A switch that did not land ends on its layout")
-    featureCheck(!reselectsTarget(landed: true, current: "ja", origin: "ja", targetIsLayout: true), "Back where it started after it landed stays there")
-    featureCheck(!reselectsTarget(landed: false, current: "abc", origin: "ja", targetIsLayout: true)
-        && !reselectsTarget(landed: false, current: "ja", origin: "ja", targetIsLayout: false), "Elsewhere, or toward an input method, nothing is selected")
     featureCheck(!waitsBetweenSelections(bundles: ["com.apple.inputmethod.Korean", "com.apple.keyboardlayout.all", nil], always: false)
         && waitsBetweenSelections(bundles: ["com.apple.inputmethod.Korean", "com.tencent.inputmethod.wetype"], always: false),
         "Selections wait for each other only around a third-party input method")
@@ -1438,14 +1434,80 @@ func runSourceSwitchTests() {
     delegate.sourceMouseDown()
     featureCheck(delegate.switchLanding == nil && delegate.queuedSwitch == nil && delegate.sourceSwitchOwner == nil,
         "A mouse interaction cancels corrections and queued requests before a manual menu selection")
-    delegate.sourceRetries = 0
-    featureCheck(!delegate.retrySourceSwitch(to: "com.example.Target"), "Corrections cannot resend indefinitely")
     let rejectedGeneration = delegate.landingGeneration
     featureCheck(!delegate.switchSource(to: InputSourceIdentity(id: "com.example.Target", language: "en"),
         from: InputSourceIdentity(id: "com.example.Origin", language: "ko"), pulse: (CGEvent(source: nil)!, CGEvent(source: nil)!), owner: -1)
-        && delegate.sourceSwitchOwner == nil && delegate.landingGeneration == rejectedGeneration && delegate.sourceRetries == 0,
+        && delegate.sourceSwitchOwner == nil && delegate.landingGeneration == rejectedGeneration,
         "A stale app owner is rejected before adopting a new front app or preparing any source")
-    print("PASS: source switch cancellation, stale app ownership, queued request cancellation and bounded corrections")
+    var posted: [CGEvent] = []
+    delegate.postHeldKey = { posted.append($0) }
+    func key(_ down: Bool, repeated: Bool = false) -> CGEvent {
+        let event = CGEvent(keyboardEventSource: nil, virtualKey: 5, keyDown: down)!
+        event.setIntegerValueField(.keyboardEventAutorepeat, value: repeated ? 1 : 0)
+        return event
+    }
+    delegate.switchLanding = "target"
+    delegate.sourceSwitchOwner = NSWorkspace.shared.frontmostApplication?.processIdentifier
+    delegate.holdKeys = true; delegate.heldKeys = [key(true)]
+    delegate.sourceMouseDown()
+    featureCheck(posted.isEmpty && delegate.heldKeys.isEmpty && !delegate.holdKeys,
+        "Clicking another field in the same app discards buffered text instead of posting it under the click")
+    featureCheck(delegate.sourceDiscardedKeys.consumes(key(true, repeated: true))
+        && delegate.sourceDiscardedKeys.consumes(key(false)) && !delegate.sourceDiscardedKeys.consumes(key(true)),
+        "Discarded presses keep their repeats and release out of the new field, without swallowing a new press")
+    delegate.sourceDiscardedKeys.discard([key(true)])
+    featureCheck(!delegate.sourceDiscardedKeys.consumes(key(true)), "A fresh press recovers when the old release was lost")
+    delegate.sourceDiscardedKeys.discard([key(true), key(false)])
+    featureCheck(!delegate.sourceDiscardedKeys.consumes(key(false)), "A fully discarded pair does not claim an unrelated release")
+    featureCheck(!delegate.holdKey(key(false)) && delegate.heldKeys.isEmpty,
+        "A release whose press already reached the app is never captured and discarded")
+    featureCheck(!delegate.holdKey(key(true, repeated: true)) && !delegate.holdKey(key(false)) && delegate.heldKeys.isEmpty,
+        "Repeating an already delivered press cannot transfer ownership of its release into the buffer")
+    featureCheck(delegate.holdKey(key(true)) && delegate.holdKey(key(false)) && delegate.bufferedSourceKeys.isEmpty,
+        "Only a buffered press claims its release")
+    delegate.discardHeldKeys()
+    for external in ["origin", "foreign"] {
+        delegate.switchLanding = "target"
+        delegate.sourceSwitchOwner = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        delegate.sourceHistory = SourceHistory(["origin", "target"])
+        delegate.sourceArrival = SourceArrival(target: "target", origin: "origin")
+        delegate.sourceArrival?.observe("target", at: 1)
+        delegate.sourceArrival?.observe(external, at: 1.01)
+        delegate.queuedSwitch = (InputSourceIdentity(id: "queued", language: "en"), (CGEvent(source: nil)!, CGEvent(source: nil)!))
+        delegate.holdKeys = true; delegate.heldKeys = [key(true), key(false)]
+        delegate.settleSourceArrival(external, at: 1.1)
+        featureCheck(delegate.switchLanding == nil && delegate.sourceArrival == nil && delegate.queuedSwitch == nil
+            && delegate.sourceSwitchOwner == nil && delegate.heldKeys.isEmpty && !delegate.holdKeys && posted.isEmpty
+            && delegate.sourceHistory.previous(of: "origin") == nil && delegate.logicalSource == delegate.currentSource,
+            "An external return or third source cancels the old goal and queue; the next key starts from the actual source")
+    }
+    delegate.sourceSwitchOwner = NSWorkspace.shared.frontmostApplication?.processIdentifier
+    delegate.switchLanding = "target"
+    delegate.sourceArrival = SourceArrival(target: "target", origin: "origin")
+    delegate.sourceArrival?.observe("origin", at: 1)
+    delegate.settleSourceArrival("origin", at: 1.1)
+    featureCheck(delegate.switchLanding == "target" && posted.isEmpty, "An unchanged origin waits without sending another pulse")
+    delegate.sourceArrival?.observe("foreign", at: 1.2)
+    delegate.settleSourceArrival("foreign", at: 1.3)
+    featureCheck(delegate.switchLanding == nil && posted.isEmpty, "A third source is preserved even when the target was never seen")
+    delegate.sourceSwitchOwner = NSWorkspace.shared.frontmostApplication?.processIdentifier
+    delegate.switchLanding = "target"
+    delegate.sourceArrival = SourceArrival(target: "target", origin: "origin")
+    delegate.sourceArrival?.observe("target", at: 2)
+    delegate.holdKeys = true; delegate.heldKeys = [key(true), key(false)]
+    delegate.settleSourceArrival("target", at: 2.1)
+    featureCheck(delegate.switchLanding == nil && !delegate.holdKeys && posted.count == 2,
+        "A stable intended arrival still releases its buffered press and release in order")
+    delegate.sourceSwitchOwner = NSWorkspace.shared.frontmostApplication?.processIdentifier
+    delegate.switchLanding = "target"
+    delegate.holdKeys = true; delegate.heldKeys = [key(true), key(false)]
+    let timeoutGeneration = delegate.landingGeneration
+    delegate.expireSourceSwitch(generation: timeoutGeneration - 1, owner: delegate.sourceSwitchOwner)
+    featureCheck(delegate.switchLanding == "target" && posted.count == 2, "A stale timeout cannot finish another request")
+    delegate.expireSourceSwitch(generation: timeoutGeneration, owner: delegate.sourceSwitchOwner)
+    featureCheck(delegate.switchLanding == nil && !delegate.holdKeys && posted.count == 4,
+        "A timeout in the same input window releases normal text without forcing an input source")
+    print("PASS: source switch ownership, same-app click buffer disposal, discarded releases, external choices and queued cancellation")
 }
 
 #endif
