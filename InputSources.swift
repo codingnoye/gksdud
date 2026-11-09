@@ -362,15 +362,18 @@ extension AppDelegate {
             return true
         }
         let setup = plannedSwitch(to: target, from: current), plan = setup.plan
+        let bundles = ([current.id] + plan.selections + Array(sourceHistory.ids.prefix(2))).map(Self.bundleID)
+        // A recently left third-party IME can retain stale state even when the history itself is known.
+        let fresh = setup.fresh || waitsBetweenSelections(bundles: bundles, always: false)
         let waits = plan.selections.count > 1
-            && waitsBetweenSelections(bundles: ([current.id] + plan.selections + Array(sourceHistory.ids.prefix(2))).map(Self.bundleID), always: engine.addedSourcesCompatible)
+            && waitsBetweenSelections(bundles: bundles, always: engine.addedSourcesCompatible)
         var failed = Self.sourceForID(target.id) == nil
         if !plan.selections.isEmpty { sourceHistory.invalidatePrevious() }
         for (index, id) in plan.selections.enumerated() where !failed {
             if index > 0 && waits { usleep(50_000) }
             guard canContinue() else { return false }
             guard let source = Self.sourceForID(id),
-                  setup.fresh ? selectSourceInHelper(id, canContinue: canContinue) : TISSelectInputSource(source) == noErr else { failed = true; break }
+                  fresh ? selectSourceInHelper(id, canContinue: canContinue) : TISSelectInputSource(source) == noErr else { failed = true; break }
         }
         guard generation == landingGeneration else { return false }
         guard !failed else {
