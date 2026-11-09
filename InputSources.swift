@@ -118,7 +118,8 @@ func waitsBetweenSelections(bundles: [String?], always: Bool) -> Bool {
 // for each selection. waitpid avoids Process.waitUntilExit's nested main run loop, and the child has a bounded lifetime.
 func selectSourceInHelper(_ id: String, executable: URL? = nil, canContinue: () -> Bool) -> Bool {
     let path = (executable ?? Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/gksdud")).path
-    var arguments = [path, "--select-input-source", id].map { strdup($0) } + [nil]
+    let values = [path, "--select-input-source", id]
+    var arguments: [UnsafeMutablePointer<CChar>?] = values.map { value in value.withCString { strdup($0) } } + [nil]
     defer { for argument in arguments { free(argument) } }
     var pid: pid_t = 0
     guard posix_spawn(&pid, path, nil, nil, &arguments, environ) == 0 else { return false }
