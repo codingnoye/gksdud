@@ -451,8 +451,7 @@ final class Engine {
     }
     // Set once the shortcut is written and active, so a pulse on that F-key switches.
     private(set) var liveNextTarget: TargetKey?
-    // The F-key whose pulse changed nothing; a new write or restore of the shortcut tries it again.
-    var nextFailedKey: String?
+    var nextFailure = NextSourceFailure()
     func updateNextShortcut() throws {
         guard let next = nextTarget else { try restoreNextShortcut(); return }
         var keys = shortcutPreferences.read()
@@ -477,7 +476,7 @@ final class Engine {
             defaults.set(keys["61"], forKey: "originalNextShortcut")
             defaults.set(true, forKey: "nextShortcutBackedUp")
         }
-        liveNextTarget = nil; nextFailedKey = nil
+        liveNextTarget = nil; nextFailure.clear()
         defaults.removeObject(forKey: "nextRestorePending")
         keys["61"] = ["enabled": true, "value": ["type": "standard", "parameters": [65535, next.keyCode, 0]]] as [String: Any]
         defaults.set(true, forKey: "nextActivatePending")
@@ -495,7 +494,7 @@ final class Engine {
     }
     // Gives the user's own next-source shortcut back, unless it was changed since.
     func restoreNextShortcut() throws {
-        liveNextTarget = nil; nextFailedKey = nil
+        liveNextTarget = nil; nextFailure.clear()
         guard defaults.bool(forKey: "nextShortcutBackedUp") else { return }
         settingsUpdateDepth += 1
         defer { settingsUpdateDepth -= 1 }
@@ -806,8 +805,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     var nativeRemote = NativeRemoteGate()
     var sourceHistory = SourceHistory()
     var landingGeneration = 0
+    var sourceSwitchOwner: pid_t?
     // The source a switch is on its way to, and one that waits for it to land.
     var switchLanding: String?
+    var sourceArrival: SourceArrival?
+    var sourceRetries = 1
     var queuedSwitch: (target: InputSourceIdentity, pulse: (CGEvent, CGEvent))?
     // The next-source shortcut on its way, and where it went instead of the expected source, until the sources change.
     var nextSent: (from: String, target: String, key: String)?
@@ -883,6 +885,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         permissionSettingsWasActive = false
     }
     func stopKeyTap() {
+        cancelSourceSwitch()
         optionInput.cancel()
         cancelCapsRestore()
         englishCaps.reset()
@@ -919,6 +922,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 }
                 // Keys this app posts again, such as ones held while a switch landed, act only once.
                 let ours = event.getIntegerValueField(.eventSourceUserData) == owner.nativePulseMarker
+                if type == .leftMouseDown || type == .rightMouseDown || type == .otherMouseDown { owner.sourceMouseDown() }
                 if !ours && (type == .keyDown || type == .flagsChanged) {
                     owner.spaceGate.note(type: type, code: event.getIntegerValueField(.keyboardEventKeycode), flags: event.flags)
                     // Modifier events carry the lock, also a change no key made. A Caps Lock press right after a lock set by
@@ -1357,8 +1361,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         observers.append(center.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] _ in
             self?.optionInput.cancel(focusChanged: true)
             self?.updateRemoteHold()
+            if let self, let owner = self.sourceSwitchOwner, owner != NSWorkspace.shared.frontmostApplication?.processIdentifier { self.cancelSourceSwitch() }
         })
-        observers.append(center.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in self?.optionInput.cancel() })
+        observers.append(center.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.cancelSourceSwitch(); self?.optionInput.cancel()
+        })
         for name in [NSWorkspace.didWakeNotification, NSWorkspace.screensDidWakeNotification, NSWorkspace.sessionDidBecomeActiveNotification] {
             observers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in self?.recover() })
         }
@@ -1558,12 +1565,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             guard let self else { return }
             let id = self.currentSource?.id
             if let id { self.sourceHistory.note(id) }
-            self.nextLanded(id)
-            if id == self.switchLanding {
-                self.switchLanding = nil
-                // After this notification is handled, like a key pressed now.
-                DispatchQueue.main.async { [weak self] in self?.runQueuedSwitch() }
-            }
+            self.observeSourceArrival(id)
             let added = self.addedSourcesActive
             guard self.sourceNotifications.handles(id, addedSources: added) else { return }
             // The switch on its way has landed, so the next ESC needs its own. With added sources the selections before a
@@ -1579,7 +1581,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     // A source's key maps or goes back to the keyboard as its source comes and goes.
     @objc func enabledSourcesChanged() {
         RunLoop.main.perform(inModes: [.common]) { [weak self] in
-            self?.sourceCache = nil; self?.nativeIconCache = [:]; self?.missedNext = [:]; self?.engine.nextFailedKey = nil; self?.repair(); self?.addedSources.refresh(force: true)
+            self?.sourceCache = nil; self?.nativeIconCache = [:]; self?.missedNext = [:]; self?.engine.nextFailure.clear(); self?.repair(); self?.addedSources.refresh(force: true)
         }
     }
     func updateInputIndicator() {
@@ -1684,6 +1686,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         menuInputTimer = nil
     }
     func selectLanguage(_ prefix: String) {
+        cancelSourceSwitch()
         if let source = menuLanguageSource(prefix).flatMap({ Self.sourceForID($0.id) }) { rememberCapsBeforeSwitch(); _ = TISSelectInputSource(source) }
         updateInputIndicator()
     }
@@ -1781,7 +1784,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         do { try engine.restore(); lastError = ""; stickyError = ""; repairFailed = false; refreshStatus() } catch { report(error) }
         resetSelection(); syncCapsPreservation(); updatePressAccess(); refreshKeyboardState()
     }
-    func recover() { sourceCache = nil; engine.nextFailedKey = nil; engine.followedNext = nil; observedCaps = nil; queuedSwitch = nil; releaseHeldKeys(); optionInput.cancel(); if capsRestoreTasks.isEmpty { englishCaps.switching = false }; cancelLongPress(); longPress = LongPressState(); pressGate.held.removeAll(); nativeRemote = NativeRemoteGate(); spaceGate = SpaceComboGate(); sourceKeyGate.held.removeAll(); for delay in [0.5, 2.0, 5.0] { DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.repair() } } }
+    func recover() { cancelSourceSwitch(); sourceCache = nil; engine.nextFailure.clear(); engine.followedNext = nil; observedCaps = nil; optionInput.cancel(); if capsRestoreTasks.isEmpty { englishCaps.switching = false }; cancelLongPress(); longPress = LongPressState(); pressGate.held.removeAll(); nativeRemote = NativeRemoteGate(); spaceGate = SpaceComboGate(); sourceKeyGate.held.removeAll(); for delay in [0.5, 2.0, 5.0] { DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.repair() } } }
     // The tap does not see Caps Lock on another user's login window, and leaves it alone on the lock screen. Coming back
     // with English (or Korean showing the English case) selected, the lock as left there is the English case. A restore on
     // its way finishes first: unlocking can land in Korean while its input method turns the lock off.
@@ -1792,6 +1795,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
     // The 1-second repair follows the lock too; this only makes it sooner.
     @objc func screenLockChanged(_ notification: Notification) {
+        cancelSourceSwitch()
         // Key releases on the lock screen never reached the tap, so keys held before it count as released.
         if notification.name.rawValue == "com.apple.screenIsUnlocked" { recover() }
         repair()

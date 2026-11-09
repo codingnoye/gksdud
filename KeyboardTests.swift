@@ -1114,12 +1114,12 @@ func runSourceKeyTests() {
     try? relaunched.resume()
     precondition(Engine.ownsShortcut(hotkeys["61"], keyCode: targets[0].keyCode) && relaunched.liveNextTarget?.name == "F13",
         "On launch, F16 taken by another shortcut is stepped around")
-    hotkeys["32"] = nil; relaunched.refreshSystemFKeys(); activations = 0; relaunched.nextFailedKey = "F13"
+    hotkeys["32"] = nil; relaunched.refreshSystemFKeys(); activations = 0; relaunched.nextFailure.failed("F13", at: ProcessInfo.processInfo.systemUptime)
     _ = try? relaunched.followNextTarget()
-    precondition(relaunched.liveNextTarget?.name == "F13" && activations == 0 && relaunched.nextFailedKey == "F13",
+    precondition(relaunched.liveNextTarget?.name == "F13" && activations == 0 && relaunched.nextFailure.key == "F13",
         "The one set stays while it is free, and so does its failure")
     nextDefaults.set(false, forKey: "addedSources"); _ = try? relaunched.followNextTarget()
-    precondition(NSDictionary(dictionary: hotkeys["61"] as! [String: Any]).isEqual(to: userNext) && relaunched.nextFailedKey == nil,
+    precondition(NSDictionary(dictionary: hotkeys["61"] as! [String: Any]).isEqual(to: userNext) && relaunched.nextFailure.key == nil,
         "Turned off, repair gives it back and forgets the failure")
     // A restore written but not activated is activated the next time.
     nextDefaults.set(true, forKey: "addedSources"); try? relaunched.updateNextShortcut()
@@ -1155,9 +1155,9 @@ func runSourceKeyTests() {
     mappedDefaults.set(true, forKey: "active"); mappedDefaults.set(true, forKey: "addedSources")
     try? mapped.resume()
     precondition(mapped.liveNextTarget?.name == "F16", "Before any mapping is read, F16")
-    mapped.nextFailedKey = "F16"; try? mapped.repair()
+    mapped.nextFailure.failed("F16", at: ProcessInfo.processInfo.systemUptime); try? mapped.repair()
     precondition(Engine.ownsShortcut(hotkeys["61"], keyCode: targets[0].keyCode) && mapped.liveNextTarget?.name == "F13"
-        && other.mappings.contains(mapping(0x7000000e2, targets[3].usage)) && mapped.nextFailedKey == nil,
+        && other.mappings.contains(mapping(0x7000000e2, targets[3].usage)) && mapped.nextFailure.key == nil,
         "then F13, leaving F16 to the other mapping, with the failure forgotten")
     activations = 0; try? mapped.repair()
     precondition(activations == 0, "and it stays")
@@ -1268,8 +1268,9 @@ func runSourceKeyTapTests() {
     precondition(delegate.takesSourceKey(code), "Freed again, it is taken again")
     let gone = InputSourceIdentity(id: "io.gksdud.test.gone", language: "ja"), here = InputSourceIdentity(id: "io.gksdud.test.here", language: "ko")
     delegate.sourceCache = (list: [gone, here], layouts: [])
+    delegate.sourceHistory = SourceHistory([here.id, gone.id])
     precondition(!delegate.switchSource(to: gone, from: here, pulse: (CGEvent(source: nil)!, CGEvent(source: nil)!))
-        && delegate.switchLanding == nil && delegate.sourceCache?.list.contains(gone) != true,
+        && delegate.switchLanding == nil && delegate.sourceCache?.list.contains(gone) != true && delegate.sourceHistory.previous(of: here.id) == nil,
         "A source that is gone is not switched to, the shortcut is not sent, and macOS's list is read again")
     engine.disabledSources = [pinyin]
     precondition(!delegate.takesSourceKey(code) || delegate.sourceKeyTarget(code) != pinyin, "Turned off, its key is not taken")

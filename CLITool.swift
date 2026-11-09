@@ -1,4 +1,5 @@
 import Foundation
+import Carbon
 
 // The gksdud command. The running app applies what it asks for, as its settings window would, and replies with text and
 // JSON to print. Help, the version and launching the app need no app.
@@ -8,6 +9,13 @@ enum Tool {
     static var json = false
 
     static func main() {
+        // One fresh TIS connection per selection when the app repairs an input method's stale native history.
+        if arguments.first == "--select-input-source" {
+            guard arguments.count == 2,
+                  let list = TISCreateInputSourceList([kTISPropertyInputSourceID as String: arguments[1]] as CFDictionary, false)?.takeRetainedValue() as? [TISInputSource],
+                  let source = list.first else { exit(1) }
+            exit(TISSelectInputSource(source) == noErr ? 0 : 1)
+        }
         let invocation: CLI.Invocation
         json = arguments.contains("-j") || arguments.contains("--json")
         do { invocation = try CLI.parse(arguments) } catch { finish(error.localizedDescription, CLI.Exit.usage) }

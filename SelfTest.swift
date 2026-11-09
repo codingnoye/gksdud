@@ -35,6 +35,7 @@ func runSelfTest() {
     runSessionAwayTests()
     runCapsLockKeyTests()
     runAddedSourceTests()
+    runSourceSwitchTests()
     runSourceKeyTests()
     runSourceKeyTapTests()
     runSourceKeyWarningTests()
