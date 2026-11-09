@@ -1467,6 +1467,7 @@ func runSourceSwitchTests() {
         "Only a buffered press claims its release")
     delegate.discardHeldKeys()
     for external in ["origin", "foreign"] {
+        let beforeInterrupt = posted.count
         delegate.switchLanding = "target"
         delegate.sourceSwitchOwner = NSWorkspace.shared.frontmostApplication?.processIdentifier
         delegate.sourceHistory = SourceHistory(["origin", "target"])
@@ -1477,35 +1478,36 @@ func runSourceSwitchTests() {
         delegate.holdKeys = true; delegate.heldKeys = [key(true), key(false)]
         delegate.settleSourceArrival(external, at: 1.1)
         featureCheck(delegate.switchLanding == nil && delegate.sourceArrival == nil && delegate.queuedSwitch == nil
-            && delegate.sourceSwitchOwner == nil && delegate.heldKeys.isEmpty && !delegate.holdKeys && posted.isEmpty
+            && delegate.sourceSwitchOwner == nil && delegate.heldKeys.isEmpty && !delegate.holdKeys && posted.count == beforeInterrupt + 2
             && delegate.sourceHistory.previous(of: "origin") == nil && delegate.logicalSource == delegate.currentSource,
-            "An external return or third source cancels the old goal and queue; the next key starts from the actual source")
+            "An external choice cancels the old goal and queue but preserves same-field text; the next key starts from the actual source")
     }
+    let afterInterrupts = posted.count
     delegate.sourceSwitchOwner = NSWorkspace.shared.frontmostApplication?.processIdentifier
     delegate.switchLanding = "target"
     delegate.sourceArrival = SourceArrival(target: "target", origin: "origin")
     delegate.sourceArrival?.observe("origin", at: 1)
     delegate.settleSourceArrival("origin", at: 1.1)
-    featureCheck(delegate.switchLanding == "target" && posted.isEmpty, "An unchanged origin waits without sending another pulse")
+    featureCheck(delegate.switchLanding == "target" && posted.count == afterInterrupts, "An unchanged origin waits without sending another pulse")
     delegate.sourceArrival?.observe("foreign", at: 1.2)
     delegate.settleSourceArrival("foreign", at: 1.3)
-    featureCheck(delegate.switchLanding == nil && posted.isEmpty, "A third source is preserved even when the target was never seen")
+    featureCheck(delegate.switchLanding == nil && posted.count == afterInterrupts, "A third source is preserved even when the target was never seen")
     delegate.sourceSwitchOwner = NSWorkspace.shared.frontmostApplication?.processIdentifier
     delegate.switchLanding = "target"
     delegate.sourceArrival = SourceArrival(target: "target", origin: "origin")
     delegate.sourceArrival?.observe("target", at: 2)
     delegate.holdKeys = true; delegate.heldKeys = [key(true), key(false)]
     delegate.settleSourceArrival("target", at: 2.1)
-    featureCheck(delegate.switchLanding == nil && !delegate.holdKeys && posted.count == 2,
+    featureCheck(delegate.switchLanding == nil && !delegate.holdKeys && posted.count == afterInterrupts + 2,
         "A stable intended arrival still releases its buffered press and release in order")
     delegate.sourceSwitchOwner = NSWorkspace.shared.frontmostApplication?.processIdentifier
     delegate.switchLanding = "target"
     delegate.holdKeys = true; delegate.heldKeys = [key(true), key(false)]
     let timeoutGeneration = delegate.landingGeneration
     delegate.expireSourceSwitch(generation: timeoutGeneration - 1, owner: delegate.sourceSwitchOwner)
-    featureCheck(delegate.switchLanding == "target" && posted.count == 2, "A stale timeout cannot finish another request")
+    featureCheck(delegate.switchLanding == "target" && posted.count == afterInterrupts + 2, "A stale timeout cannot finish another request")
     delegate.expireSourceSwitch(generation: timeoutGeneration, owner: delegate.sourceSwitchOwner)
-    featureCheck(delegate.switchLanding == nil && !delegate.holdKeys && posted.count == 4,
+    featureCheck(delegate.switchLanding == nil && !delegate.holdKeys && posted.count == afterInterrupts + 4,
         "A timeout in the same input window releases normal text without forcing an input source")
     print("PASS: source switch ownership, same-app click buffer disposal, discarded releases, external choices and queued cancellation")
 }

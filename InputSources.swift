@@ -430,7 +430,7 @@ extension AppDelegate {
             // An external selection and a misdirected pulse look identical. Never force the old target back or run its
             // queued request: the next explicit key starts from the actual source and rebuilds uncertain history.
             if let sent = nextSent { engine.nextFailure.failed(sent.key, at: now) }
-            cancelSourceSwitch(discardKeys: true)
+            cancelSourceSwitch()
             updateInputIndicator()
         }
     }
