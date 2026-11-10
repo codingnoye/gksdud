@@ -1798,8 +1798,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
     // The 1-second repair follows the lock too; this only makes it sooner.
     @objc func screenLockChanged(_ notification: Notification) {
-        // Keys held for a switch are dropped: released now, they would go into the lock screen's password field.
-        cancelSourceSwitch(discardKeys: true)
+        // Keys held for a switch are dropped when locking: released now, they would go into the password field.
+        cancelSourceSwitch(discardKeys: notification.name.rawValue == "com.apple.screenIsLocked")
         // Key releases on the lock screen never reached the tap, so keys held before it count as released.
         if notification.name.rawValue == "com.apple.screenIsUnlocked" { recover() }
         repair()

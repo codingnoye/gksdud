@@ -155,23 +155,28 @@ func selectSourcesInHelpers(_ ids: [String], executable: URL? = nil, gap: usecon
     var waiting: [(pid: pid_t, gate: Int32)] = []
     func stop(_ pid: pid_t) { var status: Int32 = 0; kill(pid, SIGKILL); while waitpid(pid, &status, 0) == -1 && errno == EINTR {} }
     // However this ends, no helper is left to select later.
-    defer { for helper in waiting { close(helper.gate); stop(helper.pid) } }
+    defer { for helper in waiting { stop(helper.pid); close(helper.gate) } }
     for id in ids {
         var ends: [Int32] = [0, 0]
         guard pipe(&ends) == 0 else { return false }
-        for end in ends { _ = fcntl(end, F_SETFD, FD_CLOEXEC) }
+        // Above the standard descriptors: an app started without a stdin would get 0, and a descriptor placed onto
+        // itself stays closed in the helper.
+        let reader = fcntl(ends[0], F_DUPFD_CLOEXEC, 3)
+        close(ends[0])
+        guard reader >= 0 else { close(ends[1]); return false }
+        _ = fcntl(ends[1], F_SETFD, FD_CLOEXEC)
         // A helper that died early must not take the app with it.
         _ = fcntl(ends[1], F_SETNOSIGPIPE, 1)
         var actions: posix_spawn_file_actions_t?
         posix_spawn_file_actions_init(&actions)
-        posix_spawn_file_actions_adddup2(&actions, ends[0], STDIN_FILENO)
+        posix_spawn_file_actions_adddup2(&actions, reader, STDIN_FILENO)
         let values = [path, "--select-input-source", id]
         var arguments: [UnsafeMutablePointer<CChar>?] = values.map { value in value.withCString { strdup($0) } } + [nil]
         var pid: pid_t = 0
         let spawned = posix_spawn(&pid, path, &actions, nil, &arguments, environ) == 0
         posix_spawn_file_actions_destroy(&actions)
         for argument in arguments { free(argument) }
-        close(ends[0])
+        close(reader)
         guard spawned else { close(ends[1]); return false }
         waiting.append((pid, ends[1]))
     }
