@@ -7,12 +7,20 @@ import Carbon
 func isKorean(_ source: InputSourceIdentity) -> Bool { source.language.hasPrefix("ko") }
 func isEnglish(_ source: InputSourceIdentity) -> Bool { source.language.hasPrefix("en") }
 
-// Recently selected input sources, most recent first: the second is where the system shortcut goes.
+// Recently observed sources. Notifications can omit intermediate selections, so this list alone does not establish
+// where the native previous-source shortcut goes.
 struct SourceHistory {
     private(set) var ids: [String] = []
+    private var previousIsKnown = true
     init(_ ids: [String] = []) { self.ids = ids }
-    // Unknown unless the first entry is the current source.
-    func previous(of current: String) -> String? { ids.first == current && ids.count > 1 ? ids[1] : nil }
+    // External selections can change the native previous source without reporting each intermediate selection.
+    // Keep recency for cycle/source-key choices, but do not trust it as the shortcut's destination until set up again.
+    mutating func invalidatePrevious() { previousIsKnown = false }
+    mutating func preparedPrevious() { previousIsKnown = true }
+    func previous(of current: String) -> String? { previousIsKnown && ids.first == current && ids.count > 1 ? ids[1] : nil }
+    func validatedPrevious(of current: String, system: [String]) -> String? {
+        previousIsKnown && system.first == current && system.count > 1 ? system[1] : nil
+    }
     mutating func note(_ id: String) {
         ids.removeAll { $0 == id }; ids.insert(id, at: 0)
         if ids.count > 16 { ids.removeLast() }
@@ -21,6 +29,68 @@ struct SourceHistory {
     func mostRecent(_ candidates: [InputSourceIdentity]) -> InputSourceIdentity? {
         ids.lazy.compactMap { id in candidates.first { $0.id == id } }.first ?? candidates.first
     }
+}
+
+// Complete an arrival only after the observed source stays put, checking it again before releasing queued work.
+struct SourceArrival {
+    enum Outcome { case waiting, arrived, interrupted }
+    let target: String
+    let origin: String
+    private(set) var observed: String?
+    private(set) var since: TimeInterval = 0
+    private(set) var sawTarget = false
+    static let settling: TimeInterval = 0.03
+    mutating func observe(_ id: String?, at now: TimeInterval) {
+        if observed != id { observed = id; since = now }
+        if id == target { sawTarget = true }
+    }
+    func settled(_ current: String?, at now: TimeInterval) -> Bool {
+        current != nil && current == observed && now - since >= Self.settling
+    }
+    func outcome(_ current: String?, at now: TimeInterval) -> Outcome {
+        guard settled(current, at: now) else { return .waiting }
+        if current == target { return .arrived }
+        return sawTarget || current != origin ? .interrupted : .waiting
+    }
+}
+
+// A press discarded after a click/focus change must not release into the newly selected input field. A fresh press
+// recovers even when a release was lost while the tap was unavailable.
+struct SourceDiscardedKeys {
+    private var codes: Set<Int64> = []
+    mutating func discard(_ events: [CGEvent]) {
+        for event in events {
+            let code = event.getIntegerValueField(.keyboardEventKeycode)
+            if event.type == .keyDown { codes.insert(code) }
+            else if event.type == .keyUp { codes.remove(code) }
+        }
+    }
+    mutating func consumes(_ event: CGEvent) -> Bool {
+        let code = event.getIntegerValueField(.keyboardEventKeycode)
+        guard codes.contains(code) else { return false }
+        if event.type == .keyUp { codes.remove(code); return true }
+        guard event.type == .keyDown else { return false }
+        if event.getIntegerValueField(.keyboardEventAutorepeat) == 0 { codes.remove(code); return false }
+        return true
+    }
+}
+
+// A busy front app can make a working shortcut look broken, so one failure backs off only briefly. Failures in a row,
+// with no arrival in between, back off longer: a shortcut that never switches would lose a press at every retry.
+struct NextSourceFailure {
+    private(set) var key: String?
+    private var retryAt: TimeInterval = 0
+    private var count = 0
+    private var attempt: Int?
+    // `attempt` names the pulse: one that changed nothing in time and then went elsewhere fails once.
+    mutating func failed(_ key: String, at now: TimeInterval, attempt: Int? = nil) {
+        if let attempt, attempt == self.attempt, key == self.key { return }
+        count = key == self.key ? count + 1 : 1
+        self.key = key; self.attempt = attempt
+        retryAt = now + min(600, 5 * pow(4, Double(count - 1)))
+    }
+    mutating func clear() { key = nil; retryAt = 0; count = 0; attempt = nil }
+    func allows(_ key: String, at now: TimeInterval) -> Bool { self.key != key || now >= retryAt }
 }
 
 // With added sources, this app's own selections notify too, so a notification for the source already handled is skipped.
@@ -69,15 +139,65 @@ func switchPlan(current: InputSourceIdentity, target: InputSourceIdentity, next:
     if risky(selections) && isKorean(current) { selections = plan(current.id) }
     return SwitchPlan(selections: selections, risky: risky(selections))
 }
-// When a switch is due and macOS still shows where it started, its target layout is selected again. Once it has landed,
-// a return there is chosen afterwards and stays.
-func reselectsTarget(landed: Bool, current: String?, origin: String, targetIsLayout: Bool) -> Bool {
-    !landed && current == origin && targetIsLayout
+// Back to back in one process, the first of two selections can be lost while a third-party input method such as WeChat's
+// is current or selected, and the shortcut then goes to an older source. Around one, each selection has its own process.
+func involvesThirdParty(_ bundles: [String?]) -> Bool {
+    bundles.contains { $0.map { !$0.hasPrefix("com.apple.") } ?? false }
 }
-// Back to back, the first of two selections can be lost while a third-party input method such as WeChat's is current or
-// selected, and the shortcut then goes to an older source. Apple's need no wait; compatibility mode waits for any.
-func waitsBetweenSelections(bundles: [String?], always: Bool) -> Bool {
-    always || bundles.contains { $0.map { !$0.hasPrefix("com.apple.") } ?? false }
+
+// The same process can retain stale TIS state after another app selects a source, so each selection has a process of its
+// own, which waits for a byte before touching TIS. All start at once, as starting takes longer than selecting, and are
+// told in turn. waitpid avoids Process.waitUntilExit's nested main run loop, and a child has a bounded lifetime.
+// The event tap waits meanwhile, so the selections of one switch share `deadline`.
+func selectSourcesInHelpers(_ ids: [String], executable: URL? = nil, gap: useconds_t = 0,
+                            until deadline: TimeInterval = ProcessInfo.processInfo.systemUptime + 0.75, canContinue: () -> Bool) -> Bool {
+    let path = (executable ?? Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/gksdud")).path
+    var waiting: [(pid: pid_t, gate: Int32)] = []
+    func stop(_ pid: pid_t) { var status: Int32 = 0; kill(pid, SIGKILL); while waitpid(pid, &status, 0) == -1 && errno == EINTR {} }
+    // However this ends, no helper is left to select later.
+    defer { for helper in waiting { stop(helper.pid); close(helper.gate) } }
+    for id in ids {
+        var ends: [Int32] = [0, 0]
+        guard pipe(&ends) == 0 else { return false }
+        // Above the standard descriptors: an app started without a stdin would get 0, and a descriptor placed onto
+        // itself stays closed in the helper.
+        let reader = fcntl(ends[0], F_DUPFD_CLOEXEC, 3)
+        close(ends[0])
+        guard reader >= 0 else { close(ends[1]); return false }
+        _ = fcntl(ends[1], F_SETFD, FD_CLOEXEC)
+        // A helper that died early must not take the app with it.
+        _ = fcntl(ends[1], F_SETNOSIGPIPE, 1)
+        var actions: posix_spawn_file_actions_t?
+        posix_spawn_file_actions_init(&actions)
+        posix_spawn_file_actions_adddup2(&actions, reader, STDIN_FILENO)
+        let values = [path, "--select-input-source", id]
+        var arguments: [UnsafeMutablePointer<CChar>?] = values.map { value in value.withCString { strdup($0) } } + [nil]
+        var pid: pid_t = 0
+        let spawned = posix_spawn(&pid, path, &actions, nil, &arguments, environ) == 0
+        posix_spawn_file_actions_destroy(&actions)
+        for argument in arguments { free(argument) }
+        close(reader)
+        guard spawned else { close(ends[1]); return false }
+        waiting.append((pid, ends[1]))
+    }
+    while let helper = waiting.first {
+        if gap > 0 && waiting.count < ids.count { usleep(gap) }
+        guard canContinue() else { return false }
+        waiting.removeFirst()
+        var go: UInt8 = 1
+        _ = write(helper.gate, &go, 1)
+        close(helper.gate)
+        var status: Int32 = 0
+        while true {
+            let result = waitpid(helper.pid, &status, WNOHANG)
+            if result == helper.pid { break }
+            if result == -1 && errno != EINTR { return false }
+            guard ProcessInfo.processInfo.systemUptime < deadline, canContinue() else { stop(helper.pid); return false }
+            usleep(1_000)
+        }
+        guard status == 0 else { return false }
+    }
+    return canContinue()
 }
 
 // The badge of an input source other than Korean or English: its language code of up to three letters, or without one
@@ -185,6 +305,7 @@ extension AppDelegate {
     }
     // Where switching is headed: a switch waiting for the one on its way, or that one until it lands.
     var logicalSource: InputSourceIdentity? {
+        if let owner = sourceSwitchOwner, owner != frontmostPID() { return currentSource }
         if let target = queuedSwitch?.target { return target }
         if let id = switchLanding, let source = enabledSources().first(where: { $0.id == id }) { return source }
         return currentSource
@@ -233,52 +354,72 @@ extension AppDelegate {
     static func bundleID(_ id: String) -> String? {
         sourceForID(id).flatMap { TISGetInputSourceProperty($0, kTISPropertyBundleID) }.map { Unmanaged<CFString>.fromOpaque($0).takeUnretainedValue() as String }
     }
-    func plannedSwitch(to target: InputSourceIdentity, from current: InputSourceIdentity) -> SwitchPlan {
+    func plannedSwitch(to target: InputSourceIdentity, from current: InputSourceIdentity) -> (plan: SwitchPlan, fresh: Bool) {
         var landed = sourceHistory; landed.note(current.id); landed.note(target.id)
         // A command can switch without added sources, when the Korean/English key goes between Korean and English.
         let next = addedSourcesActive ? cycleTarget(current: target, cycle: cycleOrder, enabled: activeSources(), history: landed)
             : languageToggleTarget(current: target, enabled: enabledSources(), history: landed)
-        return switchPlan(current: current, target: target, next: next?.id, previous: sourceHistory.previous(of: current.id), isLayout: isLayout)
+        let previous = sourceHistory.validatedPrevious(of: current.id, system: readSystemSourceHistory())
+        return (switchPlan(current: current, target: target, next: next?.id, previous: previous, isLayout: isLayout),
+                previous == nil || previous != sourceHistory.previous(of: current.id))
     }
     // Only the system shortcut switches, as without added sources. Sources selected from here first only set where it goes.
-    // Pressed again before a switch lands, `current` is where it is headed: the shortcut alone follows it at once, but
-    // selections would reorder the recent sources under it, so that switch waits for it to land. Only the last one waits.
+    // Keep the last requested target separate from observed history. Wait before sending another pulse or changing the
+    // native history under one already sent.
     // False when it could not: the target is gone or a selection failed. The shortcut is then not sent, as it would go
     // wherever the sources selected so far point.
     @discardableResult
-    func switchSource(to target: InputSourceIdentity, from current: InputSourceIdentity, pulse: (CGEvent, CGEvent)) -> Bool {
+    func switchSource(to target: InputSourceIdentity, from current: InputSourceIdentity, pulse: (CGEvent, CGEvent), owner expectedOwner: pid_t? = nil) -> Bool {
+        let frontmost = frontmostPID()
+        guard expectedOwner == nil || expectedOwner == frontmost else { return false }
+        if let owner = sourceSwitchOwner, owner != frontmost { cancelSourceSwitch() }
+        sourceSwitchOwner = frontmost
         if switchLanding == target.id { queuedSwitch = nil; return true }
         if switchLanding == nil && target.id == current.id { return true }
+        if switchLanding != nil { queuedSwitch = (target, pulse); holdKeys = true; return true }
+        let generation = landingGeneration, started = ProcessInfo.processInfo.systemUptime
+        func canContinue() -> Bool {
+            guard generation == landingGeneration else { return false }
+            // TIS and its inter-selection wait can delay the event tap's mouse callback. Check clicks that happened
+            // during setup too, before making another selection or posting a pulse into a window the user left.
+            let elapsed = ProcessInfo.processInfo.systemUptime - started
+            let clicked = [CGEventType.leftMouseDown, .rightMouseDown, .otherMouseDown].contains {
+                CGEventSource.secondsSinceLastEventType(.hidSystemState, eventType: $0) <= elapsed
+            }
+            guard frontmost == frontmostPID(), !clicked else { cancelSourceSwitch(discardKeys: clicked); return false }
+            return true
+        }
         // The input menu's next source is one shortcut away, as the previous one is: nothing is selected first. Not while
         // another switch is on its way: its notices would look like this one going elsewhere.
-        if queuedSwitch == nil, switchLanding == nil, let next = engine.liveNextTarget, next.name != engine.nextFailedKey,
+        if queuedSwitch == nil, let next = engine.liveNextTarget, engine.nextFailure.allows(next.name, at: ProcessInfo.processInfo.systemUptime),
            menuNext(after: current.id) == target.id, Self.sourceForID(target.id) != nil,
            let nextPulse = nativeSwitchPulse(keyCode: next.keyCode, marker: nativePulseMarker) {
+            guard canContinue() else { return false }
             addedSources.showError(nil)
             postSwitchPulse(nextPulse)
             nextSent = (current.id, target.id, next.name)
-            sourceHistory.note(target.id)
             expectLanding(target, origin: current.id)
             return true
         }
-        if switchLanding != nil {
-            guard queuedSwitch == nil, plannedSwitch(to: target, from: current).selections.isEmpty else {
-                queuedSwitch = (target, pulse); holdKeys = true; return true
-            }
-            postSwitchPulse(pulse)
-            sourceHistory.note(target.id)
-            expectLanding(target, origin: current.id)
-            return true
-        }
-        let plan = plannedSwitch(to: target, from: current)
-        let waits = plan.selections.count > 1
-            && waitsBetweenSelections(bundles: ([current.id] + plan.selections).map(Self.bundleID), always: engine.addedSourcesCompatible)
+        let setup = plannedSwitch(to: target, from: current), plan = setup.plan
+        let bundles = ([current.id] + plan.selections + Array(sourceHistory.ids.prefix(2))).map(Self.bundleID)
+        // A recently left third-party IME can retain stale state even when the history itself is known.
+        let fresh = setup.fresh || involvesThirdParty(bundles)
+        // Compatibility mode waits between any two selections.
+        let gap: useconds_t = engine.addedSourcesCompatible ? 50_000 : 0
         var failed = Self.sourceForID(target.id) == nil
-        for (index, id) in plan.selections.enumerated() where !failed {
-            if index > 0 && waits { usleep(50_000) }
-            guard let source = Self.sourceForID(id), TISSelectInputSource(source) == noErr else { failed = true; break }
-            sourceHistory.note(id)
+        if !plan.selections.isEmpty { sourceHistory.invalidatePrevious() }
+        if fresh {
+            guard canContinue() else { return false }
+            failed = failed || !selectSourcesInHelpers(plan.selections, gap: gap, until: started + 0.8, canContinue: canContinue)
+        } else {
+            for (index, id) in plan.selections.enumerated() where !failed {
+                if index > 0 && gap > 0 { usleep(gap) }
+                guard canContinue() else { return false }
+                guard let source = Self.sourceForID(id), TISSelectInputSource(source) == noErr else { failed = true; break }
+            }
         }
+        guard generation == landingGeneration else { return false }
         guard !failed else {
             // macOS's list may have changed without a notice yet.
             sourceCache = nil
@@ -286,91 +427,136 @@ extension AppDelegate {
             updateInputIndicator()
             return false
         }
+        guard canContinue() else { return false }
         addedSources.showError(nil)
         // The frontmost app can see the selections before the shortcut's switch reaches it.
-        if !plan.selections.isEmpty { holdKeys = true }
+        if !plan.selections.isEmpty { sourceHistory.preparedPrevious(); holdKeys = true }
         postSwitchPulse(pulse)
-        // Where it lands, as long as the shortcut switches.
-        sourceHistory.note(target.id)
         expectLanding(target, origin: plan.selections.last ?? current.id)
         return true
     }
-    // Where the next-source shortcut goes: as seen, or else as the menu is expected to list them.
+    // A change notification does not identify who selected a source, so an unexpected arrival cannot teach this order.
     func menuNext(after id: String) -> String? {
-        missedNext[id] ?? nextInMenu(menuOrder(enabledSources(), locale: Locale(identifier: Locale.preferredLanguages.first ?? "en")), after: id)
+        nextInMenu(menuOrder(enabledSources(), locale: Locale(identifier: Locale.preferredLanguages.first ?? "en")), after: id)
     }
-    // The next-source shortcut went elsewhere: that is remembered, and the switch goes on from there.
-    func nextLanded(_ id: String?) {
-        guard let sent = nextSent, id != sent.from else { return }
-        nextSent = nil
-        guard let id, id != sent.target else { return }
-        missedNext[sent.from] = id
-        sourceHistory.note(sent.from); sourceHistory.note(id)
-        if switchLanding == sent.target { switchLanding = nil }
-        let enabled = enabledSources()
-        guard let landed = enabled.first(where: { $0.id == id }), let target = enabled.first(where: { $0.id == sent.target }),
-              let pulse = nativeSwitchPulse(keyCode: engine.target.keyCode, marker: nativePulseMarker) else { return }
-        switchSource(to: target, from: landed, pulse: pulse)
+    // A delayed retry or queued switch belongs to the app where it started, including switches requested by the CLI.
+    func cancelSourceSwitch(discardKeys: Bool = false) {
+        let discard = discardKeys || (sourceSwitchOwner != nil && sourceSwitchOwner != frontmostPID())
+        if switchLanding != nil { sourceHistory.invalidatePrevious() }
+        landingGeneration += 1
+        queuedSwitch = nil; switchLanding = nil; sourceArrival = nil; nextSent = nil; sourceSwitchOwner = nil
+        sentSwitch = nil
+        // Keys captured in the old input window must not be replayed into the newly focused app.
+        if discard { discardHeldKeys() }
+        else { releaseHeldKeys() }
     }
-    // Until the switch lands the icon keeps showing where it started, not the sources selected on the way. If the shortcut
-    // does not switch, a layout selected on the way may already have reached the frontmost app while macOS shows another
-    // source; selecting the target layout makes them agree.
+    func sourceMouseDown() {
+        guard switchLanding != nil || holdKeys else { return }
+        cancelSourceSwitch(discardKeys: true)
+    }
+    func observeSourceArrival(_ id: String?) {
+        guard switchLanding != nil else { return }
+        sourceArrival?.observe(id, at: ProcessInfo.processInfo.systemUptime)
+        let generation = landingGeneration
+        DispatchQueue.main.asyncAfter(deadline: .now() + SourceArrival.settling) { [weak self] in
+            guard let self, self.landingGeneration == generation else { return }
+            self.settleSourceArrival(self.currentSource?.id, at: ProcessInfo.processInfo.systemUptime)
+        }
+    }
+    func settleSourceArrival(_ id: String?, at now: TimeInterval) {
+        guard switchLanding != nil, let arrival = sourceArrival else { return }
+        guard sourceSwitchOwner == frontmostPID() else { cancelSourceSwitch(); return }
+        switch arrival.outcome(id, at: now) {
+        case .waiting: return
+        case .arrived:
+            if nextSent != nil { engine.nextFailure.clear() }
+            nextSent = nil; switchLanding = nil; sourceArrival = nil
+            updateInputIndicator()
+            runQueuedSwitch()
+        case .interrupted:
+            // An external selection and a misdirected pulse look identical. Never force the old target back or run its
+            // queued request: the next explicit key starts from the actual source and rebuilds uncertain history.
+            // Having reached its target, the next-source shortcut worked: what came after was chosen elsewhere.
+            if let sent = nextSent {
+                if arrival.sawTarget { engine.nextFailure.clear() }
+                else { engine.nextFailure.failed(sent.key, at: now, attempt: landingGeneration) }
+            }
+            cancelSourceSwitch()
+            updateInputIndicator()
+        }
+    }
+    // Until the switch lands the icon keeps showing where it started, not the sources selected on the way. Timeouts
+    // cancel only: another app may have selected even the original source without an identifiable notification.
     func expectLanding(_ target: InputSourceIdentity, origin: String) {
         switchLanding = target.id
+        sourceArrival = SourceArrival(target: target.id, origin: origin)
         landingGeneration += 1
         let generation = landingGeneration
+        let owner = sourceSwitchOwner
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             guard let self, self.landingGeneration == generation else { return }
-            let landed = self.switchLanding == nil
-            self.switchLanding = nil
-            // The next-source shortcut changed nothing, as when it was changed in System Settings: its F-key is not used again
-            // until the settings, the sources or that F-key change, or the Mac wakes, and this switch goes the usual way.
-            if !landed, let sent = self.nextSent, let current = self.currentSource, current.id == sent.from, sent.target == target.id {
-                self.nextSent = nil; self.engine.nextFailedKey = sent.key
-                if let pulse = nativeSwitchPulse(keyCode: self.engine.target.keyCode, marker: nativePulseMarker),
-                   self.switchSource(to: target, from: current, pulse: pulse) { return }
+            guard owner == frontmostPID() else { self.cancelSourceSwitch(); return }
+            guard self.switchLanding != nil else { return }
+            self.sourceHistory.invalidatePrevious()
+            if let sent = self.nextSent { self.engine.nextFailure.failed(sent.key, at: ProcessInfo.processInfo.systemUptime, attempt: generation) }
+            // The front app may just be busy. Do not reorder its sources and send a second pulse while the first is queued.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                self?.expireSourceSwitch(generation: generation, owner: owner)
             }
-            self.nextSent = nil
-            if reselectsTarget(landed: landed, current: self.currentSource?.id, origin: origin, targetIsLayout: self.isLayout(target.id)),
-               let source = Self.sourceForID(target.id) { _ = TISSelectInputSource(source) }
-            self.updateInputIndicator()
-            self.runQueuedSwitch()
         }
+    }
+    func expireSourceSwitch(generation: Int, owner: pid_t?) {
+        guard landingGeneration == generation, switchLanding != nil else { return }
+        guard owner == frontmostPID() else { cancelSourceSwitch(discardKeys: true); return }
+        // With the input window unchanged, a timeout releases its text in the current source instead of losing it.
+        cancelSourceSwitch()
+        updateInputIndicator()
     }
     // The switch that waited for the last one to land; once none is on its way, the keys held meanwhile go on. macOS
     // reports the switch a moment before the frontmost app's input method is ready, so they wait a little longer.
     func runQueuedSwitch() {
+        guard sourceSwitchOwner == frontmostPID() else { cancelSourceSwitch(); return }
         if let queued = queuedSwitch {
             queuedSwitch = nil
             if let current = currentSource { switchSource(to: queued.target, from: current, pulse: queued.pulse) }
         }
         guard switchLanding == nil, holdKeys else { return }
-        let generation = landingGeneration
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { [weak self] in
-            guard let self, self.landingGeneration == generation, self.switchLanding == nil else { return }
-            self.releaseHeldKeys()
-        }
+        releaseHeldKeys()
     }
     // Bounded: past it the keys go on in whatever source is current.
-    func holdKey(_ event: CGEvent) {
-        if let copy = event.copy() { heldKeys.append(copy) }
+    @discardableResult
+    func holdKey(_ event: CGEvent) -> Bool {
+        let code = event.getIntegerValueField(.keyboardEventKeycode)
+        // A key already delivered before buffering started still needs its release, even if the buffer is cancelled.
+        if event.type == .keyDown && event.getIntegerValueField(.keyboardEventAutorepeat) != 0 && !bufferedSourceKeys.contains(code) { return false }
+        if event.type == .keyUp && !bufferedSourceKeys.contains(code) { return false }
+        guard let copy = event.copy() else { return false }
+        if event.type == .keyDown { bufferedSourceKeys.insert(code) }
+        else if event.type == .keyUp { bufferedSourceKeys.remove(code) }
+        heldKeys.append(copy)
         if heldKeys.count >= 128 { releaseHeldKeys() }
+        return true
+    }
+    func discardHeldKeys() {
+        sourceDiscardedKeys.discard(heldKeys)
+        heldKeys.removeAll(); bufferedSourceKeys.removeAll(); holdKeys = false
     }
     // In order, marked so the tap lets them through.
     func releaseHeldKeys() {
+        if let owner = sourceSwitchOwner, owner != frontmostPID() { discardHeldKeys(); return }
         holdKeys = false
         let keys = heldKeys
-        heldKeys = []
+        heldKeys = []; bufferedSourceKeys.removeAll()
         let caps = currentCaps
         for key in keys {
             // With the lock as it is now, as a key pressed now would have it.
             key.flags = capsFlags(key.flags, caps: caps)
             swapBackquote(key)
-            key.setIntegerValueField(.eventSourceUserData, value: nativePulseMarker); key.post(tap: .cghidEventTap)
+            key.setIntegerValueField(.eventSourceUserData, value: nativePulseMarker); postHeldKey(key)
         }
     }
-    // The recent sources macOS keeps, as far as they are known; otherwise only the current one.
-    func seedSourceHistory() {
+    // Read independently of change notifications: several changes may precede even the first callback.
+    func readSystemSourceHistory() -> [String] {
         let domain = "com.apple.HIToolbox" as CFString
         CFPreferencesAppSynchronize(domain)
         let entries = CFPreferencesCopyAppValue("AppleInputSourceHistory" as CFString, domain) as? [[String: Any]] ?? []
@@ -382,7 +568,11 @@ extension AppDelegate {
             return SourceInfo(id: id, mode: text(kTISPropertyInputModeID), bundle: text(kTISPropertyBundleID),
                               layout: text(kTISPropertyInputSourceType) == kTISTypeKeyboardLayout as String)
         }
-        let ids = systemHistory(entries, sources: infos), current = currentSource?.id
+        return systemHistory(entries, sources: infos)
+    }
+    // The recent sources macOS keeps, as far as they are known; otherwise only the current one.
+    func seedSourceHistory() {
+        let ids = readSystemSourceHistory(), current = currentSource?.id
         sourceHistory = SourceHistory(ids.first == current ? ids : current.map { [$0] } ?? [])
     }
     // Korean and English show this app's icons, other sources their own, or a badge without one.
@@ -479,11 +669,12 @@ extension AppDelegate {
         }
     }
     @objc func selectAddedSource(_ sender: NSMenuItem) {
+        cancelSourceSwitch(discardKeys: true)
         if let id = sender.representedObject as? String, let source = Self.sourceForID(id) { rememberCapsBeforeSwitch(); _ = TISSelectInputSource(source) }
         updateInputIndicator()
     }
     func addedSourcesChanged() {
-        cancelLongPress(); sourceCache = nil; missedNext = [:]; engine.nextFailedKey = nil; seedSourceHistory(); engine.refreshSystemFKeys()
+        cancelLongPress(); sourceCache = nil; engine.nextFailure.clear(); seedSourceHistory(); engine.refreshSystemFKeys()
         ensureKeyTap(); repair()
         do { try engine.updateNextShortcut() } catch { addedSources.showError(error.localizedDescription) }
         releaseKoreanCapsLock()

@@ -106,6 +106,7 @@ sign "$test_app" "$identifier"
 # The command-line tool answers help without the app, and refuses wrong arguments before asking it.
 "$stage/$app.app/Contents/Helpers/gksdud" help settings >/dev/null
 if "$stage/$app.app/Contents/Helpers/gksdud" set no-such=on 2>/dev/null; then exit 1; else test $? -eq 2; fi
+if "$stage/$app.app/Contents/Helpers/gksdud" --select-input-source; then exit 1; else test $? -eq 1; fi
 if [[ -n ${self_signed:-} ]]; then
   copy="$stage/self-signed/$app.app"
   mkdir "$stage/self-signed"; ditto "$stage/$app.app" "$copy"

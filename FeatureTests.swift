@@ -1056,17 +1056,99 @@ func runAddedSourceTests() {
         "Into Korean the next layout is set up, at the cost of another input method's syllable")
     featureCheck(plan(ja, abc, next: "ko2", previous: "abc") == SwitchPlan(selections: [], risky: false))
     featureCheck(plan(abc, ko, next: "abc", previous: "ko2") == SwitchPlan(selections: [], risky: false), "Back to Korean from its layout is the shortcut alone")
+    var interruptedHistory = SourceHistory([abc.id, ko.id, ja.id])
+    interruptedHistory.invalidatePrevious()
+    interruptedHistory.note(abc.id)
+    featureCheck(plan(abc, ko, next: abc.id, previous: interruptedHistory.previous(of: abc.id))
+        == SwitchPlan(selections: [ko.id, abc.id], risky: false),
+        "After interrupted setup, establish Korean even if recency says it was previous but the native previous source is Japanese")
+    featureCheck(interruptedHistory.mostRecent([ko, ja]) == ko && interruptedHistory.ids == [abc.id, ko.id, ja.id],
+        "Invalidating the native previous destination preserves cycle and separate-key recency")
+    interruptedHistory.note(ko.id); interruptedHistory.note(abc.id)
+    interruptedHistory.preparedPrevious(); interruptedHistory.note(ko.id)
+    featureCheck(interruptedHistory.previous(of: ko.id) == abc.id
+        && plan(ko, abc, next: ko.id, previous: interruptedHistory.previous(of: ko.id)).selections.isEmpty,
+        "A prepared switch restores a known English/Korean pair without forcing every subsequent switch through setup")
+    var externalHistory = SourceHistory([abc.id, zh.id, ko.id])
+    featureCheck(externalHistory.validatedPrevious(of: abc.id, system: [abc.id, ko.id, zh.id]) == ko.id
+        && externalHistory.ids == [abc.id, zh.id, ko.id],
+        "A missed intermediate notification does not make recency the native shortcut destination")
+    featureCheck(externalHistory.validatedPrevious(of: abc.id, system: [ko.id, abc.id]) == nil
+        && externalHistory.validatedPrevious(of: abc.id, system: [abc.id]) == nil,
+        "A stale or incomplete system history cannot establish a previous source")
+    externalHistory.invalidatePrevious()
+    featureCheck(externalHistory.validatedPrevious(of: abc.id, system: [abc.id, ko.id]) == nil,
+        "An interrupted switch keeps its uncertainty even when system history is available")
+    var arrival = SourceArrival(target: ko.id, origin: abc.id)
+    arrival.observe(abc.id, at: 1)
+    arrival.observe(ko.id, at: 1.01)
+    featureCheck(!arrival.settled(ko.id, at: 1.02), "A brief target observation cannot release the next switch")
+    arrival.observe(abc.id, at: 1.025)
+    featureCheck(arrival.sawTarget && arrival.observed != arrival.target && !arrival.settled(ko.id, at: 1.1),
+        "A target that appeared then drifted away is not a completed arrival")
+    featureCheck(arrival.settled(abc.id, at: 1.1), "An external selection can settle without forcing the old target back")
+    arrival.observe(ko.id, at: 2)
+    arrival.observe(ko.id, at: 2.01)
+    featureCheck(arrival.settled(ko.id, at: 2.04) && !arrival.settled(abc.id, at: 2.04),
+        "Duplicate notices do not postpone an arrival, and completion checks the source again")
+    var nextFailure = NextSourceFailure()
+    nextFailure.failed("F13", at: 10, attempt: 1)
+    featureCheck(!nextFailure.allows("F13", at: 14) && nextFailure.allows("F16", at: 11)
+        && nextFailure.allows("F13", at: 15), "A temporarily stalled shortcut is retried without resetting activation")
+    nextFailure.failed("F13", at: 11, attempt: 1)
+    featureCheck(nextFailure.allows("F13", at: 15), "One pulse that changed nothing and then went elsewhere fails once")
+    nextFailure.failed("F13", at: 15, attempt: 2)
+    featureCheck(!nextFailure.allows("F13", at: 34) && nextFailure.allows("F13", at: 35), "Failing again right after, it waits longer")
+    for attempt in 3...9 { nextFailure.failed("F13", at: 100, attempt: attempt) }
+    featureCheck(!nextFailure.allows("F13", at: 699) && nextFailure.allows("F13", at: 700), "but is always tried again")
+    nextFailure.failed("F16", at: 700, attempt: 10)
+    featureCheck(!nextFailure.allows("F16", at: 704) && nextFailure.allows("F16", at: 705), "Another F-key starts over")
+    nextFailure.failed("F13", at: 20); nextFailure.clear()
+    nextFailure.failed("F13", at: 30)
+    featureCheck(nextFailure.allows("F13", at: 35), "An arrival in between starts over as well")
+    nextFailure.clear()
+    featureCheck(nextFailure.key == nil && nextFailure.allows("F13", at: 20), "A late successful arrival clears the backoff")
+    let selectorDirectory = FileManager.default.temporaryDirectory.appendingPathComponent("gksdud-selector-\(UUID().uuidString)")
+    try! FileManager.default.createDirectory(at: selectorDirectory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: selectorDirectory) }
+    let selector = selectorDirectory.appendingPathComponent("selector")
+    func selectorScript(_ body: String) {
+        try! ("#!/bin/sh\n" + body + "\n").write(to: selector, atomically: true, encoding: .utf8)
+        try! FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: selector.path)
+    }
+    selectorScript("exit 0")
+    featureCheck(selectSourcesInHelpers(["test"], executable: selector, canContinue: { true }), "A fresh selector reports its successful exit")
+    selectorScript("exit 1")
+    featureCheck(!selectSourcesInHelpers(["test"], executable: selector, canContinue: { true }), "A failed selector never authorizes a pulse")
+    selectorScript("exec /bin/sleep 30")
+    var cancellationChecks = 0
+    featureCheck(!selectSourcesInHelpers(["test"], executable: selector, canContinue: { cancellationChecks += 1; return false })
+        && cancellationChecks > 0, "A cancelled request stops and reaps its selector")
+    let selectorStarted = ProcessInfo.processInfo.systemUptime
+    featureCheck(!selectSourcesInHelpers(["test"], executable: selector, canContinue: { true })
+        && ProcessInfo.processInfo.systemUptime - selectorStarted < 4, "A stuck selector is bounded rather than blocking input indefinitely")
+    let spent = ProcessInfo.processInfo.systemUptime
+    featureCheck(!selectSourcesInHelpers(["test"], executable: selector, until: spent, canContinue: { true })
+        && ProcessInfo.processInfo.systemUptime - spent < 0.5, "A selection after the switch's time is up does not wait again")
+    // Selectors start together, and each selects only when told: in order, and none after one failed or was cancelled.
+    let selected = selectorDirectory.appendingPathComponent("selected")
+    func selectedIDs() -> String { (try? String(contentsOf: selected, encoding: .utf8)) ?? "" }
+    selectorScript("/bin/dd bs=1 count=1 >/dev/null 2>&1; [ \"$2\" = fails ] && exit 1; echo \"$2\" >> '\(selected.path)'")
+    featureCheck(selectSourcesInHelpers(["a", "b", "c"], executable: selector, canContinue: { true }) && selectedIDs() == "a\nb\nc\n",
+        "Selectors started together select in order")
+    try? FileManager.default.removeItem(at: selected)
+    featureCheck(!selectSourcesInHelpers(["a", "fails", "c"], executable: selector, canContinue: { true }) && selectedIDs() == "a\n",
+        "A selector waiting behind a failed one never selects")
+    try? FileManager.default.removeItem(at: selected)
+    featureCheck(!selectSourcesInHelpers(["a", "b"], executable: selector, canContinue: { selectedIDs().isEmpty }) && selectedIDs() == "a\n",
+        "A switch cancelled after one selection stops the selector still waiting")
+    featureCheck(selectSourcesInHelpers([], executable: selector, canContinue: { true }), "No selection needs no selector")
     featureCheck(plan(ko, zh, next: "ko2", previous: "abc") == SwitchPlan(selections: ["zh", "ko2"], risky: false))
     featureCheck(plan(ko, abc, next: "ja", previous: "ja") == SwitchPlan(selections: ["abc", "ko2"], risky: true)
         && plan(ko, abc, next: nil, previous: nil).risky, "Only a lost setup leaves Korean's syllable at risk")
-    featureCheck(reselectsTarget(landed: false, current: "ja", origin: "ja", targetIsLayout: true), "A switch that did not land ends on its layout")
-    featureCheck(!reselectsTarget(landed: true, current: "ja", origin: "ja", targetIsLayout: true), "Back where it started after it landed stays there")
-    featureCheck(!reselectsTarget(landed: false, current: "abc", origin: "ja", targetIsLayout: true)
-        && !reselectsTarget(landed: false, current: "ja", origin: "ja", targetIsLayout: false), "Elsewhere, or toward an input method, nothing is selected")
-    featureCheck(!waitsBetweenSelections(bundles: ["com.apple.inputmethod.Korean", "com.apple.keyboardlayout.all", nil], always: false)
-        && waitsBetweenSelections(bundles: ["com.apple.inputmethod.Korean", "com.tencent.inputmethod.wetype"], always: false),
-        "Selections wait for each other only around a third-party input method")
-    featureCheck(waitsBetweenSelections(bundles: ["com.apple.inputmethod.Korean"], always: true), "Compatibility mode waits for any")
+    featureCheck(!involvesThirdParty(["com.apple.inputmethod.Korean", "com.apple.keyboardlayout.all", nil])
+        && involvesThirdParty(["com.apple.inputmethod.Korean", "com.tencent.inputmethod.wetype"]),
+        "Selections have processes of their own only around a third-party input method")
     // Notifications for a source already handled.
     var notifications = SourceNotifications()
     featureCheck(notifications.handles("abc", addedSources: true) && !notifications.handles("abc", addedSources: true), "With added sources a repeat is skipped")
@@ -1359,4 +1441,109 @@ func runUniversalControlTests() {
     }
     print("PASS: Universal Control long press told from the tap's, other Mac's keys by sending service, its lock followed, compatibility mode")
 }
+
+func runSourceSwitchTests() {
+    let name = "io.gksdud.source-switch-tests.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: name)!
+    defer { defaults.removePersistentDomain(forName: name) }
+    let delegate = AppDelegate(engine: Engine(defaults: defaults, discover: { [] }))
+    // Not the app that happens to be in front while the tests run.
+    delegate.frontmostPID = { 100 }
+    delegate.switchLanding = "com.example.Target"; delegate.sourceSwitchOwner = -1
+    delegate.nextSent = ("from", "to", "F19")
+    let oldGeneration = delegate.landingGeneration
+    delegate.cancelSourceSwitch()
+    featureCheck(delegate.switchLanding == nil && delegate.sourceSwitchOwner == nil && delegate.nextSent == nil
+        && delegate.queuedSwitch == nil && !delegate.holdKeys && delegate.landingGeneration > oldGeneration,
+        "Focus loss invalidates delayed corrections and releases switch state")
+    delegate.switchLanding = "com.example.Target"
+    delegate.sourceSwitchOwner = 100
+    delegate.queuedSwitch = (InputSourceIdentity(id: "com.example.Queued", language: "en"), (CGEvent(source: nil)!, CGEvent(source: nil)!))
+    delegate.sourceMouseDown()
+    featureCheck(delegate.switchLanding == nil && delegate.queuedSwitch == nil && delegate.sourceSwitchOwner == nil,
+        "A mouse interaction cancels corrections and queued requests before a manual menu selection")
+    let rejectedGeneration = delegate.landingGeneration
+    featureCheck(!delegate.switchSource(to: InputSourceIdentity(id: "com.example.Target", language: "en"),
+        from: InputSourceIdentity(id: "com.example.Origin", language: "ko"), pulse: (CGEvent(source: nil)!, CGEvent(source: nil)!), owner: -1)
+        && delegate.sourceSwitchOwner == nil && delegate.landingGeneration == rejectedGeneration,
+        "A stale app owner is rejected before adopting a new front app or preparing any source")
+    var posted: [CGEvent] = []
+    delegate.postHeldKey = { posted.append($0) }
+    func key(_ down: Bool, repeated: Bool = false) -> CGEvent {
+        let event = CGEvent(keyboardEventSource: nil, virtualKey: 5, keyDown: down)!
+        event.setIntegerValueField(.keyboardEventAutorepeat, value: repeated ? 1 : 0)
+        return event
+    }
+    delegate.switchLanding = "target"
+    delegate.sourceSwitchOwner = 100
+    delegate.holdKeys = true; delegate.heldKeys = [key(true)]
+    delegate.sourceMouseDown()
+    featureCheck(posted.isEmpty && delegate.heldKeys.isEmpty && !delegate.holdKeys,
+        "Clicking another field in the same app discards buffered text instead of posting it under the click")
+    featureCheck(delegate.sourceDiscardedKeys.consumes(key(true, repeated: true))
+        && delegate.sourceDiscardedKeys.consumes(key(false)) && !delegate.sourceDiscardedKeys.consumes(key(true)),
+        "Discarded presses keep their repeats and release out of the new field, without swallowing a new press")
+    delegate.sourceDiscardedKeys.discard([key(true)])
+    featureCheck(!delegate.sourceDiscardedKeys.consumes(key(true)), "A fresh press recovers when the old release was lost")
+    delegate.sourceDiscardedKeys.discard([key(true), key(false)])
+    featureCheck(!delegate.sourceDiscardedKeys.consumes(key(false)), "A fully discarded pair does not claim an unrelated release")
+    featureCheck(!delegate.holdKey(key(false)) && delegate.heldKeys.isEmpty,
+        "A release whose press already reached the app is never captured and discarded")
+    featureCheck(!delegate.holdKey(key(true, repeated: true)) && !delegate.holdKey(key(false)) && delegate.heldKeys.isEmpty,
+        "Repeating an already delivered press cannot transfer ownership of its release into the buffer")
+    featureCheck(delegate.holdKey(key(true)) && delegate.holdKey(key(false)) && delegate.bufferedSourceKeys.isEmpty,
+        "Only a buffered press claims its release")
+    delegate.discardHeldKeys()
+    for external in ["origin", "foreign"] {
+        let beforeInterrupt = posted.count
+        delegate.switchLanding = "target"
+        delegate.sourceSwitchOwner = 100
+        delegate.sourceHistory = SourceHistory(["origin", "target"])
+        delegate.sourceArrival = SourceArrival(target: "target", origin: "origin")
+        delegate.sourceArrival?.observe("target", at: 1)
+        delegate.sourceArrival?.observe(external, at: 1.01)
+        delegate.queuedSwitch = (InputSourceIdentity(id: "queued", language: "en"), (CGEvent(source: nil)!, CGEvent(source: nil)!))
+        delegate.holdKeys = true; delegate.heldKeys = [key(true), key(false)]
+        delegate.nextSent = ("origin", "target", "F13"); delegate.engine.nextFailure.failed("F13", at: 1)
+        delegate.settleSourceArrival(external, at: 1.1)
+        featureCheck(delegate.engine.nextFailure.allows("F13", at: 1.2), "The next-source shortcut that reached its target is not held back by a later choice")
+        featureCheck(delegate.switchLanding == nil && delegate.sourceArrival == nil && delegate.queuedSwitch == nil
+            && delegate.sourceSwitchOwner == nil && delegate.heldKeys.isEmpty && !delegate.holdKeys && posted.count == beforeInterrupt + 2
+            && delegate.sourceHistory.previous(of: "origin") == nil && delegate.logicalSource == delegate.currentSource,
+            "An external choice cancels the old goal and queue but preserves same-field text; the next key starts from the actual source")
+    }
+    let afterInterrupts = posted.count
+    delegate.sourceSwitchOwner = 100
+    delegate.switchLanding = "target"
+    delegate.sourceArrival = SourceArrival(target: "target", origin: "origin")
+    delegate.sourceArrival?.observe("origin", at: 1)
+    delegate.settleSourceArrival("origin", at: 1.1)
+    featureCheck(delegate.switchLanding == "target" && posted.count == afterInterrupts, "An unchanged origin waits without sending another pulse")
+    delegate.sourceArrival?.observe("foreign", at: 1.2)
+    delegate.nextSent = ("origin", "target", "F13")
+    delegate.settleSourceArrival("foreign", at: 1.3)
+    featureCheck(delegate.switchLanding == nil && posted.count == afterInterrupts, "A third source is preserved even when the target was never seen")
+    featureCheck(!delegate.engine.nextFailure.allows("F13", at: 6.2) && delegate.engine.nextFailure.allows("F13", at: 6.3),
+        "The next-source shortcut that went elsewhere is left alone for a while")
+    delegate.engine.nextFailure.clear()
+    delegate.sourceSwitchOwner = 100
+    delegate.switchLanding = "target"
+    delegate.sourceArrival = SourceArrival(target: "target", origin: "origin")
+    delegate.sourceArrival?.observe("target", at: 2)
+    delegate.holdKeys = true; delegate.heldKeys = [key(true), key(false)]
+    delegate.settleSourceArrival("target", at: 2.1)
+    featureCheck(delegate.switchLanding == nil && !delegate.holdKeys && posted.count == afterInterrupts + 2,
+        "A stable intended arrival still releases its buffered press and release in order")
+    delegate.sourceSwitchOwner = 100
+    delegate.switchLanding = "target"
+    delegate.holdKeys = true; delegate.heldKeys = [key(true), key(false)]
+    let timeoutGeneration = delegate.landingGeneration
+    delegate.expireSourceSwitch(generation: timeoutGeneration - 1, owner: delegate.sourceSwitchOwner)
+    featureCheck(delegate.switchLanding == "target" && posted.count == afterInterrupts + 2, "A stale timeout cannot finish another request")
+    delegate.expireSourceSwitch(generation: timeoutGeneration, owner: delegate.sourceSwitchOwner)
+    featureCheck(delegate.switchLanding == nil && !delegate.holdKeys && posted.count == afterInterrupts + 4,
+        "A timeout in the same input window releases normal text without forcing an input source")
+    print("PASS: source switch ownership, same-app click buffer disposal, discarded releases, external choices and queued cancellation")
+}
+
 #endif
