@@ -9,9 +9,11 @@ enum Tool {
     static var json = false
 
     static func main() {
-        // One fresh TIS connection per selection when the app repairs an input method's stale native history.
+        // One fresh TIS connection per selection when the app repairs an input method's stale native history. Started
+        // ahead of its turn, it touches TIS only once the app sends a byte, and ends without one if the app goes away.
         if arguments.first == "--select-input-source" {
-            guard arguments.count == 2,
+            var told: UInt8 = 0
+            guard arguments.count == 2, read(STDIN_FILENO, &told, 1) == 1,
                   let list = TISCreateInputSourceList([kTISPropertyInputSourceID as String: arguments[1]] as CFDictionary, false)?.takeRetainedValue() as? [TISInputSource],
                   let source = list.first else { exit(1) }
             exit(TISSelectInputSource(source) == noErr ? 0 : 1)

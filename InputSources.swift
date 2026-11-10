@@ -139,35 +139,60 @@ func switchPlan(current: InputSourceIdentity, target: InputSourceIdentity, next:
     if risky(selections) && isKorean(current) { selections = plan(current.id) }
     return SwitchPlan(selections: selections, risky: risky(selections))
 }
-// Back to back, the first of two selections can be lost while a third-party input method such as WeChat's is current or
-// selected, and the shortcut then goes to an older source. Apple's need no wait; compatibility mode waits for any.
-func waitsBetweenSelections(bundles: [String?], always: Bool) -> Bool {
-    always || bundles.contains { $0.map { !$0.hasPrefix("com.apple.") } ?? false }
+// Back to back in one process, the first of two selections can be lost while a third-party input method such as WeChat's
+// is current or selected, and the shortcut then goes to an older source. Around one, each selection has its own process.
+func involvesThirdParty(_ bundles: [String?]) -> Bool {
+    bundles.contains { $0.map { !$0.hasPrefix("com.apple.") } ?? false }
 }
 
-// The same process can retain stale TIS state after another app selects a source. A correction uses a fresh connection
-// for each selection. waitpid avoids Process.waitUntilExit's nested main run loop, and the child has a bounded lifetime.
+// The same process can retain stale TIS state after another app selects a source, so each selection has a process of its
+// own, which waits for a byte before touching TIS. All start at once, as starting takes longer than selecting, and are
+// told in turn. waitpid avoids Process.waitUntilExit's nested main run loop, and a child has a bounded lifetime.
 // The event tap waits meanwhile, so the selections of one switch share `deadline`.
-func selectSourceInHelper(_ id: String, executable: URL? = nil, until deadline: TimeInterval = ProcessInfo.processInfo.systemUptime + 0.75,
-                          canContinue: () -> Bool) -> Bool {
+func selectSourcesInHelpers(_ ids: [String], executable: URL? = nil, gap: useconds_t = 0,
+                            until deadline: TimeInterval = ProcessInfo.processInfo.systemUptime + 0.75, canContinue: () -> Bool) -> Bool {
     let path = (executable ?? Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/gksdud")).path
-    let values = [path, "--select-input-source", id]
-    var arguments: [UnsafeMutablePointer<CChar>?] = values.map { value in value.withCString { strdup($0) } } + [nil]
-    defer { for argument in arguments { free(argument) } }
-    var pid: pid_t = 0
-    guard posix_spawn(&pid, path, nil, nil, &arguments, environ) == 0 else { return false }
-    var status: Int32 = 0
-    while true {
-        let result = waitpid(pid, &status, WNOHANG)
-        if result == pid { return status == 0 && canContinue() }
-        if result == -1 && errno != EINTR { return false }
-        guard ProcessInfo.processInfo.systemUptime < deadline, canContinue() else {
-            kill(pid, SIGKILL)
-            while waitpid(pid, &status, 0) == -1 && errno == EINTR {}
-            return false
-        }
-        usleep(1_000)
+    var waiting: [(pid: pid_t, gate: Int32)] = []
+    func stop(_ pid: pid_t) { var status: Int32 = 0; kill(pid, SIGKILL); while waitpid(pid, &status, 0) == -1 && errno == EINTR {} }
+    // However this ends, no helper is left to select later.
+    defer { for helper in waiting { close(helper.gate); stop(helper.pid) } }
+    for id in ids {
+        var ends: [Int32] = [0, 0]
+        guard pipe(&ends) == 0 else { return false }
+        for end in ends { _ = fcntl(end, F_SETFD, FD_CLOEXEC) }
+        // A helper that died early must not take the app with it.
+        _ = fcntl(ends[1], F_SETNOSIGPIPE, 1)
+        var actions: posix_spawn_file_actions_t?
+        posix_spawn_file_actions_init(&actions)
+        posix_spawn_file_actions_adddup2(&actions, ends[0], STDIN_FILENO)
+        let values = [path, "--select-input-source", id]
+        var arguments: [UnsafeMutablePointer<CChar>?] = values.map { value in value.withCString { strdup($0) } } + [nil]
+        var pid: pid_t = 0
+        let spawned = posix_spawn(&pid, path, &actions, nil, &arguments, environ) == 0
+        posix_spawn_file_actions_destroy(&actions)
+        for argument in arguments { free(argument) }
+        close(ends[0])
+        guard spawned else { close(ends[1]); return false }
+        waiting.append((pid, ends[1]))
     }
+    while let helper = waiting.first {
+        if gap > 0 && waiting.count < ids.count { usleep(gap) }
+        guard canContinue() else { return false }
+        waiting.removeFirst()
+        var go: UInt8 = 1
+        _ = write(helper.gate, &go, 1)
+        close(helper.gate)
+        var status: Int32 = 0
+        while true {
+            let result = waitpid(helper.pid, &status, WNOHANG)
+            if result == helper.pid { break }
+            if result == -1 && errno != EINTR { return false }
+            guard ProcessInfo.processInfo.systemUptime < deadline, canContinue() else { stop(helper.pid); return false }
+            usleep(1_000)
+        }
+        guard status == 0 else { return false }
+    }
+    return canContinue()
 }
 
 // The badge of an input source other than Korean or English: its language code of up to three letters, or without one
@@ -374,16 +399,20 @@ extension AppDelegate {
         let setup = plannedSwitch(to: target, from: current), plan = setup.plan
         let bundles = ([current.id] + plan.selections + Array(sourceHistory.ids.prefix(2))).map(Self.bundleID)
         // A recently left third-party IME can retain stale state even when the history itself is known.
-        let fresh = setup.fresh || waitsBetweenSelections(bundles: bundles, always: false)
-        let waits = plan.selections.count > 1
-            && waitsBetweenSelections(bundles: bundles, always: engine.addedSourcesCompatible)
+        let fresh = setup.fresh || involvesThirdParty(bundles)
+        // Compatibility mode waits between any two selections.
+        let gap: useconds_t = engine.addedSourcesCompatible ? 50_000 : 0
         var failed = Self.sourceForID(target.id) == nil
         if !plan.selections.isEmpty { sourceHistory.invalidatePrevious() }
-        for (index, id) in plan.selections.enumerated() where !failed {
-            if index > 0 && waits { usleep(50_000) }
+        if fresh {
             guard canContinue() else { return false }
-            guard let source = Self.sourceForID(id),
-                  fresh ? selectSourceInHelper(id, until: started + 0.8, canContinue: canContinue) : TISSelectInputSource(source) == noErr else { failed = true; break }
+            failed = failed || !selectSourcesInHelpers(plan.selections, gap: gap, until: started + 0.8, canContinue: canContinue)
+        } else {
+            for (index, id) in plan.selections.enumerated() where !failed {
+                if index > 0 && gap > 0 { usleep(gap) }
+                guard canContinue() else { return false }
+                guard let source = Self.sourceForID(id), TISSelectInputSource(source) == noErr else { failed = true; break }
+            }
         }
         guard generation == landingGeneration else { return false }
         guard !failed else {

@@ -1117,26 +1117,38 @@ func runAddedSourceTests() {
         try! FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: selector.path)
     }
     selectorScript("exit 0")
-    featureCheck(selectSourceInHelper("test", executable: selector, canContinue: { true }), "A fresh selector reports its successful exit")
+    featureCheck(selectSourcesInHelpers(["test"], executable: selector, canContinue: { true }), "A fresh selector reports its successful exit")
     selectorScript("exit 1")
-    featureCheck(!selectSourceInHelper("test", executable: selector, canContinue: { true }), "A failed selector never authorizes a pulse")
+    featureCheck(!selectSourcesInHelpers(["test"], executable: selector, canContinue: { true }), "A failed selector never authorizes a pulse")
     selectorScript("exec /bin/sleep 30")
     var cancellationChecks = 0
-    featureCheck(!selectSourceInHelper("test", executable: selector, canContinue: { cancellationChecks += 1; return false })
+    featureCheck(!selectSourcesInHelpers(["test"], executable: selector, canContinue: { cancellationChecks += 1; return false })
         && cancellationChecks > 0, "A cancelled request stops and reaps its selector")
     let selectorStarted = ProcessInfo.processInfo.systemUptime
-    featureCheck(!selectSourceInHelper("test", executable: selector, canContinue: { true })
+    featureCheck(!selectSourcesInHelpers(["test"], executable: selector, canContinue: { true })
         && ProcessInfo.processInfo.systemUptime - selectorStarted < 4, "A stuck selector is bounded rather than blocking input indefinitely")
     let spent = ProcessInfo.processInfo.systemUptime
-    featureCheck(!selectSourceInHelper("test", executable: selector, until: spent, canContinue: { true })
+    featureCheck(!selectSourcesInHelpers(["test"], executable: selector, until: spent, canContinue: { true })
         && ProcessInfo.processInfo.systemUptime - spent < 0.5, "A selection after the switch's time is up does not wait again")
+    // Selectors start together, and each selects only when told: in order, and none after one failed or was cancelled.
+    let selected = selectorDirectory.appendingPathComponent("selected")
+    func selectedIDs() -> String { (try? String(contentsOf: selected, encoding: .utf8)) ?? "" }
+    selectorScript("/bin/dd bs=1 count=1 >/dev/null 2>&1; [ \"$2\" = fails ] && exit 1; echo \"$2\" >> '\(selected.path)'")
+    featureCheck(selectSourcesInHelpers(["a", "b", "c"], executable: selector, canContinue: { true }) && selectedIDs() == "a\nb\nc\n",
+        "Selectors started together select in order")
+    try? FileManager.default.removeItem(at: selected)
+    featureCheck(!selectSourcesInHelpers(["a", "fails", "c"], executable: selector, canContinue: { true }) && selectedIDs() == "a\n",
+        "A selector waiting behind a failed one never selects")
+    try? FileManager.default.removeItem(at: selected)
+    featureCheck(!selectSourcesInHelpers(["a", "b"], executable: selector, canContinue: { selectedIDs().isEmpty }) && selectedIDs() == "a\n",
+        "A switch cancelled after one selection stops the selector still waiting")
+    featureCheck(selectSourcesInHelpers([], executable: selector, canContinue: { true }), "No selection needs no selector")
     featureCheck(plan(ko, zh, next: "ko2", previous: "abc") == SwitchPlan(selections: ["zh", "ko2"], risky: false))
     featureCheck(plan(ko, abc, next: "ja", previous: "ja") == SwitchPlan(selections: ["abc", "ko2"], risky: true)
         && plan(ko, abc, next: nil, previous: nil).risky, "Only a lost setup leaves Korean's syllable at risk")
-    featureCheck(!waitsBetweenSelections(bundles: ["com.apple.inputmethod.Korean", "com.apple.keyboardlayout.all", nil], always: false)
-        && waitsBetweenSelections(bundles: ["com.apple.inputmethod.Korean", "com.tencent.inputmethod.wetype"], always: false),
-        "Selections wait for each other only around a third-party input method")
-    featureCheck(waitsBetweenSelections(bundles: ["com.apple.inputmethod.Korean"], always: true), "Compatibility mode waits for any")
+    featureCheck(!involvesThirdParty(["com.apple.inputmethod.Korean", "com.apple.keyboardlayout.all", nil])
+        && involvesThirdParty(["com.apple.inputmethod.Korean", "com.tencent.inputmethod.wetype"]),
+        "Selections have processes of their own only around a third-party input method")
     // Notifications for a source already handled.
     var notifications = SourceNotifications()
     featureCheck(notifications.handles("abc", addedSources: true) && !notifications.handles("abc", addedSources: true), "With added sources a repeat is skipped")
