@@ -75,12 +75,21 @@ struct SourceDiscardedKeys {
     }
 }
 
-// A busy front app can make a working shortcut look broken. Back off briefly instead of disabling it until a reset.
+// A busy front app can make a working shortcut look broken, so one failure backs off only briefly. Failures in a row,
+// with no arrival in between, back off longer: a shortcut that never switches would lose a press at every retry.
 struct NextSourceFailure {
     private(set) var key: String?
     private var retryAt: TimeInterval = 0
-    mutating func failed(_ key: String, at now: TimeInterval) { self.key = key; retryAt = now + 2 }
-    mutating func clear() { key = nil; retryAt = 0 }
+    private var count = 0
+    private var attempt: Int?
+    // `attempt` names the pulse: one that changed nothing in time and then went elsewhere fails once.
+    mutating func failed(_ key: String, at now: TimeInterval, attempt: Int? = nil) {
+        if let attempt, attempt == self.attempt, key == self.key { return }
+        count = key == self.key ? count + 1 : 1
+        self.key = key; self.attempt = attempt
+        retryAt = now + min(600, 5 * pow(4, Double(count - 1)))
+    }
+    mutating func clear() { key = nil; retryAt = 0; count = 0; attempt = nil }
     func allows(_ key: String, at now: TimeInterval) -> Bool { self.key != key || now >= retryAt }
 }
 
@@ -138,7 +147,9 @@ func waitsBetweenSelections(bundles: [String?], always: Bool) -> Bool {
 
 // The same process can retain stale TIS state after another app selects a source. A correction uses a fresh connection
 // for each selection. waitpid avoids Process.waitUntilExit's nested main run loop, and the child has a bounded lifetime.
-func selectSourceInHelper(_ id: String, executable: URL? = nil, canContinue: () -> Bool) -> Bool {
+// The event tap waits meanwhile, so the selections of one switch share `deadline`.
+func selectSourceInHelper(_ id: String, executable: URL? = nil, until deadline: TimeInterval = ProcessInfo.processInfo.systemUptime + 0.75,
+                          canContinue: () -> Bool) -> Bool {
     let path = (executable ?? Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/gksdud")).path
     let values = [path, "--select-input-source", id]
     var arguments: [UnsafeMutablePointer<CChar>?] = values.map { value in value.withCString { strdup($0) } } + [nil]
@@ -146,7 +157,6 @@ func selectSourceInHelper(_ id: String, executable: URL? = nil, canContinue: () 
     var pid: pid_t = 0
     guard posix_spawn(&pid, path, nil, nil, &arguments, environ) == 0 else { return false }
     var status: Int32 = 0
-    let deadline = ProcessInfo.processInfo.systemUptime + 0.75
     while true {
         let result = waitpid(pid, &status, WNOHANG)
         if result == pid { return status == 0 && canContinue() }
@@ -265,7 +275,7 @@ extension AppDelegate {
     }
     // Where switching is headed: a switch waiting for the one on its way, or that one until it lands.
     var logicalSource: InputSourceIdentity? {
-        if let owner = sourceSwitchOwner, owner != NSWorkspace.shared.frontmostApplication?.processIdentifier { return currentSource }
+        if let owner = sourceSwitchOwner, owner != frontmostPID() { return currentSource }
         if let target = queuedSwitch?.target { return target }
         if let id = switchLanding, let source = enabledSources().first(where: { $0.id == id }) { return source }
         return currentSource
@@ -330,7 +340,7 @@ extension AppDelegate {
     // wherever the sources selected so far point.
     @discardableResult
     func switchSource(to target: InputSourceIdentity, from current: InputSourceIdentity, pulse: (CGEvent, CGEvent), owner expectedOwner: pid_t? = nil) -> Bool {
-        let frontmost = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let frontmost = frontmostPID()
         guard expectedOwner == nil || expectedOwner == frontmost else { return false }
         if let owner = sourceSwitchOwner, owner != frontmost { cancelSourceSwitch() }
         sourceSwitchOwner = frontmost
@@ -346,7 +356,7 @@ extension AppDelegate {
             let clicked = [CGEventType.leftMouseDown, .rightMouseDown, .otherMouseDown].contains {
                 CGEventSource.secondsSinceLastEventType(.hidSystemState, eventType: $0) <= elapsed
             }
-            guard frontmost == NSWorkspace.shared.frontmostApplication?.processIdentifier, !clicked else { cancelSourceSwitch(discardKeys: clicked); return false }
+            guard frontmost == frontmostPID(), !clicked else { cancelSourceSwitch(discardKeys: clicked); return false }
             return true
         }
         // The input menu's next source is one shortcut away, as the previous one is: nothing is selected first. Not while
@@ -373,7 +383,7 @@ extension AppDelegate {
             if index > 0 && waits { usleep(50_000) }
             guard canContinue() else { return false }
             guard let source = Self.sourceForID(id),
-                  fresh ? selectSourceInHelper(id, canContinue: canContinue) : TISSelectInputSource(source) == noErr else { failed = true; break }
+                  fresh ? selectSourceInHelper(id, until: started + 0.8, canContinue: canContinue) : TISSelectInputSource(source) == noErr else { failed = true; break }
         }
         guard generation == landingGeneration else { return false }
         guard !failed else {
@@ -397,7 +407,7 @@ extension AppDelegate {
     }
     // A delayed retry or queued switch belongs to the app where it started, including switches requested by the CLI.
     func cancelSourceSwitch(discardKeys: Bool = false) {
-        let discard = discardKeys || (sourceSwitchOwner != nil && sourceSwitchOwner != NSWorkspace.shared.frontmostApplication?.processIdentifier)
+        let discard = discardKeys || (sourceSwitchOwner != nil && sourceSwitchOwner != frontmostPID())
         if switchLanding != nil { sourceHistory.invalidatePrevious() }
         landingGeneration += 1
         queuedSwitch = nil; switchLanding = nil; sourceArrival = nil; nextSent = nil; sourceSwitchOwner = nil
@@ -421,7 +431,7 @@ extension AppDelegate {
     }
     func settleSourceArrival(_ id: String?, at now: TimeInterval) {
         guard switchLanding != nil, let arrival = sourceArrival else { return }
-        guard sourceSwitchOwner == NSWorkspace.shared.frontmostApplication?.processIdentifier else { cancelSourceSwitch(); return }
+        guard sourceSwitchOwner == frontmostPID() else { cancelSourceSwitch(); return }
         switch arrival.outcome(id, at: now) {
         case .waiting: return
         case .arrived:
@@ -432,7 +442,11 @@ extension AppDelegate {
         case .interrupted:
             // An external selection and a misdirected pulse look identical. Never force the old target back or run its
             // queued request: the next explicit key starts from the actual source and rebuilds uncertain history.
-            if let sent = nextSent { engine.nextFailure.failed(sent.key, at: now) }
+            // Having reached its target, the next-source shortcut worked: what came after was chosen elsewhere.
+            if let sent = nextSent {
+                if arrival.sawTarget { engine.nextFailure.clear() }
+                else { engine.nextFailure.failed(sent.key, at: now, attempt: landingGeneration) }
+            }
             cancelSourceSwitch()
             updateInputIndicator()
         }
@@ -447,10 +461,10 @@ extension AppDelegate {
         let owner = sourceSwitchOwner
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             guard let self, self.landingGeneration == generation else { return }
-            guard owner == NSWorkspace.shared.frontmostApplication?.processIdentifier else { self.cancelSourceSwitch(); return }
+            guard owner == frontmostPID() else { self.cancelSourceSwitch(); return }
             guard self.switchLanding != nil else { return }
             self.sourceHistory.invalidatePrevious()
-            if let sent = self.nextSent { self.engine.nextFailure.failed(sent.key, at: ProcessInfo.processInfo.systemUptime) }
+            if let sent = self.nextSent { self.engine.nextFailure.failed(sent.key, at: ProcessInfo.processInfo.systemUptime, attempt: generation) }
             // The front app may just be busy. Do not reorder its sources and send a second pulse while the first is queued.
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
                 self?.expireSourceSwitch(generation: generation, owner: owner)
@@ -459,7 +473,7 @@ extension AppDelegate {
     }
     func expireSourceSwitch(generation: Int, owner: pid_t?) {
         guard landingGeneration == generation, switchLanding != nil else { return }
-        guard owner == NSWorkspace.shared.frontmostApplication?.processIdentifier else { cancelSourceSwitch(discardKeys: true); return }
+        guard owner == frontmostPID() else { cancelSourceSwitch(discardKeys: true); return }
         // With the input window unchanged, a timeout releases its text in the current source instead of losing it.
         cancelSourceSwitch()
         updateInputIndicator()
@@ -467,7 +481,7 @@ extension AppDelegate {
     // The switch that waited for the last one to land; once none is on its way, the keys held meanwhile go on. macOS
     // reports the switch a moment before the frontmost app's input method is ready, so they wait a little longer.
     func runQueuedSwitch() {
-        guard sourceSwitchOwner == NSWorkspace.shared.frontmostApplication?.processIdentifier else { cancelSourceSwitch(); return }
+        guard sourceSwitchOwner == frontmostPID() else { cancelSourceSwitch(); return }
         if let queued = queuedSwitch {
             queuedSwitch = nil
             if let current = currentSource { switchSource(to: queued.target, from: current, pulse: queued.pulse) }
@@ -495,7 +509,7 @@ extension AppDelegate {
     }
     // In order, marked so the tap lets them through.
     func releaseHeldKeys() {
-        if let owner = sourceSwitchOwner, owner != NSWorkspace.shared.frontmostApplication?.processIdentifier { discardHeldKeys(); return }
+        if let owner = sourceSwitchOwner, owner != frontmostPID() { discardHeldKeys(); return }
         holdKeys = false
         let keys = heldKeys
         heldKeys = []; bufferedSourceKeys.removeAll()

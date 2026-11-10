@@ -806,6 +806,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     var sourceHistory = SourceHistory()
     var landingGeneration = 0
     var sourceSwitchOwner: pid_t?
+    var frontmostPID: () -> pid_t? = { NSWorkspace.shared.frontmostApplication?.processIdentifier }
     // The source a switch is on its way to, and one that waits for it to land.
     var switchLanding: String?
     var sourceArrival: SourceArrival?
@@ -1362,10 +1363,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         observers.append(center.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] _ in
             self?.optionInput.cancel(focusChanged: true)
             self?.updateRemoteHold()
-            if let self, let owner = self.sourceSwitchOwner, owner != NSWorkspace.shared.frontmostApplication?.processIdentifier { self.cancelSourceSwitch() }
+            if let self, let owner = self.sourceSwitchOwner, owner != self.frontmostPID() { self.cancelSourceSwitch() }
         })
         observers.append(center.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
-            self?.cancelSourceSwitch(); self?.optionInput.cancel()
+            // Keys held for a switch must not go on under the lock screen or after waking.
+            self?.cancelSourceSwitch(discardKeys: true); self?.optionInput.cancel()
         })
         for name in [NSWorkspace.didWakeNotification, NSWorkspace.screensDidWakeNotification, NSWorkspace.sessionDidBecomeActiveNotification] {
             observers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in self?.recover() })
@@ -1796,7 +1798,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
     // The 1-second repair follows the lock too; this only makes it sooner.
     @objc func screenLockChanged(_ notification: Notification) {
-        cancelSourceSwitch()
+        // Keys held for a switch are dropped: released now, they would go into the lock screen's password field.
+        cancelSourceSwitch(discardKeys: true)
         // Key releases on the lock screen never reached the tap, so keys held before it count as released.
         if notification.name.rawValue == "com.apple.screenIsUnlocked" { recover() }
         repair()

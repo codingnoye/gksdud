@@ -1092,10 +1092,21 @@ func runAddedSourceTests() {
     featureCheck(arrival.settled(ko.id, at: 2.04) && !arrival.settled(abc.id, at: 2.04),
         "Duplicate notices do not postpone an arrival, and completion checks the source again")
     var nextFailure = NextSourceFailure()
-    nextFailure.failed("F13", at: 10)
-    featureCheck(!nextFailure.allows("F13", at: 11) && nextFailure.allows("F16", at: 11)
-        && nextFailure.allows("F13", at: 12), "A temporarily stalled shortcut is retried without resetting activation")
+    nextFailure.failed("F13", at: 10, attempt: 1)
+    featureCheck(!nextFailure.allows("F13", at: 14) && nextFailure.allows("F16", at: 11)
+        && nextFailure.allows("F13", at: 15), "A temporarily stalled shortcut is retried without resetting activation")
+    nextFailure.failed("F13", at: 11, attempt: 1)
+    featureCheck(nextFailure.allows("F13", at: 15), "One pulse that changed nothing and then went elsewhere fails once")
+    nextFailure.failed("F13", at: 15, attempt: 2)
+    featureCheck(!nextFailure.allows("F13", at: 34) && nextFailure.allows("F13", at: 35), "Failing again right after, it waits longer")
+    for attempt in 3...9 { nextFailure.failed("F13", at: 100, attempt: attempt) }
+    featureCheck(!nextFailure.allows("F13", at: 699) && nextFailure.allows("F13", at: 700), "but is always tried again")
+    nextFailure.failed("F16", at: 700, attempt: 10)
+    featureCheck(!nextFailure.allows("F16", at: 704) && nextFailure.allows("F16", at: 705), "Another F-key starts over")
     nextFailure.failed("F13", at: 20); nextFailure.clear()
+    nextFailure.failed("F13", at: 30)
+    featureCheck(nextFailure.allows("F13", at: 35), "An arrival in between starts over as well")
+    nextFailure.clear()
     featureCheck(nextFailure.key == nil && nextFailure.allows("F13", at: 20), "A late successful arrival clears the backoff")
     let selectorDirectory = FileManager.default.temporaryDirectory.appendingPathComponent("gksdud-selector-\(UUID().uuidString)")
     try! FileManager.default.createDirectory(at: selectorDirectory, withIntermediateDirectories: true)
@@ -1116,6 +1127,9 @@ func runAddedSourceTests() {
     let selectorStarted = ProcessInfo.processInfo.systemUptime
     featureCheck(!selectSourceInHelper("test", executable: selector, canContinue: { true })
         && ProcessInfo.processInfo.systemUptime - selectorStarted < 4, "A stuck selector is bounded rather than blocking input indefinitely")
+    let spent = ProcessInfo.processInfo.systemUptime
+    featureCheck(!selectSourceInHelper("test", executable: selector, until: spent, canContinue: { true })
+        && ProcessInfo.processInfo.systemUptime - spent < 0.5, "A selection after the switch's time is up does not wait again")
     featureCheck(plan(ko, zh, next: "ko2", previous: "abc") == SwitchPlan(selections: ["zh", "ko2"], risky: false))
     featureCheck(plan(ko, abc, next: "ja", previous: "ja") == SwitchPlan(selections: ["abc", "ko2"], risky: true)
         && plan(ko, abc, next: nil, previous: nil).risky, "Only a lost setup leaves Korean's syllable at risk")
@@ -1421,6 +1435,8 @@ func runSourceSwitchTests() {
     let defaults = UserDefaults(suiteName: name)!
     defer { defaults.removePersistentDomain(forName: name) }
     let delegate = AppDelegate(engine: Engine(defaults: defaults, discover: { [] }))
+    // Not the app that happens to be in front while the tests run.
+    delegate.frontmostPID = { 100 }
     delegate.switchLanding = "com.example.Target"; delegate.sourceSwitchOwner = -1
     delegate.nextSent = ("from", "to", "F19")
     let oldGeneration = delegate.landingGeneration
@@ -1429,7 +1445,7 @@ func runSourceSwitchTests() {
         && delegate.queuedSwitch == nil && !delegate.holdKeys && delegate.landingGeneration > oldGeneration,
         "Focus loss invalidates delayed corrections and releases switch state")
     delegate.switchLanding = "com.example.Target"
-    delegate.sourceSwitchOwner = NSWorkspace.shared.frontmostApplication?.processIdentifier
+    delegate.sourceSwitchOwner = 100
     delegate.queuedSwitch = (InputSourceIdentity(id: "com.example.Queued", language: "en"), (CGEvent(source: nil)!, CGEvent(source: nil)!))
     delegate.sourceMouseDown()
     featureCheck(delegate.switchLanding == nil && delegate.queuedSwitch == nil && delegate.sourceSwitchOwner == nil,
@@ -1447,7 +1463,7 @@ func runSourceSwitchTests() {
         return event
     }
     delegate.switchLanding = "target"
-    delegate.sourceSwitchOwner = NSWorkspace.shared.frontmostApplication?.processIdentifier
+    delegate.sourceSwitchOwner = 100
     delegate.holdKeys = true; delegate.heldKeys = [key(true)]
     delegate.sourceMouseDown()
     featureCheck(posted.isEmpty && delegate.heldKeys.isEmpty && !delegate.holdKeys,
@@ -1469,30 +1485,36 @@ func runSourceSwitchTests() {
     for external in ["origin", "foreign"] {
         let beforeInterrupt = posted.count
         delegate.switchLanding = "target"
-        delegate.sourceSwitchOwner = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        delegate.sourceSwitchOwner = 100
         delegate.sourceHistory = SourceHistory(["origin", "target"])
         delegate.sourceArrival = SourceArrival(target: "target", origin: "origin")
         delegate.sourceArrival?.observe("target", at: 1)
         delegate.sourceArrival?.observe(external, at: 1.01)
         delegate.queuedSwitch = (InputSourceIdentity(id: "queued", language: "en"), (CGEvent(source: nil)!, CGEvent(source: nil)!))
         delegate.holdKeys = true; delegate.heldKeys = [key(true), key(false)]
+        delegate.nextSent = ("origin", "target", "F13"); delegate.engine.nextFailure.failed("F13", at: 1)
         delegate.settleSourceArrival(external, at: 1.1)
+        featureCheck(delegate.engine.nextFailure.allows("F13", at: 1.2), "The next-source shortcut that reached its target is not held back by a later choice")
         featureCheck(delegate.switchLanding == nil && delegate.sourceArrival == nil && delegate.queuedSwitch == nil
             && delegate.sourceSwitchOwner == nil && delegate.heldKeys.isEmpty && !delegate.holdKeys && posted.count == beforeInterrupt + 2
             && delegate.sourceHistory.previous(of: "origin") == nil && delegate.logicalSource == delegate.currentSource,
             "An external choice cancels the old goal and queue but preserves same-field text; the next key starts from the actual source")
     }
     let afterInterrupts = posted.count
-    delegate.sourceSwitchOwner = NSWorkspace.shared.frontmostApplication?.processIdentifier
+    delegate.sourceSwitchOwner = 100
     delegate.switchLanding = "target"
     delegate.sourceArrival = SourceArrival(target: "target", origin: "origin")
     delegate.sourceArrival?.observe("origin", at: 1)
     delegate.settleSourceArrival("origin", at: 1.1)
     featureCheck(delegate.switchLanding == "target" && posted.count == afterInterrupts, "An unchanged origin waits without sending another pulse")
     delegate.sourceArrival?.observe("foreign", at: 1.2)
+    delegate.nextSent = ("origin", "target", "F13")
     delegate.settleSourceArrival("foreign", at: 1.3)
     featureCheck(delegate.switchLanding == nil && posted.count == afterInterrupts, "A third source is preserved even when the target was never seen")
-    delegate.sourceSwitchOwner = NSWorkspace.shared.frontmostApplication?.processIdentifier
+    featureCheck(!delegate.engine.nextFailure.allows("F13", at: 6.2) && delegate.engine.nextFailure.allows("F13", at: 6.3),
+        "The next-source shortcut that went elsewhere is left alone for a while")
+    delegate.engine.nextFailure.clear()
+    delegate.sourceSwitchOwner = 100
     delegate.switchLanding = "target"
     delegate.sourceArrival = SourceArrival(target: "target", origin: "origin")
     delegate.sourceArrival?.observe("target", at: 2)
@@ -1500,7 +1522,7 @@ func runSourceSwitchTests() {
     delegate.settleSourceArrival("target", at: 2.1)
     featureCheck(delegate.switchLanding == nil && !delegate.holdKeys && posted.count == afterInterrupts + 2,
         "A stable intended arrival still releases its buffered press and release in order")
-    delegate.sourceSwitchOwner = NSWorkspace.shared.frontmostApplication?.processIdentifier
+    delegate.sourceSwitchOwner = 100
     delegate.switchLanding = "target"
     delegate.holdKeys = true; delegate.heldKeys = [key(true), key(false)]
     let timeoutGeneration = delegate.landingGeneration
