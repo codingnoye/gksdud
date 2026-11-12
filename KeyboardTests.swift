@@ -802,6 +802,52 @@ func renderKeyboardUI(to directory: String) throws {
     engine.defaultSources = savedKeys
     delegate.sourceCache = nil; engine.availableSources = { nil }
     delegate.addedSources.refresh(force: true)
+    // 앱 포커스 시 입력 소스 전환: an app's source is one of those in use, Korean and English alone without the section above.
+    let appSettings = delegate.appSourcesSettings
+    delegate.appSourceRules.set(AppSourceRule(bundleID: "org.blenderfoundation.blender", name: "Blender", sourceID: abc.id))
+    delegate.appSourceRules.set(AppSourceRule(bundleID: "com.apple.Terminal", name: "터미널", sourceID: korean.id))
+    delegate.appSourceRules.set(AppSourceRule(bundleID: "com.apple.Notes", name: "메모", sourceID: japanese.id))
+    delegate.sourceCache = (list: [korean, abc, japanese, pinyin], layouts: [abc.id])
+    appSettings.refresh(force: true)
+    precondition(appSettings.enable.isEnabled && !appSettings.edit.isEnabled, "The apps wait for the checkbox")
+    appSettings.enable.performClick(nil)
+    precondition(delegate.appSourceRules.enabled && appSettings.edit.isEnabled)
+    func appPicker(_ bundle: String) -> NSPopUpButton {
+        let row = delegate.appSourceRules.rules.firstIndex { $0.bundleID == bundle }!
+        return descendants(appSettings.table.view(atColumn: 0, row: row, makeIfNecessary: true)!).compactMap { $0 as? NSPopUpButton }.first!
+    }
+    var appChoice = appPicker("org.blenderfoundation.blender")
+    precondition(appChoice.itemArray.map { $0.representedObject as? String } == [korean.id, abc.id], "Korean and English alone")
+    appChoice.selectItem(at: 0)
+    precondition(appChoice.sendAction(appChoice.action, to: appChoice.target))
+    precondition(delegate.appSourceRules.rules.first { $0.bundleID == "org.blenderfoundation.blender" }?.sourceID == korean.id,
+        "The popup saves the selected source for its app")
+    appChoice = appPicker("com.apple.Notes")
+    precondition(appChoice.titleOfSelectedItem?.hasSuffix("(비활성)") == true && appChoice.selectedItem?.isEnabled == false
+        && delegate.appSourceRules.rules.contains { $0.sourceID == japanese.id }, "A source chosen earlier and not in use now is kept and shown as such")
+    for (name, appearance) in [("light", NSAppearance.Name.aqua), ("dark", NSAppearance.Name.darkAqua)] {
+        delegate.window.appearance = NSAppearance(named: appearance); delegate.selectTab(3)
+        try save(delegate.window.contentView!, "app-source-section-\(name).png")
+        appSettings.window.appearance = NSAppearance(named: appearance)
+        try save(appSettings.window.contentView!, "app-sources-\(name).png")
+    }
+    // With the sources managed, the ones left on: Japanese is back, English turned off is not offered.
+    defaults.set(true, forKey: "addedSources"); engine.disabledSources = [abc.id]
+    delegate.addedSources.refresh(force: true)
+    appChoice = appPicker("com.apple.Notes")
+    precondition(appChoice.itemArray.map { $0.representedObject as? String } == [korean.id, japanese.id, pinyin.id]
+        && appChoice.selectedItem?.representedObject as? String == japanese.id && appChoice.selectedItem?.isEnabled == true)
+    for key in ["addedSources", "disabledSources"] { defaults.removeObject(forKey: key) }
+    delegate.addedSources.refresh(force: true)
+    let blender = delegate.appSourceRules.rules.firstIndex { $0.bundleID == "org.blenderfoundation.blender" }!
+    appSettings.table.selectRowIndexes(IndexSet(integer: blender), byExtendingSelection: false)
+    appSettings.remove.performClick(nil)
+    precondition(delegate.appSourceRules.rules.count == 2 && !delegate.appSourceRules.rules.contains { $0.bundleID == "org.blenderfoundation.blender" })
+    engine.accessibilityTrusted = { false }; appSettings.refresh(force: true)
+    precondition(!appSettings.enable.isEnabled && !appSettings.edit.isEnabled && !appSettings.add.isEnabled && !appSettings.remove.isEnabled)
+    engine.accessibilityTrusted = { true }
+    for key in ["appSources", "appSourcesEnabled"] { defaults.removeObject(forKey: key) }
+    delegate.sourceCache = nil; appSettings.refresh(force: true)
     // Caps Lock chosen as a Korean/English key while Caps Lock in Korean is on: the warning, then the tab once confirmed.
     // runCapsLockKeyTests checks the answers.
     defaults.set(true, forKey: "koreanCapsLock")
@@ -1422,7 +1468,7 @@ func runPermissionTests() {
     delegate.buildWindow()
     delegate.updatePressAccess()
     let settings: [NSControl] = [delegate.enabled, delegate.login, delegate.showInMenuBar, delegate.iconPicker, delegate.iconCaseSwitch, delegate.picker,
-                                 delegate.advancedButton, delegate.longPressSwitch, delegate.escapeSwitch, delegate.backquoteSwitch, delegate.universalControlSwitch, delegate.addedSources.enable] + delegate.specialButtons
+                                 delegate.advancedButton, delegate.longPressSwitch, delegate.escapeSwitch, delegate.backquoteSwitch, delegate.universalControlSwitch, delegate.addedSources.enable, delegate.appSourcesSettings.enable] + delegate.specialButtons
     precondition(settings.allSatisfy { !$0.isEnabled } && delegate.pressAccess.isEnabled, "Only the permission button is left")
     precondition(delegate.settingLabels.allSatisfy { $0.label.textColor == .disabledControlTextColor }, "Titles and hints dim too")
     delegate.picker.show([sources[0], sources[1]])

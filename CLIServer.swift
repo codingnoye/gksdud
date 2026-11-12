@@ -130,6 +130,7 @@ extension AppDelegate {
         case "backquote": return .bool(engine.swapBackquote)
         case "universal-control": return .bool(engine.universalControlCompat)
         case "added-sources": return .bool(engine.addedSourcesEnabled)
+        case "app-sources": return .bool(appSourceRules.enabled)
         case "cycle": return .list(cycleOrder)
         case "source-key-return": return .bool(engine.sourceKeyReturns)
         case "compatibility": return .bool(engine.addedSourcesCompatible)
@@ -247,7 +248,7 @@ extension AppDelegate {
         }
         let section = addedSources
         if let id = item.source {
-            guard section.edit.isEnabled else { return trusted ? "입력 소스 관리를 켜야 쓸 수 있습니다." : accessibilityHint }
+            guard section.edit.isEnabled else { return trusted ? "다국어 및 추가 입력 소스 관리를 켜야 쓸 수 있습니다." : accessibilityHint }
             switch item.setting.name {
             case "enabled": section.setSource(id, on: on)
             case "key": section.setKey(text.map { keyIDs([$0]) }?.first, for: id)
@@ -274,6 +275,7 @@ extension AppDelegate {
         case "long-press": return flip(longPressSwitch) { toggleFeature(longPressSwitch) }
         case "preserve-case": return flip(preserveCapsSwitch) { toggleFeature(preserveCapsSwitch) }
         case "korean-caps-lock": return flip(koreanCapsSwitch) { toggleFeature(koreanCapsSwitch) }
+        case "app-sources": return flip(appSourcesSettings.enable) { appSourcesSettings.toggle() }
         case "escape": return flip(escapeSwitch) { toggleFeature(escapeSwitch) }
         case "backquote": return flip(backquoteSwitch) { toggleFeature(backquoteSwitch) }
         case "universal-control": return flip(universalControlSwitch) { toggleFeature(universalControlSwitch) }
@@ -298,7 +300,7 @@ extension AppDelegate {
             button.state = mode == 0 ? .off : .on; changeSpecialMode(button)
         case "added-sources": return flip(section.enable) { section.toggle() }
         default:
-            guard section.edit.isEnabled else { return trusted ? "입력 소스 관리를 켜야 쓸 수 있습니다." : accessibilityHint }
+            guard section.edit.isEnabled else { return trusted ? "다국어 및 추가 입력 소스 관리를 켜야 쓸 수 있습니다." : accessibilityHint }
             switch item.setting.name {
             case "cycle": section.setCycle(list ?? [])
             case "source-key-return": return flip(section.returns) { section.toggleReturns() }

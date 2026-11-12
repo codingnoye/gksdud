@@ -179,8 +179,11 @@ extension AppDelegate {
         specialStatus.font = .systemFont(ofSize: 11); specialStatus.textColor = .secondaryLabelColor
         full(specialStatus, in: symbols)
         let extras = tabPanels[3]
-        heading("입력 소스 관리", in: extras)
+        heading("다국어 및 추가 입력 소스 관리", in: extras)
         addedSources.install(in: extras)
+        separator(in: extras)
+        heading("앱 포커스 시 입력 소스 전환", in: extras)
+        appSourcesSettings.install(in: extras)
         separator(in: extras)
         heading("기타", in: extras)
         escapeSwitch.target = self; escapeSwitch.action = #selector(toggleFeature(_:))

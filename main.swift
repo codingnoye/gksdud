@@ -807,6 +807,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     var landingGeneration = 0
     var sourceSwitchOwner: pid_t?
     var frontmostPID: () -> pid_t? = { NSWorkspace.shared.frontmostApplication?.processIdentifier }
+    var appSourceFocus = AppSourceFocus()
+    lazy var appSourcesSettings = AppSourcesSettings(owner: self)
     // The source a switch is on its way to, and one that waits for it to land.
     var switchLanding: String?
     var sourceArrival: SourceArrival?
@@ -887,6 +889,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         permissionSettingsWasActive = false
     }
     func stopKeyTap() {
+        appSourceFocus.cancel()
         cancelSourceSwitch()
         optionInput.cancel()
         cancelCapsRestore()
@@ -1018,6 +1021,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
     func updatePressAccess() {
         addedSources.refresh()
+        appSourcesSettings.refresh()
         let trusted = engine.accessibilityTrusted()
         // Switching needs the tap, so without Accessibility only the permission button and the gksdud tab can be used.
         for control: NSControl in [enabled, login, showInMenuBar, iconPicker, picker, advancedButton] + specialButtons { control.isEnabled = trusted }
@@ -1128,6 +1132,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
     // `key` is the key that switches, when there is one.
     func rememberCapsBeforeSwitch(_ key: CGEvent? = nil) {
+        // A switch asked for by hand wins over the app's own source on its way.
+        appSourceFocus.cancel()
         guard capsPreservationActive else { return }
         if let key, remoteKeyboards.sentFromOtherMac(key) { englishCaps.followSender(key.flags.contains(.maskAlphaShift)) }
         englishCaps.willSwitch(english: currentLanguage.hasPrefix("en"), actual: currentCaps,
@@ -1213,6 +1219,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         if pendingCapsState != nil { pendingCapsState = false; longPressOwner = nil; capsTransitionFeature = escapeSwitch; return }
         let language = currentLanguage
         guard escapeNeedsEnglish(language: language, upper: caps || rememberedUpper, switching: switchInFlight(from: language)) else { return }
+        appSourceFocus.cancel()
         cancelLongPress()
         beginCapsTransition(false, pulse: nativeSwitchPulse(keyCode: engine.target.keyCode, marker: nativePulseMarker), from: escapeSwitch)
     }
@@ -1360,14 +1367,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in self?.finishPermissionVisit() }
             }
         })
-        observers.append(center.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] _ in
+        appSourceFocus.begin(frontmostPID())
+        observers.append(center.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] notice in
             self?.optionInput.cancel(focusChanged: true)
             self?.updateRemoteHold()
             if let self, let owner = self.sourceSwitchOwner, owner != self.frontmostPID() { self.cancelSourceSwitch() }
+            if let app = notice.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication { self?.appSourceActivated(app) }
         })
         observers.append(center.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
             // Keys held for a switch must not go on under the lock screen or after waking.
-            self?.cancelSourceSwitch(discardKeys: true); self?.optionInput.cancel()
+            self?.appSourceFocus.cancel(); self?.cancelSourceSwitch(discardKeys: true); self?.optionInput.cancel()
         })
         for name in [NSWorkspace.didWakeNotification, NSWorkspace.screensDidWakeNotification, NSWorkspace.sessionDidBecomeActiveNotification] {
             observers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in self?.recover() })
@@ -1689,7 +1698,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         menuInputTimer = nil
     }
     func selectLanguage(_ prefix: String) {
-        cancelSourceSwitch(discardKeys: true)
+        appSourceFocus.cancel(); cancelSourceSwitch(discardKeys: true)
         if let source = menuLanguageSource(prefix).flatMap({ Self.sourceForID($0.id) }) { rememberCapsBeforeSwitch(); _ = TISSelectInputSource(source) }
         updateInputIndicator()
     }
@@ -1787,7 +1796,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         do { try engine.restore(); lastError = ""; stickyError = ""; repairFailed = false; refreshStatus() } catch { report(error) }
         resetSelection(); syncCapsPreservation(); updatePressAccess(); refreshKeyboardState()
     }
-    func recover() { cancelSourceSwitch(); sourceCache = nil; engine.nextFailure.clear(); engine.followedNext = nil; observedCaps = nil; optionInput.cancel(); if capsRestoreTasks.isEmpty { englishCaps.switching = false }; cancelLongPress(); longPress = LongPressState(); pressGate.held.removeAll(); nativeRemote = NativeRemoteGate(); spaceGate = SpaceComboGate(); sourceKeyGate.held.removeAll(); for delay in [0.5, 2.0, 5.0] { DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.repair() } } }
+    func recover() { appSourceFocus.cancel(); cancelSourceSwitch(); sourceCache = nil; engine.nextFailure.clear(); engine.followedNext = nil; observedCaps = nil; optionInput.cancel(); if capsRestoreTasks.isEmpty { englishCaps.switching = false }; cancelLongPress(); longPress = LongPressState(); pressGate.held.removeAll(); nativeRemote = NativeRemoteGate(); spaceGate = SpaceComboGate(); sourceKeyGate.held.removeAll(); for delay in [0.5, 2.0, 5.0] { DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.repair() } } }
     // The tap does not see Caps Lock on another user's login window, and leaves it alone on the lock screen. Coming back
     // with English (or Korean showing the English case) selected, the lock as left there is the English case. A restore on
     // its way finishes first: unlocking can land in Korean while its input method turns the lock off.
@@ -1799,7 +1808,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     // The 1-second repair follows the lock too; this only makes it sooner.
     @objc func screenLockChanged(_ notification: Notification) {
         // Keys held for a switch are dropped when locking: released now, they would go into the password field.
-        cancelSourceSwitch(discardKeys: notification.name.rawValue == "com.apple.screenIsLocked")
+        appSourceFocus.cancel(); cancelSourceSwitch(discardKeys: notification.name.rawValue == "com.apple.screenIsLocked")
         // Key releases on the lock screen never reached the tap, so keys held before it count as released.
         if notification.name.rawValue == "com.apple.screenIsUnlocked" { recover() }
         repair()

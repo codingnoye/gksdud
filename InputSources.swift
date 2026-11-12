@@ -669,7 +669,7 @@ extension AppDelegate {
         }
     }
     @objc func selectAddedSource(_ sender: NSMenuItem) {
-        cancelSourceSwitch(discardKeys: true)
+        appSourceFocus.cancel(); cancelSourceSwitch(discardKeys: true)
         if let id = sender.representedObject as? String, let source = Self.sourceForID(id) { rememberCapsBeforeSwitch(); _ = TISSelectInputSource(source) }
         updateInputIndicator()
     }
@@ -886,6 +886,8 @@ final class AddedSourcesSettings: NSObject, NSTableViewDataSource, NSTableViewDe
         }, uniquingKeysWith: { first, _ in first })
         englishIcons = []
         table.reloadData()
+        // An app's source is chosen among the ones in use here.
+        owner.appSourcesSettings.refresh(force: force)
         // Only states the user has to act on.
         let text = !usable ? "" : error ?? currentWarning()
         for label in [warning, sheetWarning] { label.stringValue = text; label.isHidden = text.isEmpty }
