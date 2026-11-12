@@ -44,10 +44,11 @@ enum CLI {
         Setting(name: "korean-caps-lock", kind: .bool, title: "한글 상태에서도 Caps Lock으로 대소문자 전환"),
         Setting(name: "special-chars", kind: .choice(specialNames), title: "특수문자 (끔, 영어처럼 입력, Option 문자 입력 차단)"),
         Setting(name: "backquote", kind: .bool, title: "한글 상태에서 ₩와 ` 반전"),
-        Setting(name: "added-sources", kind: .bool, title: "입력 소스 관리"),
+        Setting(name: "added-sources", kind: .bool, title: "다국어 및 추가 입력 소스 관리"),
         Setting(name: "cycle", kind: .sources, title: "한영 키로 순환할 입력 소스와 순서"),
         Setting(name: "source-key-return", kind: .bool, title: "전용 전환 키를 한 번 더 누를 시 직전 입력 소스로 전환"),
-        Setting(name: "compatibility", kind: .bool, title: "입력 소스 관리 호환성 모드"),
+        Setting(name: "compatibility", kind: .bool, title: "다국어 및 추가 입력 소스 관리 호환성 모드"),
+        Setting(name: "app-sources", kind: .bool, title: "앱 포커스 시 입력 소스 전환"),
         Setting(name: "escape", kind: .bool, title: "ESC 누를 시 영소문자로 변경"),
         Setting(name: "universal-control", kind: .bool, title: "유니버설 컨트롤 호환 모드"),
         Setting(name: "update-channel", kind: .choice(channelNames), title: "업데이트 채널 (정식 릴리즈, 프리릴리즈, 카나리아)"),
@@ -59,7 +60,7 @@ enum CLI {
     ]
     // source.<input source>.enabled and source.<input source>.key.
     static let sourceSettings: [Setting] = [
-        Setting(name: "enabled", kind: .bool, title: "입력 소스별 활성화 (입력 소스 관리)"),
+        Setting(name: "enabled", kind: .bool, title: "입력 소스별 활성화 (다국어 및 추가 입력 소스 관리)"),
         Setting(name: "key", kind: .key, title: "입력 소스별 전용 전환 키"),
         Setting(name: "internal-key", kind: .choice(["auto"] + targetNames), title: "입력 소스별 내부 키 (단일 전용 전환 키가 보내는 F-키)"),
     ]
