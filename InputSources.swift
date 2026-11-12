@@ -335,7 +335,7 @@ extension AppDelegate {
               let pulse = nativeSwitchPulse(keyCode: engine.target.keyCode, marker: nativePulseMarker) else { return false }
         let enabled = activeSources()
         guard enabled.contains(where: { $0.id == id }) else { return false }
-        guard let target = keySourceTarget(id, current: current, returns: engine.sourceKeyReturns, enabled: enabled, history: sourceHistory) else { return true }
+        guard let target = keySourceTarget(id, current: current, returns: engine.sourceKeyReturns, enabled: enabled, history: sourceHistory) else { appSourceFocus.cancel(); return true }
         rememberCapsBeforeSwitch(key)
         _ = switchSource(to: target, from: current, pulse: pulse)
         return true

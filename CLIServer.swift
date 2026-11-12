@@ -541,6 +541,7 @@ extension AppDelegate {
         }
         let target = try matchSource(spec)
         guard target.id != from.id else {
+            appSourceFocus.cancel()
             return CommandReply(text: "\(target.id) (이미 선택됨)", json: ["ok": true, "switched": false, "from": describe(from), "to": describe(target)])
         }
         if let pulse {
