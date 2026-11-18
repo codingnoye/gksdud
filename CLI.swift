@@ -51,6 +51,7 @@ enum CLI {
         Setting(name: "app-sources", kind: .bool, title: "앱 포커스 시 입력 소스 전환"),
         Setting(name: "escape", kind: .bool, title: "ESC 누를 시 영소문자로 변경"),
         Setting(name: "universal-control", kind: .bool, title: "유니버설 컨트롤 호환 모드"),
+        Setting(name: "sync", kind: .bool, title: "다른 Mac과 한영 상태 동기화 (동기화 코드는 설정 창에서 입력)"),
         Setting(name: "update-channel", kind: .choice(channelNames), title: "업데이트 채널 (정식 릴리즈, 프리릴리즈, 카나리아)"),
     ]
     // keyboard.<keyboard>.mode and keyboard.<keyboard>.keys.

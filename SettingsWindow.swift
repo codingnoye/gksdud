@@ -191,6 +191,14 @@ extension AppDelegate {
         universalControlSwitch.target = self; universalControlSwitch.action = #selector(toggleFeature(_:))
         extras.addArrangedSubview(universalControlSwitch)
         hint("유니버설 컨트롤로 사용시 전환이 잘 안된다면, 원격 기기에서 켜 주세요.", in: extras)
+        syncSwitch.target = self; syncSwitch.action = #selector(toggleSync)
+        extras.addArrangedSubview(syncSwitch)
+        syncCodeField.placeholderString = "동기화 코드"; syncCodeField.target = self; syncCodeField.action = #selector(changeSyncCode)
+        syncCodeField.cell?.sendsActionOnEndEditing = true
+        syncCodeField.widthAnchor.constraint(equalToConstant: 200).isActive = true
+        let syncRow = NSStackView(views: [syncCodeField]); syncRow.edgeInsets.left = 20
+        extras.addArrangedSubview(syncRow)
+        hint("같은 네트워크의 두 Mac에 같은 동기화 코드를 입력하고 켜 주세요. 켜면 앱 포커스 시 입력 소스 전환은 꺼집니다.", in: extras)
         separator(in: extras)
         // Installing needs no Accessibility, so this section never dims.
         heading("CLI", in: extras, dims: false)
