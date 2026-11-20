@@ -104,9 +104,16 @@ struct NextSourceFailure {
 // started before a previous-source pulse, which waits for it, and whenever it is found gone, for the presses that reach
 // macOS as they are.
 struct InputSwitcher {
-    // Its launch agent hides the first port until the process has checked in; the second is there whenever the agent is.
+    // Off in tests, which leave the system's own process alone.
+    static var system = true
+    // Its launch agent hides this port until the process has checked in.
     var running: () -> Bool = { machServiceExists("com.apple.inputswitcher.running") }
-    var present: () -> Bool = { machServiceExists("com.apple.inputswitcher.startup") }
+    // The agent's other port is there whenever the agent is. Only on the versions the lost shortcut was seen on: on others
+    // the process may come and go by design.
+    var present: () -> Bool = {
+        system && ProcessInfo.processInfo.isOperatingSystemAtLeast(OperatingSystemVersion(majorVersion: 26, minorVersion: 0, patchVersion: 0))
+            && machServiceExists("com.apple.inputswitcher.startup")
+    }
     var start: () -> Void = {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/bin/launchctl")
@@ -116,19 +123,36 @@ struct InputSwitcher {
     }
     var now: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
     var pause: (TimeInterval) -> Void = { usleep(useconds_t($0 * 1_000_000)) }
-    // Set while a start has not been seen running yet.
     private(set) var startedAt: TimeInterval?
-    // It is up some 0.1s after its start. One that did not come up is left for a while, so that not every press waits.
-    static let patience: TimeInterval = 0.4, rest: TimeInterval = 10
+    // The last start has not been seen running yet.
+    private(set) var pending = false
+    // Seen gone since it last ran.
+    private var gone = false
+    // How long after a start the next one waits.
+    private(set) var gap = InputSwitcher.rest
+    // It is up some 0.1s after its start; a pulse waits no longer than a press held for a moment.
+    static let patience: TimeInterval = 0.3, rest: TimeInterval = 10, settled: TimeInterval = 60, longest: TimeInterval = 600
     mutating func wake(waiting: Bool) {
-        if running() { startedAt = nil; return }
+        if running() { pending = false; gone = false; return }
         guard present() else { return }
-        let time = now()
-        if let startedAt, time - startedAt < Self.rest {
-            guard waiting, time - startedAt < Self.patience else { return }
-        } else { start(); startedAt = time }
+        let time = now(), age = startedAt.map { time - $0 } ?? .infinity
+        // Ended soon after its start, memory is still short and it would only be ended again: each such start waits longer.
+        if !pending && !gone { gone = true; gap = age < Self.settled ? min(Self.longest, gap * 4) : Self.rest }
+        if pending && age < Self.patience {
+            // Still coming up.
+            guard waiting else { return }
+        } else if age < gap && (pending || !waiting) {
+            // One that did not come up is left for a while, so that not every press waits. One that ran is started for a pulse.
+            return
+        } else {
+            if pending { gap = min(Self.longest, gap * 4) }
+            start(); startedAt = time; pending = true
+        }
         guard waiting, let startedAt else { return }
-        while !running() && now() - startedAt < Self.patience { pause(0.005) }
+        while now() - startedAt < Self.patience {
+            if running() { pending = false; gone = false; return }
+            pause(0.005)
+        }
     }
 }
 func machServiceExists(_ name: String) -> Bool {
@@ -449,6 +473,8 @@ extension AppDelegate {
             expectLanding(target, origin: current.id)
             return true
         }
+        // The previous-source shortcut from here on. Its switcher, if gone, comes up while the sources are selected.
+        wakeInputSwitcher(for: pulse, waiting: false)
         let setup = plannedSwitch(to: target, from: current), plan = setup.plan
         let bundles = ([current.id] + plan.selections + Array(sourceHistory.ids.prefix(2))).map(Self.bundleID)
         // A recently left third-party IME can retain stale state even when the history itself is known.
@@ -475,6 +501,8 @@ extension AppDelegate {
             updateInputIndicator()
             return false
         }
+        // Waited for before the last look, so that a click or another app in the meantime still stops the pulse.
+        wakeInputSwitcher(for: pulse, waiting: true)
         guard canContinue() else { return false }
         addedSources.showError(nil)
         // The frontmost app can see the selections before the shortcut's switch reaches it.

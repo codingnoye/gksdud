@@ -1597,25 +1597,41 @@ func runSourceSwitchTests() {
     featureCheck(starts == 0 && clock == 100, "Without the switcher's launch agent nothing is started or waited for")
     there = true; upAt = 100.1
     switcher.wake(waiting: true)
-    featureCheck(starts == 1 && up && clock >= 100.1 && clock < 100.12, "A pulse starts an ended switcher and waits until it is up")
-    switcher.wake(waiting: false)
-    featureCheck(switcher.startedAt == nil, "A start seen running is over")
+    featureCheck(starts == 1 && up && clock >= 100.1 && clock < 100.12 && !switcher.pending, "A pulse starts an ended switcher and waits until it is up")
     up = false; upAt = 200.1; clock = 200
     switcher.wake(waiting: false)
     featureCheck(starts == 2 && clock == 200, "Found gone between presses, it is started without waiting")
     clock = 200.05
     switcher.wake(waiting: true)
     featureCheck(starts == 2 && up && clock >= 200.1 && clock < 200.12, "A pulse right after that start waits for it instead of starting another")
-    switcher.wake(waiting: false)
     up = false; upAt = nil; clock = 300
     switcher.wake(waiting: true)
-    featureCheck(starts == 3 && !up && clock >= 300.4 && clock < 300.42, "One that does not come up is waited for only so long")
+    featureCheck(starts == 3 && !up && clock >= 300.3 && clock < 300.32, "One that does not come up is waited for only so long")
     clock = 301
     switcher.wake(waiting: true); switcher.wake(waiting: false)
     featureCheck(starts == 3 && clock == 301, "And is then left alone for a while: no press waits again, nothing is started again")
     clock = 311
     switcher.wake(waiting: false)
-    featureCheck(starts == 4, "Later it is tried again")
+    featureCheck(starts == 4 && switcher.gap == 40, "Later it is tried again")
+    clock = 330
+    switcher.wake(waiting: false); switcher.wake(waiting: true)
+    featureCheck(starts == 4 && clock == 330, "Each time it does not come up, the next try is further away")
+    clock = 352
+    switcher.wake(waiting: false)
+    up = true; switcher.wake(waiting: false)
+    featureCheck(starts == 5 && !switcher.pending, "Up at last, that start is over")
+    up = false; clock = 360
+    switcher.wake(waiting: false)
+    let short = switcher.gap
+    clock = 380
+    switcher.wake(waiting: false)
+    featureCheck(starts == 5 && short == 600 && switcher.gap == 600, "Ended soon after its start, it is not started again at once, and that is counted once")
+    upAt = 380.05
+    switcher.wake(waiting: true)
+    featureCheck(starts == 6 && up && clock < 380.07, "A pulse still starts it then")
+    up = false; clock = 500
+    switcher.wake(waiting: false)
+    featureCheck(starts == 7 && switcher.gap == InputSwitcher.rest, "One that ran for a while is started again at once")
     print("PASS: source switch ownership, same-app click buffer disposal, discarded releases, external choices, queued cancellation, unheard switches and the ended input switcher")
 }
 

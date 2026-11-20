@@ -25,6 +25,7 @@ func runTestMode() -> Bool {
 
 func runSelfTest() {
     setbuf(stdout, nil)
+    InputSwitcher.system = false
     do { try runSettingsReentrancyTests() } catch { fputs("Settings reentrancy tests failed: \(error)\n", stderr); exit(1) }
     do { try runShortcutRestoreTests() } catch { fputs("Shortcut tests failed: \(error)\n", stderr); exit(1) }
     do { try runExitTests() } catch { fputs("Exit tests failed: \(error)\n", stderr); exit(1) }

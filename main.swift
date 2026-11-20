@@ -1305,8 +1305,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         switchErrors[feature] = message
         updatePressAccess()
     }
+    // The previous-source shortcut needs macOS's input switcher running; the next-source one does not.
+    func wakeInputSwitcher(for pulse: (CGEvent, CGEvent), waiting: Bool) {
+        if pulse.0.getIntegerValueField(.keyboardEventKeycode) == Int64(engine.target.keyCode) { inputSwitcher.wake(waiting: waiting) }
+    }
     func postSwitchPulse(_ pulse: (CGEvent, CGEvent)) {
-        if pulse.0.getIntegerValueField(.keyboardEventKeycode) == Int64(engine.target.keyCode) { inputSwitcher.wake(waiting: true) }
+        wakeInputSwitcher(for: pulse, waiting: true)
         noteSwitchSent()
         // Notices from here on are this switch's, not those of a next-source shortcut sent before.
         nextSent = nil
