@@ -19,9 +19,14 @@ struct SyncClock {
     // Korean and English for now. Another language is neither sent nor taken, so a later version can add it.
     static let languages = ["ko", "en"]
     private(set) var last: SyncState?
+    // The language this Mac was last seen in, or is on its way to for the other Mac. Not the last one sent: Japanese
+    // is not sent, yet coming back from it to Korean is a change, with the other Mac perhaps elsewhere by then.
+    private var here: String?
     // A change made here, to send. Nil when it is the landing of a change the other Mac asked for.
     mutating func changed(_ language: String, now: TimeInterval) -> SyncState? {
-        guard Self.languages.contains(language), language != last?.language else { return nil }
+        guard language != here else { return nil }
+        here = language
+        guard Self.languages.contains(language) else { return nil }
         // After the last change known, even with this Mac's clock behind the other's.
         last = SyncState(language: language, at: max(now, (last?.at ?? 0) + 0.001))
         return last
@@ -30,7 +35,7 @@ struct SyncClock {
     // taken again, so a resend makes up for one that was missed.
     mutating func received(_ state: SyncState) -> String? {
         guard Self.languages.contains(state.language), state.at >= (last?.at ?? 0) else { return nil }
-        last = state
+        last = state; here = state.language
         return state.language
     }
 }
@@ -288,6 +293,14 @@ func runSyncTests() {
     var c = SyncClock(), d = SyncClock()
     let early = c.changed("ko", now: 30)!, late = d.changed("en", now: 30.1)!
     precondition(c.received(late) == "en" && d.received(early) == nil && c.last == d.last, "Two changes at once end in the later one on both")
+    // Both in Korean, then both in Japanese, which is not sent: one coming back to Korean brings the other along.
+    var e = SyncClock(), f = SyncClock()
+    let before = e.changed("ko", now: 40)!
+    precondition(f.received(before) == "ko" && f.changed("ko", now: 40.1) == nil && e.changed("ja", now: 41) == nil && f.changed("ja", now: 41) == nil
+        && e.last == before, "A language that is not synced is not sent")
+    let back = e.changed("ko", now: 42)
+    precondition(back.map { $0.language == "ko" && $0.at > before.at && f.received($0) == "ko" } == true && e.changed("ko", now: 43) == nil,
+                 "Coming back from it is sent again")
 
     // Of the Macs Tailscale lists, this one calls its account's other Macs that are online and have a greater address.
     func node(_ address: String, user: Int = 1, os: String = "macOS", online: Bool = true) -> String {
