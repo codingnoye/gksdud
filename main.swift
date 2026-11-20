@@ -1889,12 +1889,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     @objc func quit() { NSApp.terminate(nil) }
 }
 
+// One gksdud per user. The command port shows a running app only within its login session, and an app that outlived a
+// logout is in none, so a file lock tells: the kernel names its holder, and frees it however that app ends.
+enum InstanceLock {
+    // In Application Support: the temporary folder loses a file nobody has read for three days, held open or not.
+    static var file: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent(Bundle.main.bundleIdentifier ?? "io.gksdud.inputswitch").appendingPathComponent("instance.lock")
+    }
+    // Open for as long as the app runs, as closing it gives the lock up.
+    private static var descriptor: Int32 = -1
+    // False when an app that answers in this session holds the lock; this launch leaves it to that one. An app that does not
+    // answer is ended as a logout would end it, and this one takes over.
+    static func claim(_ file: URL = InstanceLock.file, patience: TimeInterval = 2,
+                      answering: () -> Bool = { CFMessagePortCreateRemote(nil, CLI.port(Bundle.main.bundleIdentifier) as CFString) != nil }) -> Bool {
+        try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        descriptor = open(file.path, O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
+        // Without the file nothing tells the apps apart, and the app still starts.
+        guard descriptor >= 0 else { return true }
+        var lock = flock(l_start: 0, l_len: 0, l_pid: 0, l_type: Int16(F_WRLCK), l_whence: Int16(SEEK_SET))
+        if fcntl(descriptor, F_SETLK, &lock) == 0 { return true }
+        if answering() { return false }
+        for signal in [SIGTERM, SIGKILL] {
+            var holder = lock
+            if fcntl(descriptor, F_GETLK, &holder) == 0, holder.l_type != F_UNLCK { kill(holder.l_pid, signal) }
+            let deadline = ProcessInfo.processInfo.systemUptime + patience
+            repeat {
+                if fcntl(descriptor, F_SETLK, &lock) == 0 { return true }
+                usleep(10_000)
+            } while ProcessInfo.processInfo.systemUptime < deadline
+        }
+        return true
+    }
+}
+
 if CommandLine.arguments.dropFirst().first == "--install-update" {
     do { try UpdateInstaller.runHelper(CommandLine.arguments) } catch { fputs("Update helper failed: \(error.localizedDescription)\n", stderr); exit(1) }
 } else {
     #if TESTS
     if runTestMode() { exit(0) }
     #endif
+    // Before this launch changes anything, permissions included.
+    if !InstanceLock.claim() { fputs("gksdud가 이미 실행 중입니다.\n", stderr); exit(0) }
     // Before anything asks about Accessibility, so that the first answer is already for this build.
     let askForPermission = UpdateValidation.forgetSelfSignedPermissions(defaults: .standard)
     let app = NSApplication.shared

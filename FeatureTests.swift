@@ -101,6 +101,7 @@ func runFeatureTests() {
                  "The installer takes the same version only on the move to Developer ID")
     print("PASS: numeric versions, release summary boundaries, trusted release URLs, daily schedule, retry/cache/offline/upgrade behavior, summaries and warnings of every newer version, links in them, the Apple-signed archive first, the same version signed by Apple for a self-signed app")
     do { try runUpdateInstallTests() } catch { preconditionFailure("Installer tests: \(error)") }
+    do { try runInstanceLockTests() } catch { preconditionFailure("Instance lock tests: \(error)") }
     runPrereleaseTests()
     runOptionInputTests()
     runOptionRepeatTests()
@@ -803,6 +804,40 @@ func runUpdateInstallTests() throws {
     featureCheck(rollbackSawDeadChild, "Old app relaunch waits for timed-out child termination")
     print("PASS: launch readiness, early exit, timeout termination, SIGKILL fallback, child exit before rollback")
     print("PASS: archive checksums/paths/link and size rejection, release asset origin, validation before replacement, move/launch rollback, successful replacement")
+}
+
+// The other app of the instance lock tests: holds the lock, says so, and waits to be ended.
+func holdInstanceLock(_ file: URL, ignoringTermination: Bool) {
+    if ignoringTermination { signal(SIGTERM, SIG_IGN) }
+    featureCheck(InstanceLock.claim(file) { false })
+    print("locked"); fflush(stdout)
+    sleep(30)
+}
+
+func runInstanceLockTests() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("gksdud-instance-test-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: root) }
+    // Real children: a process never conflicts with a lock of its own.
+    func holder(_ file: URL, _ options: [String] = []) throws -> Process {
+        let process = Process(), output = Pipe()
+        process.executableURL = Bundle.main.executableURL
+        process.arguments = ["--hold-instance-lock", file.path] + options
+        process.standardOutput = output
+        try process.run()
+        featureCheck(String(data: output.fileHandleForReading.availableData, encoding: .utf8) == "locked\n", "The other app holds the lock first")
+        return process
+    }
+    let file = root.appendingPathComponent("answering/instance.lock"), stubbornFile = root.appendingPathComponent("stubborn/instance.lock")
+    let other = try holder(file)
+    featureCheck(!InstanceLock.claim(file) { true } && other.isRunning, "A launch beside an app that answers leaves it running")
+    featureCheck(InstanceLock.claim(file) { false })
+    other.waitUntilExit()
+    featureCheck(other.terminationReason == .uncaughtSignal && other.terminationStatus == SIGTERM, "An app out of reach is ended as a logout would end it")
+    let stubborn = try holder(stubbornFile, ["--ignore-termination"])
+    featureCheck(InstanceLock.claim(stubbornFile, patience: 0.1) { false })
+    stubborn.waitUntilExit()
+    featureCheck(stubborn.terminationReason == .uncaughtSignal && stubborn.terminationStatus == SIGKILL, "One ignoring SIGTERM does not keep the lock")
+    print("PASS: instance lock left to an answering app, taken from one out of reach, SIGKILL fallback")
 }
 
 func runPrereleaseTests() {
