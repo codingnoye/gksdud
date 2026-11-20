@@ -196,6 +196,7 @@ final class AppSourcesSettings: NSObject, NSTableViewDataSource, NSTableViewDele
     func showError(_ message: String?, bundleID: String) { errors[bundleID] = message; refresh() }
     @objc func toggle() {
         owner.appSourceRules.enabled = enable.state == .on
+        if enable.state == .on { owner.setSync(false) }
         owner.appSourceFocus.cancel(); errors.removeAll()
         refresh(force: true)
     }

@@ -30,6 +30,7 @@ func runSelfTest() {
     do { try runExitTests() } catch { fputs("Exit tests failed: \(error)\n", stderr); exit(1) }
     runFeatureTests()
     runUniversalControlTests()
+    runSyncTests()
     runKeyboardTests()
     runRightControlTests()
     runSessionAwayTests()

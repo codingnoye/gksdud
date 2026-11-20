@@ -129,6 +129,7 @@ extension AppDelegate {
         case "escape": return .bool(engine.escapeToEnglish)
         case "backquote": return .bool(engine.swapBackquote)
         case "universal-control": return .bool(engine.universalControlCompat)
+        case "sync": return .bool(syncActive)
         case "added-sources": return .bool(engine.addedSourcesEnabled)
         case "app-sources": return .bool(appSourceRules.enabled)
         case "cycle": return .list(cycleOrder)
@@ -279,6 +280,7 @@ extension AppDelegate {
         case "escape": return flip(escapeSwitch) { toggleFeature(escapeSwitch) }
         case "backquote": return flip(backquoteSwitch) { toggleFeature(backquoteSwitch) }
         case "universal-control": return flip(universalControlSwitch) { toggleFeature(universalControlSwitch) }
+        case "sync": return flip(syncSwitch) { toggleSync() }
         case "icon":
             guard iconPicker.isEnabled, let index = text.flatMap({ CLI.iconNames.firstIndex(of: $0) }) else { return accessibilityHint }
             iconPicker.selectItem(at: index); changeIconStyle()
@@ -473,10 +475,12 @@ extension AppDelegate {
         let issues = [status.stringValue, engine.keyboards.warning ?? ""].filter { !$0.isEmpty }
         let rows = [("version", appVersion), ("active", engine.active ? "on" : "off"), ("paused", engine.paused ? "on" : "off"),
                     ("accessibility", trusted ? "on" : "off"), ("source", source.map { "\($0.id) (\(Self.sourceTitle($0.id)))" } ?? ""),
-                    ("keyboards", keyboards.text)]
+                    // A Mac on Tailscale connects without the local network, so its problem shows only with no Mac connected.
+                    ("sync", syncActive ? (syncLink.peers > 0 ? nil : syncLink.problem) ?? "on (연결 \(syncLink.peers)대)" : "off"), ("keyboards", keyboards.text)]
         var json: [String: Any] = ["ok": true, "version": appVersion, "active": engine.active, "paused": engine.paused,
                                    "accessibility": trusted, "keyboards": keyboards.json, "issues": issues]
         json["source"] = source.map(describe)
+        json["sync"] = ["enabled": syncActive, "peers": syncLink.peers, "problem": syncLink.problem as Any]
         return CommandReply(text: ([aligned(rows)] + keyboards.details + issues).joined(separator: "\n"), json: json)
     }
     // With added sources on, also what this app does with each.

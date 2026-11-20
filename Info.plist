@@ -14,4 +14,6 @@
 <key>LSUIElement</key><true/>
 <key>NSHighResolutionCapable</key><true/>
 <key>CFBundleAllowMixedLocalizations</key><true/>
+<key>NSLocalNetworkUsageDescription</key><string>한영 상태 동기화를 켜면 같은 네트워크의 다른 Mac에 있는 gksdud와 연결합니다.</string>
+<key>NSBonjourServices</key><array><string>_gksdud-sync._tcp</string></array>
 </dict></plist>

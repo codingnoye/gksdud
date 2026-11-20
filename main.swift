@@ -158,6 +158,9 @@ final class Engine {
     var escapeToEnglish: Bool { defaults.bool(forKey: "escapeToEnglish") }
     var swapBackquote: Bool { defaults.bool(forKey: "swapBackquote") }
     var universalControlCompat: Bool { defaults.bool(forKey: "universalControlCompat") }
+    var syncSources: Bool { defaults.bool(forKey: "syncSources") }
+    // shortcut: kept in the preferences, as it only tells which Macs sync; in the keychain if it comes to guard more.
+    var syncCode: String { defaults.string(forKey: "syncCode") ?? "" }
     // A Caps Lock chosen as a Korean/English key reaches macOS as the reserved F-key, never as Caps Lock; so does a source's key.
     // `fallback` checks default keys before they are saved.
     func capsLockSwitches(_ fallback: [UInt64]? = nil) -> Bool {
@@ -859,6 +862,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     let escapeSwitch = NSButton(checkboxWithTitle: "ESC 누를 시 영소문자로 변경", target: nil, action: nil)
     let backquoteSwitch = NSButton(checkboxWithTitle: "한글 상태에서 ₩와 ` 반전", target: nil, action: nil)
     let universalControlSwitch = NSButton(checkboxWithTitle: "유니버설 컨트롤 호환 모드", target: nil, action: nil)
+    let syncSwitch = NSButton(checkboxWithTitle: "다른 Mac과 한영 상태 동기화", target: nil, action: nil)
+    let syncCodeField = NSTextField()
+    var syncClock = SyncClock()
+    let syncLink = SyncLink()
     var backquote = BackquoteSwap()
     let installCLI = NSButton(title: "CLI 설치", target: nil, action: nil)
     var commandPort: CFMessagePort?
@@ -1061,6 +1068,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         universalControlSwitch.state = trusted && engine.universalControlCompat ? .on : .off
         universalControlSwitch.isEnabled = trusted
         universalControlSwitch.toolTip = trusted ? nil : accessibilityHint
+        syncSwitch.state = trusted && syncActive ? .on : .off
+        syncSwitch.isEnabled = trusted
+        syncSwitch.toolTip = trusted ? nil : accessibilityHint
+        // The code and its button show only with sync on.
+        syncCodeField.superview?.isHidden = syncSwitch.state != .on
+        if syncCodeField.currentEditor() == nil { syncCodeField.stringValue = engine.syncCode }
         pressAccess.toolTip = trusted && engine.active && !ready ? "권한 반영을 기다리는 중입니다. 계속 전환되지 않으면 앱을 다시 실행하세요."
             : "키를 누르는 순간 전환하려면 접근성 권한이 필요합니다."
     }
@@ -1372,12 +1385,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             self?.optionInput.cancel(focusChanged: true)
             self?.updateRemoteHold()
             if let self, let owner = self.sourceSwitchOwner, owner != self.frontmostPID() { self.cancelSourceSwitch() }
-            if let app = notice.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication { self?.appSourceActivated(app) }
+            if let app = notice.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
+                self?.appSourceActivated(app)
+                if app.bundleIdentifier == universalControlID { self?.resendSync() }
+            }
         })
         observers.append(center.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
             // Keys held for a switch must not go on under the lock screen or after waking.
             self?.appSourceFocus.cancel(); self?.cancelSourceSwitch(discardKeys: true); self?.optionInput.cancel()
         })
+        // Connections do not outlive sleep.
+        observers.append(center.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in self?.updateSync() })
         for name in [NSWorkspace.didWakeNotification, NSWorkspace.screensDidWakeNotification, NSWorkspace.sessionDidBecomeActiveNotification] {
             observers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in self?.recover() })
         }
@@ -1389,6 +1407,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         repair()
         // Once launching has applied the settings, so a command right after `gksdud start` finds it ready.
         startCommandServer()
+        updateSync()
         // Restarted by an update, the window comes back on the tab it was installed from. Asking for the permission again opens it
         // on the way back from System Settings instead, as a window shown first would cover the system's request.
         if !askForPermission {
@@ -1584,6 +1603,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             // switch notify too, while the source is still the one the switch leaves.
             if !added || self.sentSwitch.map({ self.currentLanguage != $0.from }) != false { self.sentSwitch = nil }
             guard !self.optionInput.busy else { return }
+            self.syncLocalChange()
             self.completeCapsTransition()
             self.scheduleCapsRestore()
             self.restoreEnglishCaps()
