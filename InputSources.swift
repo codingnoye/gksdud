@@ -36,10 +36,16 @@ struct SourceArrival {
     enum Outcome { case waiting, arrived, interrupted }
     let target: String
     let origin: String
+    var started: TimeInterval = 0
     private(set) var observed: String?
     private(set) var since: TimeInterval = 0
     private(set) var sawTarget = false
     static let settling: TimeInterval = 0.03
+    // Switches land within some tens of milliseconds; one that has changed nothing by now was not heard.
+    static let patience: TimeInterval = 0.3
+    func stalled(at now: TimeInterval) -> Bool {
+        !sawTarget && (observed == nil || observed == origin) && now - started >= Self.patience
+    }
     mutating func observe(_ id: String?, at now: TimeInterval) {
         if observed != id { observed = id; since = now }
         if id == target { sawTarget = true }
@@ -91,6 +97,45 @@ struct NextSourceFailure {
     }
     mutating func clear() { key = nil; retryAt = 0; count = 0; attempt = nil }
     func allows(_ key: String, at now: TimeInterval) -> Bool { self.key != key || now >= retryAt }
+}
+
+// macOS ends TextInputSwitcher when memory is short, and the previous-source shortcut that comes next only starts it
+// again: that press switches nothing (seen on macOS 26 and 27). The next-source shortcut does not go through it. So it is
+// started before a previous-source pulse, which waits for it, and whenever it is found gone, for the presses that reach
+// macOS as they are.
+struct InputSwitcher {
+    // Its launch agent hides the first port until the process has checked in; the second is there whenever the agent is.
+    var running: () -> Bool = { machServiceExists("com.apple.inputswitcher.running") }
+    var present: () -> Bool = { machServiceExists("com.apple.inputswitcher.startup") }
+    var start: () -> Void = {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        task.arguments = ["kickstart", "gui/\(getuid())/com.apple.TextInputSwitcher"]
+        task.standardOutput = FileHandle.nullDevice; task.standardError = FileHandle.nullDevice
+        try? task.run()
+    }
+    var now: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
+    var pause: (TimeInterval) -> Void = { usleep(useconds_t($0 * 1_000_000)) }
+    // Set while a start has not been seen running yet.
+    private(set) var startedAt: TimeInterval?
+    // It is up some 0.1s after its start. One that did not come up is left for a while, so that not every press waits.
+    static let patience: TimeInterval = 0.4, rest: TimeInterval = 10
+    mutating func wake(waiting: Bool) {
+        if running() { startedAt = nil; return }
+        guard present() else { return }
+        let time = now()
+        if let startedAt, time - startedAt < Self.rest {
+            guard waiting, time - startedAt < Self.patience else { return }
+        } else { start(); startedAt = time }
+        guard waiting, let startedAt else { return }
+        while !running() && now() - startedAt < Self.patience { pause(0.005) }
+    }
+}
+func machServiceExists(_ name: String) -> Bool {
+    var port = mach_port_t(MACH_PORT_NULL)
+    guard bootstrap_look_up(bootstrap_port, name, &port) == KERN_SUCCESS else { return false }
+    mach_port_deallocate(mach_task_self_, port)
+    return true
 }
 
 // With added sources, this app's own selections notify too, so a notification for the source already handled is skipped.
@@ -323,6 +368,7 @@ extension AppDelegate {
     // The Korean/English key. Without added input sources, or a cycle of fewer than two, it sends the system shortcut alone.
     @discardableResult
     func switchHangul(_ pulse: (CGEvent, CGEvent)) -> Bool {
+        retryStalledSwitch()
         guard addedSourcesActive, let current = logicalSource, let target = hangulTarget(from: current) else {
             postSwitchPulse(pulse); return true
         }
@@ -331,6 +377,7 @@ extension AppDelegate {
     // A source's own key. False when there is nothing to switch with, so a Space goes back to the app; pressed in its source
     // with nowhere to go back to, it does nothing.
     func switchToKeySource(_ id: String, key: CGEvent) -> Bool {
+        retryStalledSwitch()
         guard addedSourcesActive, let current = logicalSource,
               let pulse = nativeSwitchPulse(keyCode: engine.target.keyCode, marker: nativePulseMarker) else { return false }
         let enabled = activeSources()
@@ -342,6 +389,7 @@ extension AppDelegate {
     }
     // The English a long press or ESC goes to: the most recent one in use, or any.
     func switchToEnglish(_ pulse: (CGEvent, CGEvent)) -> Bool {
+        retryStalledSwitch()
         let inUse = activeSources().filter(isEnglish)
         guard let current = logicalSource,
               let english = sourceHistory.mostRecent(inUse.isEmpty ? enabledSources().filter(isEnglish) : inUse) else { return false }
@@ -450,6 +498,16 @@ extension AppDelegate {
         if discard { discardHeldKeys() }
         else { releaseHeldKeys() }
     }
+    // A key pressed while a switch that changed nothing is still awaited is the user trying again, not asking to go on
+    // from where that switch was headed: it would wait behind it and be dropped with it. So the awaited one is given up,
+    // and the key starts from the source in use, by selections, as the shortcut alone went unheard. Only when the app
+    // with keyboard focus answers: one that is busy still has the first shortcut to go through, and a second would undo it.
+    func retryStalledSwitch(at now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+        guard switchLanding != nil, sourceSwitchOwner == frontmostPID(), sourceArrival?.stalled(at: now) == true,
+              keyFocusAnswers() else { return }
+        if let sent = nextSent { engine.nextFailure.failed(sent.key, at: now, attempt: landingGeneration) }
+        cancelSourceSwitch()
+    }
     func sourceMouseDown() {
         guard switchLanding != nil || holdKeys else { return }
         cancelSourceSwitch(discardKeys: true)
@@ -489,7 +547,7 @@ extension AppDelegate {
     // cancel only: another app may have selected even the original source without an identifiable notification.
     func expectLanding(_ target: InputSourceIdentity, origin: String) {
         switchLanding = target.id
-        sourceArrival = SourceArrival(target: target.id, origin: origin)
+        sourceArrival = SourceArrival(target: target.id, origin: origin, started: ProcessInfo.processInfo.systemUptime)
         landingGeneration += 1
         let generation = landingGeneration
         let owner = sourceSwitchOwner

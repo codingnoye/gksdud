@@ -809,6 +809,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     var frontmostPID: () -> pid_t? = { NSWorkspace.shared.frontmostApplication?.processIdentifier }
     var appSourceFocus = AppSourceFocus()
     lazy var appSourcesSettings = AppSourcesSettings(owner: self)
+    // Whether the app with keyboard focus answers at once. One that does has gone through the events sent to it a while ago.
+    var keyFocusAnswers: () -> Bool = {
+        let system = AXUIElementCreateSystemWide()
+        AXUIElementSetMessagingTimeout(system, 0.05)
+        var focused: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(system, kAXFocusedApplicationAttribute as CFString, &focused) == .success,
+              let focused, CFGetTypeID(focused) == AXUIElementGetTypeID() else { return false }
+        let app = focused as! AXUIElement
+        AXUIElementSetMessagingTimeout(app, 0.05)
+        var role: CFTypeRef?
+        return AXUIElementCopyAttributeValue(app, kAXRoleAttribute as CFString, &role) == .success
+    }
     // The source a switch is on its way to, and one that waits for it to land.
     var switchLanding: String?
     var sourceArrival: SourceArrival?
@@ -821,6 +833,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     var bufferedSourceKeys: Set<Int64> = []
     var sourceDiscardedKeys = SourceDiscardedKeys()
     var postHeldKey: (CGEvent) -> Void = { $0.post(tap: .cghidEventTap) }
+    var inputSwitcher = InputSwitcher()
     var sourceCache: (list: [InputSourceIdentity], layouts: Set<String>)?
     // With added sources, selections that end where they started notify too; they change nothing to restore.
     var sourceNotifications = SourceNotifications()
@@ -1293,6 +1306,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         updatePressAccess()
     }
     func postSwitchPulse(_ pulse: (CGEvent, CGEvent)) {
+        if pulse.0.getIntegerValueField(.keyboardEventKeycode) == Int64(engine.target.keyCode) { inputSwitcher.wake(waiting: true) }
         noteSwitchSent()
         // Notices from here on are this switch's, not those of a next-source shortcut sent before.
         nextSent = nil
@@ -1819,6 +1833,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         if engine.active && !engine.accessibilityTrusted() { restoreNow(); return }
         if reactivateWhenTrusted && engine.accessibilityTrusted() { reactivateWhenTrusted = false; enabled.state = .on; toggleEnabled() }
         ensureKeyTap()
+        if engine.active && !engine.paused && !engine.sessionAway() { inputSwitcher.wake(waiting: false) }
         do { try engine.repair(); if repairFailed { repairFailed = false; stickyError = "" } } catch { report(error); repairFailed = !(error is KeyboardError) }
         // This follows the session itself, as the unlock notice can come late. Not at once: right after unlocking, the lock
         // screen's U.S. can still be selected.
