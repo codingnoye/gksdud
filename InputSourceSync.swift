@@ -32,9 +32,9 @@ struct SyncClock {
         return last
     }
     // The other Mac's change: the language to switch to, unless a later one is known. The same change sent again is
-    // taken again, so a resend makes up for one that was missed.
+    // taken again, so a resend makes up for one that was missed, unless this Mac has since gone on to a language not sent.
     mutating func received(_ state: SyncState) -> String? {
-        guard Self.languages.contains(state.language), state.at >= (last?.at ?? 0) else { return nil }
+        guard Self.languages.contains(state.language), state.at >= (last?.at ?? 0), state != last || here == state.language else { return nil }
         last = state; here = state.language
         return state.language
     }
@@ -307,6 +307,10 @@ func runSyncTests() {
     let back = e.changed("ko", now: 42)
     precondition(back.map { $0.language == "ko" && $0.at > before.at && f.received($0) == "ko" } == true && e.changed("ko", now: 43) == nil,
                  "Coming back from it is sent again")
+    // Gone on to Japanese, as the pointer comes back from the other Mac with its resend: only a later change brings it back.
+    var g = SyncClock()
+    precondition(g.received(before) == "ko" && g.changed("ja", now: 41) == nil && g.received(before) == nil
+        && g.received(SyncState(language: "ko", at: 42)) == "ko", "A resend does not undo a language chosen here since")
 
     // Of the Macs Tailscale lists, this one calls its account's other Macs that are online and have a greater address.
     func node(_ address: String, user: Int = 1, os: String = "macOS", online: Bool = true) -> String {
