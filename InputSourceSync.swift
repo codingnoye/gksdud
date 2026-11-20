@@ -235,7 +235,7 @@ extension AppDelegate {
     // At launch, when the setting or the code changes, and after sleep.
     func updateSync() {
         guard syncActive else { syncLink.stop(); return }
-        syncLink.received = { [weak self] in self?.syncReceived($0) }
+        syncLink.received = { [weak self] in _ = self?.syncReceived($0) }
         syncLink.connected = { [weak self] in self?.resendSync() }
         syncLink.start(code: engine.syncCode)
     }
@@ -245,10 +245,16 @@ extension AppDelegate {
               let state = syncClock.changed(String(language.prefix(2)), now: Date().timeIntervalSince1970) else { return }
         syncLink.send(state)
     }
-    func syncReceived(_ state: SyncState) {
-        guard syncActive, !engine.sessionAway(), let language = syncClock.received(state) else { return }
-        // As `gksdud source ko` switches. Already there, it does nothing.
-        _ = runCommand(["source", language])
+    // As `gksdud source ko` switches; already there, it does nothing. True when the change has to wait. With an Option
+    // character on its way through English it would find English already selected, and be undone on the way back to
+    // Korean. A command can also be refused for the moment, as under a dialog of this app. Either way it is tried again
+    // for a minute, and a later change known by then leaves this one out.
+    @discardableResult
+    func syncReceived(_ state: SyncState, tries: Int = 0) -> Bool {
+        guard syncActive, !engine.sessionAway(), tries < 120,
+              optionInput.busy || syncClock.received(state) != nil && runCommand(["source", state.language]).exit == CLI.Exit.failed else { return false }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.syncReceived(state, tries: tries + 1) }
+        return true
     }
     // To a Mac that has just connected, and as the pointer leaves for the other Mac, before typing starts there.
     func resendSync() { if syncActive, let last = syncClock.last { syncLink.send(last) } }
@@ -385,7 +391,29 @@ func runSyncTests() {
     delegate.setSync(true)
     delegate.syncCodeField.stringValue = ""; delegate.changeSyncCode()
     precondition(!engine.syncSources && delegate.syncCodeField.superview?.isHidden == true, "Clearing the code turns sync off")
+
+    // The other Mac's change waits while an Option character is on its way through English. With no input source to
+    // switch to, the command it ends in touches nothing of this Mac's.
+    delegate.setSync(true); delegate.sourceCache = (list: [], layouts: [])
+    let korean = InputSourceIdentity(id: "sync.ko", language: "ko")
+    delegate.optionInput = OptionInputController(environment: .init(current: { korean }, english: { InputSourceIdentity(id: "sync.en", language: "en") },
+        select: { _ in true }, frontmost: { 1 }, post: { _ in }, later: { _, _ in }, clock: { 0 }, deadState: { _, _, _ in 0 }), marker: 1)
+    let stroke = CGEvent(keyboardEventSource: nil, virtualKey: 25, keyDown: true)!
+    stroke.flags = .maskAlternate
+    precondition(delegate.optionInput.handle(stroke, mode: .english, active: true) && delegate.optionInput.busy)
+    let remote = SyncState(language: "en", at: Date().timeIntervalSince1970 + 60)
+    precondition(delegate.syncReceived(remote) && delegate.syncClock.last != remote, "A change waits out an Option character")
+    delegate.optionInput.cancel()
+    wait(3) { delegate.syncClock.last == remote }
+    precondition(delegate.syncClock.last == remote, "It is taken once the Option character is through")
+    // So does one whose command is refused for the moment, as while settings are being applied.
+    let next = SyncState(language: "ko", at: remote.at + 1)
+    delegate.commandSession = CommandSession(force: false)
+    precondition(delegate.syncReceived(next) && delegate.syncClock.last == next, "A change refused for the moment is asked again")
+    delegate.commandSession = nil
+    precondition(!delegate.syncReceived(next) && !delegate.syncReceived(remote), "It stops once taken, and an earlier change stays out")
+    delegate.setSync(false)
     delegate.syncLink.stop()
-    print("PASS: sync keeps the latest change, sends no echo, ignores other languages, connects only with the same code, calls a Mac on Tailscale, makes its own code, excludes an app's own source")
+    print("PASS: sync keeps the latest change, sends no echo, ignores other languages, connects only with the same code, calls a Mac on Tailscale, makes its own code, waits out an Option character and a refused command, excludes an app's own source")
 }
 #endif
