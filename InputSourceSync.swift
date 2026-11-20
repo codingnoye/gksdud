@@ -253,9 +253,18 @@ extension AppDelegate {
         if engine.syncCode.isEmpty { engine.defaults.set(false, forKey: "syncSources") }
         updatePressAccess(); updateSync()
     }
+    // A code to read on one Mac and type on the other, so without the letters and digits taken for one another.
+    static func newSyncCode() -> String {
+        let letters = Array("abcdefghjkmnpqrstuvwxyz23456789")
+        return (0..<3).map { _ in String((0..<4).map { _ in letters.randomElement()! }) }.joined(separator: "-")
+    }
+    // A code being typed in the field gives way to the new one.
+    @objc func generateSyncCode() { syncCodeField.abortEditing(); syncCodeField.stringValue = Self.newSyncCode(); changeSyncCode() }
     // Sync and an app's own source would each undo the other's switch, so one turns the other off.
     func setSync(_ on: Bool) {
-        engine.defaults.set(on && !engine.syncCode.isEmpty, forKey: "syncSources")
+        // Turned on for the first time, it starts with a code of its own.
+        if on && engine.syncCode.isEmpty { engine.defaults.set(Self.newSyncCode(), forKey: "syncCode") }
+        engine.defaults.set(on, forKey: "syncSources")
         if engine.syncSources { appSourceRules.enabled = false; appSourceFocus.cancel() }
         updatePressAccess(); updateSync()
     }
@@ -343,8 +352,17 @@ func runSyncTests() {
     engine.accessibilityTrusted = { true }; engine.sessionAway = { false }
     let delegate = AppDelegate(engine: engine)
     delegate.syncLink.service = type; delegate.syncLink.port = nil; delegate.syncLink.tailnet = { $0([]) }
+    delegate.buildWindow()
+    precondition(delegate.syncSwitch.isEnabled && delegate.syncCodeField.superview?.isHidden == true, "The code shows only with sync on")
     delegate.setSync(true)
-    precondition(!engine.syncSources && !delegate.syncActive, "Without a code there is no Mac to sync with")
+    let made = engine.syncCode
+    precondition(delegate.syncActive && made.count == 14 && made == made.lowercased() && delegate.syncCodeField.stringValue == made
+        && delegate.syncCodeField.superview?.isHidden == false, "Sync turned on first makes its own code, and shows it")
+    delegate.setSync(false); delegate.setSync(true)
+    precondition(engine.syncCode == made && delegate.syncActive, "A code is kept while sync is off")
+    delegate.generateSyncCode()
+    precondition(engine.syncCode != made && engine.syncCode.count == 14 && delegate.syncActive && delegate.syncCodeField.stringValue == engine.syncCode,
+                 "The button makes another code")
     delegate.syncCodeField.stringValue = " code "; delegate.changeSyncCode()
     delegate.appSourceRules.enabled = true
     delegate.setSync(true)
@@ -353,8 +371,8 @@ func runSyncTests() {
     precondition(delegate.appSourceRules.enabled && !delegate.syncActive, "An app's own source turns sync off")
     delegate.setSync(true)
     delegate.syncCodeField.stringValue = ""; delegate.changeSyncCode()
-    precondition(!engine.syncSources, "Clearing the code turns sync off")
+    precondition(!engine.syncSources && delegate.syncCodeField.superview?.isHidden == true, "Clearing the code turns sync off")
     delegate.syncLink.stop()
-    print("PASS: sync keeps the latest change, sends no echo, ignores other languages, connects only with the same code, calls a Mac on Tailscale, excludes an app's own source")
+    print("PASS: sync keeps the latest change, sends no echo, ignores other languages, connects only with the same code, calls a Mac on Tailscale, makes its own code, excludes an app's own source")
 }
 #endif

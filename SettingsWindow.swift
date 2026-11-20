@@ -193,12 +193,14 @@ extension AppDelegate {
         hint("유니버설 컨트롤로 사용시 전환이 잘 안된다면, 원격 기기에서 켜 주세요.", in: extras)
         syncSwitch.target = self; syncSwitch.action = #selector(toggleSync)
         extras.addArrangedSubview(syncSwitch)
+        hint("켜면 나오는 동기화 코드를 같은 네트워크나 같은 Tailscale 계정의 다른 Mac에도 넣어 주세요. 켜면 앱 포커스 시 입력 소스 전환은 꺼집니다.", in: extras)
         syncCodeField.placeholderString = "동기화 코드"; syncCodeField.target = self; syncCodeField.action = #selector(changeSyncCode)
         syncCodeField.cell?.sendsActionOnEndEditing = true
         syncCodeField.widthAnchor.constraint(equalToConstant: 200).isActive = true
-        let syncRow = NSStackView(views: [syncCodeField]); syncRow.edgeInsets.left = 20
+        let newSyncCode = NSButton(title: "생성", target: self, action: #selector(generateSyncCode)); newSyncCode.bezelStyle = .rounded
+        newSyncCode.toolTip = "새 동기화 코드를 만듭니다. 다른 Mac에도 새 코드를 넣어야 다시 연결됩니다."
+        let syncRow = NSStackView(views: [syncCodeField, newSyncCode]); syncRow.spacing = 8; syncRow.edgeInsets.left = 20
         extras.addArrangedSubview(syncRow)
-        hint("같은 네트워크나 같은 Tailscale 계정의 두 Mac에 같은 동기화 코드를 입력하고 켜 주세요. 켜면 앱 포커스 시 입력 소스 전환은 꺼집니다.", in: extras)
         separator(in: extras)
         // Installing needs no Accessibility, so this section never dims.
         heading("CLI", in: extras, dims: false)

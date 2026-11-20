@@ -1069,9 +1069,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         universalControlSwitch.isEnabled = trusted
         universalControlSwitch.toolTip = trusted ? nil : accessibilityHint
         syncSwitch.state = trusted && syncActive ? .on : .off
-        syncSwitch.isEnabled = trusted && !engine.syncCode.isEmpty
-        syncSwitch.toolTip = !trusted ? accessibilityHint : engine.syncCode.isEmpty ? "동기화 코드를 먼저 입력해주세요." : nil
-        syncCodeField.isEnabled = trusted
+        syncSwitch.isEnabled = trusted
+        syncSwitch.toolTip = trusted ? nil : accessibilityHint
+        // The code and its button show only with sync on.
+        syncCodeField.superview?.isHidden = syncSwitch.state != .on
         if syncCodeField.currentEditor() == nil { syncCodeField.stringValue = engine.syncCode }
         pressAccess.toolTip = trusted && engine.active && !ready ? "권한 반영을 기다리는 중입니다. 계속 전환되지 않으면 앱을 다시 실행하세요."
             : "키를 누르는 순간 전환하려면 접근성 권한이 필요합니다."
