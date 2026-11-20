@@ -475,7 +475,8 @@ extension AppDelegate {
         let issues = [status.stringValue, engine.keyboards.warning ?? ""].filter { !$0.isEmpty }
         let rows = [("version", appVersion), ("active", engine.active ? "on" : "off"), ("paused", engine.paused ? "on" : "off"),
                     ("accessibility", trusted ? "on" : "off"), ("source", source.map { "\($0.id) (\(Self.sourceTitle($0.id)))" } ?? ""),
-                    ("sync", syncActive ? syncLink.problem ?? "on (연결 \(syncLink.peers)대)" : "off"), ("keyboards", keyboards.text)]
+                    // A Mac on Tailscale connects without the local network, so its problem shows only with no Mac connected.
+                    ("sync", syncActive ? (syncLink.peers > 0 ? nil : syncLink.problem) ?? "on (연결 \(syncLink.peers)대)" : "off"), ("keyboards", keyboards.text)]
         var json: [String: Any] = ["ok": true, "version": appVersion, "active": engine.active, "paused": engine.paused,
                                    "accessibility": trusted, "keyboards": keyboards.json, "issues": issues]
         json["source"] = source.map(describe)

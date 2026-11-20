@@ -198,7 +198,7 @@ extension AppDelegate {
         syncCodeField.widthAnchor.constraint(equalToConstant: 200).isActive = true
         let syncRow = NSStackView(views: [syncCodeField]); syncRow.edgeInsets.left = 20
         extras.addArrangedSubview(syncRow)
-        hint("같은 네트워크의 두 Mac에 같은 동기화 코드를 입력하고 켜 주세요. 켜면 앱 포커스 시 입력 소스 전환은 꺼집니다.", in: extras)
+        hint("같은 네트워크나 같은 Tailscale 계정의 두 Mac에 같은 동기화 코드를 입력하고 켜 주세요. 켜면 앱 포커스 시 입력 소스 전환은 꺼집니다.", in: extras)
         separator(in: extras)
         // Installing needs no Accessibility, so this section never dims.
         heading("CLI", in: extras, dims: false)
