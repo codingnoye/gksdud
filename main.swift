@@ -1892,7 +1892,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 // One gksdud per user. The command port shows a running app only within its login session, and an app that outlived a
 // logout is in none, so a file lock tells: the kernel names its holder, and frees it however that app ends.
 enum InstanceLock {
-    // In Application Support: the temporary folder loses a file nobody has read for three days, held open or not.
+    // In Application Support, as macOS clears files older than three days out of the temporary folder.
     static var file: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent(Bundle.main.bundleIdentifier ?? "io.gksdud.inputswitch").appendingPathComponent("instance.lock")
