@@ -1543,7 +1543,96 @@ func runSourceSwitchTests() {
     delegate.expireSourceSwitch(generation: timeoutGeneration, owner: delegate.sourceSwitchOwner)
     featureCheck(delegate.switchLanding == nil && !delegate.holdKeys && posted.count == afterInterrupts + 4,
         "A timeout in the same input window releases normal text without forcing an input source")
-    print("PASS: source switch ownership, same-app click buffer disposal, discarded releases, external choices and queued cancellation")
+    var waiting = SourceArrival(target: "target", origin: "origin", started: 10)
+    featureCheck(!waiting.stalled(at: 10.29) && waiting.stalled(at: 10.3), "A switch that changed nothing is given a moment before it counts as unheard")
+    waiting.observe("origin", at: 10.1)
+    featureCheck(waiting.stalled(at: 10.3), "A notice that leaves the source where it started is still nothing")
+    waiting.observe("target", at: 10.2); waiting.observe("origin", at: 10.25)
+    featureCheck(!waiting.stalled(at: 10.5), "A switch that reached its target and was undone is not retried")
+    var elsewhere = SourceArrival(target: "target", origin: "origin", started: 10)
+    elsewhere.observe("foreign", at: 10.1)
+    featureCheck(!elsewhere.stalled(at: 10.5), "A switch that went elsewhere is settled as one, not retried")
+    func stall() {
+        delegate.sourceSwitchOwner = 100
+        delegate.switchLanding = "target"
+        delegate.sourceHistory = SourceHistory(["origin", "target"])
+        delegate.sourceArrival = SourceArrival(target: "target", origin: "origin", started: 10)
+        delegate.queuedSwitch = (InputSourceIdentity(id: "queued", language: "en"), (CGEvent(source: nil)!, CGEvent(source: nil)!))
+        delegate.nextSent = ("origin", "target", "F13")
+        delegate.holdKeys = true; delegate.heldKeys = [key(true), key(false)]
+    }
+    let beforeStall = posted.count
+    delegate.engine.nextFailure.clear()
+    var answers = true
+    delegate.keyFocusAnswers = { answers }
+    stall()
+    delegate.retryStalledSwitch(at: 10.2)
+    featureCheck(delegate.switchLanding == "target" && delegate.queuedSwitch != nil && posted.count == beforeStall,
+        "A key right after a switch still waits behind it")
+    answers = false
+    delegate.retryStalledSwitch(at: 10.6)
+    featureCheck(delegate.switchLanding == "target" && delegate.queuedSwitch != nil && delegate.engine.nextFailure.allows("F13", at: 10.7),
+        "A busy app keeps the first shortcut to go through: nothing is sent on top of it")
+    answers = true
+    delegate.frontmostPID = { 7 }
+    delegate.retryStalledSwitch(at: 10.6)
+    featureCheck(delegate.switchLanding == "target", "Another app's unheard switch is left to its own cancellation")
+    delegate.frontmostPID = { 100 }
+    delegate.retryStalledSwitch(at: 10.6)
+    featureCheck(delegate.switchLanding == nil && delegate.sourceArrival == nil && delegate.queuedSwitch == nil && !delegate.holdKeys
+        && posted.count == beforeStall + 2 && delegate.sourceHistory.previous(of: "origin") == nil
+        && delegate.logicalSource == delegate.currentSource && !delegate.engine.nextFailure.allows("F13", at: 10.7),
+        "A key pressed after an unheard switch gives it up and starts from the source in use, by selections")
+    delegate.engine.nextFailure.clear()
+    // The process macOS switches to the previous source with, ended and started again.
+    var up = true, there = true, starts = 0, clock: TimeInterval = 100, upAt: TimeInterval?
+    var switcher = InputSwitcher()
+    switcher.running = { up }; switcher.present = { there }; switcher.start = { starts += 1 }
+    switcher.now = { clock }
+    switcher.pause = { clock += $0; if let at = upAt, clock >= at { up = true } }
+    switcher.wake(waiting: true)
+    featureCheck(starts == 0 && clock == 100, "A running input switcher is left alone and nothing waits")
+    up = false; there = false
+    switcher.wake(waiting: true)
+    featureCheck(starts == 0 && clock == 100, "Without the switcher's launch agent nothing is started or waited for")
+    there = true; upAt = 100.1
+    switcher.wake(waiting: true)
+    featureCheck(starts == 1 && up && clock >= 100.1 && clock < 100.12 && !switcher.pending, "A pulse starts an ended switcher and waits until it is up")
+    up = false; upAt = 200.1; clock = 200
+    switcher.wake(waiting: false)
+    featureCheck(starts == 2 && clock == 200, "Found gone between presses, it is started without waiting")
+    clock = 200.05
+    switcher.wake(waiting: true)
+    featureCheck(starts == 2 && up && clock >= 200.1 && clock < 200.12, "A pulse right after that start waits for it instead of starting another")
+    up = false; upAt = nil; clock = 300
+    switcher.wake(waiting: true)
+    featureCheck(starts == 3 && !up && clock >= 300.3 && clock < 300.32, "One that does not come up is waited for only so long")
+    clock = 301
+    switcher.wake(waiting: true); switcher.wake(waiting: false)
+    featureCheck(starts == 3 && clock == 301, "And is then left alone for a while: no press waits again, nothing is started again")
+    clock = 311
+    switcher.wake(waiting: false)
+    featureCheck(starts == 4 && switcher.gap == 40, "Later it is tried again")
+    clock = 330
+    switcher.wake(waiting: false); switcher.wake(waiting: true)
+    featureCheck(starts == 4 && clock == 330, "Each time it does not come up, the next try is further away")
+    clock = 352
+    switcher.wake(waiting: false)
+    up = true; switcher.wake(waiting: false)
+    featureCheck(starts == 5 && !switcher.pending, "Up at last, that start is over")
+    up = false; clock = 360
+    switcher.wake(waiting: false)
+    let short = switcher.gap
+    clock = 380
+    switcher.wake(waiting: false)
+    featureCheck(starts == 5 && short == 600 && switcher.gap == 600, "Ended soon after its start, it is not started again at once, and that is counted once")
+    upAt = 380.05
+    switcher.wake(waiting: true)
+    featureCheck(starts == 6 && up && clock < 380.07, "A pulse still starts it then")
+    up = false; clock = 500
+    switcher.wake(waiting: false)
+    featureCheck(starts == 7 && switcher.gap == InputSwitcher.rest, "One that ran for a while is started again at once")
+    print("PASS: source switch ownership, same-app click buffer disposal, discarded releases, external choices, queued cancellation, unheard switches and the ended input switcher")
 }
 
 #endif

@@ -3,3 +3,4 @@
 #include <IOKit/hidsystem/IOHIDLib.h>
 #include <IOKit/hidsystem/IOHIDParameter.h>
 #include <IOKit/hidsystem/IOHIDShared.h>
+#include <servers/bootstrap.h>
