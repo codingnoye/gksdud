@@ -1902,12 +1902,19 @@ enum InstanceLock {
         var info = auditinfo_addr()
         return getaudit_addr(&info, Int32(MemoryLayout<auditinfo_addr>.size)) == 0 ? info.ai_asid : 0
     }
+    // Whether this launch is of the login the window server shows, which one over SSH or left from an ended login is not.
+    // Without the session's audit id, whether it is on the console.
+    static var inLogin: Bool {
+        guard let current = CGSessionCopyCurrentDictionary() as? [String: Any] else { return false }
+        guard let id = current["kCGSSessionAuditIDKey"] as? Int else { return current[kCGSessionOnConsoleKey as String] as? Bool == true }
+        return id == Int(session)
+    }
     // Open for as long as the app runs, as closing it gives the lock up.
     private static var descriptor: Int32 = -1
     // False when another app holds the lock in this session; one quitting is given `settle` to go. One from a session that
     // has ended is ended as a logout would end it, and this one takes over.
     static func claim(_ file: URL = InstanceLock.file, session: au_asid_t = InstanceLock.session, settle: TimeInterval = 3,
-                      patience: TimeInterval = 2) -> Bool {
+                      patience: TimeInterval = 2, inLogin: () -> Bool = { InstanceLock.inLogin }) -> Bool {
         try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
         let opened = open(file.path, O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
         // Without the file, or a lock on its volume, nothing tells the apps apart, and the app still starts.
@@ -1939,8 +1946,10 @@ enum InstanceLock {
                 guard retry(for: settle, until: { taken = take(); return taken != false }) else { close(opened); return false }
                 break
             }
+            // Launched outside the login, this one would end a working app and run without the window server.
+            guard inLogin() else { close(opened); return false }
             // Only this holder is signalled; one that took the lock meanwhile is looked at again.
-            for signal in [SIGTERM, SIGKILL] where holder() == pid {
+            for signal in [SIGTERM, SIGKILL] where holder() == pid && isGksdud(pid) {
                 guard kill(pid, signal) == 0 else { break }
                 if retry(for: patience, until: { taken = take(); return taken != false || holder() != pid }) { break }
             }
@@ -1969,6 +1978,12 @@ enum InstanceLock {
             usleep(10_000)
         } while ProcessInfo.processInfo.systemUptime < deadline
         return false
+    }
+    // Signalled only as this app, as another program may hold the file. By name, which stays when a reinstall deletes the bundle.
+    static func isGksdud(_ pid: pid_t) -> Bool {
+        var name = [CChar](repeating: 0, count: 64)
+        guard proc_name(pid, &name, UInt32(name.count)) > 0 else { return false }
+        return String(cString: name) == Bundle.main.executableURL?.lastPathComponent
     }
     static func release() {
         if descriptor >= 0 { close(descriptor) }

@@ -810,7 +810,7 @@ func runUpdateInstallTests() throws {
 // after a while.
 func holdInstanceLock(_ file: URL, session: au_asid_t, ignoringTermination: Bool, releaseAfter: TimeInterval) {
     if ignoringTermination { signal(SIGTERM, SIG_IGN) }
-    featureCheck(InstanceLock.claim(file, session: session, settle: 0.1))
+    featureCheck(InstanceLock.claim(file, session: session, settle: 0.1, inLogin: { true }))
     print("locked"); fflush(stdout)
     Thread.sleep(forTimeInterval: releaseAfter)
 }
@@ -827,18 +827,18 @@ func runInstanceLockTests() throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent("gksdud-instance-test-\(UUID().uuidString)")
     defer { try? FileManager.default.removeItem(at: root) }
     let here = InstanceLock.session, ended = here &+ 1
-    func run(_ arguments: [String]) throws -> (Process, Pipe) {
+    func run(_ arguments: [String], as executable: URL? = Bundle.main.executableURL) throws -> (Process, Pipe) {
         let process = Process(), output = Pipe()
-        process.executableURL = Bundle.main.executableURL
+        process.executableURL = executable
         process.arguments = arguments
         process.standardOutput = output
         try process.run()
         return (process, output)
     }
     // Real children, as a process never conflicts with a lock of its own.
-    func holder(_ label: String, session: au_asid_t, _ options: [String] = []) throws -> (URL, Process) {
+    func holder(_ label: String, session: au_asid_t, _ options: [String] = [], as executable: URL? = Bundle.main.executableURL) throws -> (URL, Process) {
         let file = root.appendingPathComponent("\(label)/instance.lock")
-        let (process, output) = try run(["--hold-instance-lock", file.path, String(session)] + options)
+        let (process, output) = try run(["--hold-instance-lock", file.path, String(session)] + options, as: executable)
         featureCheck(String(data: output.fileHandleForReading.availableData, encoding: .utf8) == "locked\n", "The other app holds the lock first")
         return (file, process)
     }
@@ -855,7 +855,8 @@ func runInstanceLockTests() throws {
     other.terminate(); other.waitUntilExit()
 
     let (endedFile, leftover) = try holder("ended", session: ended)
-    featureCheck(InstanceLock.claim(endedFile))
+    featureCheck(!InstanceLock.claim(endedFile, inLogin: { false }) && leftover.isRunning, "A launch outside the login session ends no app")
+    featureCheck(InstanceLock.claim(endedFile, inLogin: { true }))
     leftover.waitUntilExit()
     featureCheck(leftover.terminationReason == .uncaughtSignal && leftover.terminationStatus == SIGTERM, "An app of an ended session is ended as a logout would end it")
     // Read last, as closing any descriptor of the file gives this process's lock up.
@@ -864,7 +865,7 @@ func runInstanceLockTests() throws {
     InstanceLock.release()
 
     let (stubbornFile, stubborn) = try holder("stubborn", session: ended, ["--ignore-termination"])
-    featureCheck(InstanceLock.claim(stubbornFile, patience: 1))
+    featureCheck(InstanceLock.claim(stubbornFile, patience: 1, inLogin: { true }))
     stubborn.waitUntilExit()
     featureCheck(stubborn.terminationReason == .uncaughtSignal && stubborn.terminationStatus == SIGKILL, "One ignoring SIGTERM does not keep the lock")
     let killed = try lockHolder(stubbornFile)
@@ -880,9 +881,18 @@ func runInstanceLockTests() throws {
     // A holder whose record is someone else's, as when it has not written its own yet.
     let (unsaid, silent) = try holder("unsaid", session: ended)
     try "1 \(ended)\n".write(to: unsaid, atomically: false, encoding: .utf8)
-    featureCheck(!InstanceLock.claim(unsaid) && silent.isRunning, "One that does not say where it runs is left alone")
+    featureCheck(!InstanceLock.claim(unsaid, inLogin: { true }) && silent.isRunning, "One that does not say where it runs is left alone")
     silent.terminate(); silent.waitUntilExit()
-    print("PASS: instance lock left to an app of this session or one not saying where it runs, taken from one quitting or of an ended session (SIGTERM, SIGKILL)")
+
+    // A hard link of another name: a copy out of the bundle is not run once signed with a Developer ID, and a process run
+    // through a symbolic link keeps the name it points to. None across volumes.
+    let stranger = root.appendingPathComponent("stranger")
+    if (try? FileManager.default.linkItem(at: Bundle.main.executableURL!, to: stranger)) != nil {
+        let (strangerFile, foreign) = try holder("foreign", session: ended, as: stranger)
+        featureCheck(!InstanceLock.claim(strangerFile, inLogin: { true }) && foreign.isRunning, "Another program holding the file is not signalled")
+        foreign.terminate(); foreign.waitUntilExit()
+    }
+    print("PASS: instance lock left to an app of this session or one not saying where it runs, taken from one quitting or of an ended session (SIGTERM, SIGKILL), none ended from outside the login session or not gksdud")
 }
 
 func runPrereleaseTests() {
