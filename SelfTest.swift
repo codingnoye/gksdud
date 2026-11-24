@@ -13,8 +13,12 @@ func runTestMode() -> Bool {
         do { try probeEscape() } catch { fputs("ESC probe failed: \(error.localizedDescription)\n", stderr); exit(1) }
     } else if arguments.contains("--probe-input-sources") {
         do { try probeInputSources() } catch { fputs("Input source probe failed: \(error.localizedDescription)\n", stderr); exit(1) }
-    } else if let index = arguments.firstIndex(of: "--hold-instance-lock"), arguments.count > index + 1 {
-        holdInstanceLock(URL(fileURLWithPath: arguments[index + 1]), ignoringTermination: arguments.contains("--ignore-termination"))
+    } else if let index = arguments.firstIndex(of: "--hold-instance-lock"), arguments.count > index + 2 {
+        let release = arguments.firstIndex(of: "--release-after").flatMap { arguments.count > $0 + 1 ? TimeInterval(arguments[$0 + 1]) : nil }
+        holdInstanceLock(URL(fileURLWithPath: arguments[index + 1]), session: au_asid_t(arguments[index + 2]) ?? 0,
+                         ignoringTermination: arguments.contains("--ignore-termination"), releaseAfter: release ?? 30)
+    } else if let index = arguments.firstIndex(of: "--instance-lock-holder"), arguments.count > index + 1 {
+        printInstanceLockHolder(URL(fileURLWithPath: arguments[index + 1]))
     } else if arguments.contains("--self-test") {
         runSelfTest()
     } else if arguments.contains("--integration-test") {

@@ -1890,36 +1890,89 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 }
 
 // One gksdud per user. The command port shows a running app only within its login session, and an app that outlived a
-// logout is in none, so a file lock tells: the kernel names its holder, and frees it however that app ends.
+// logout is in none, so a file lock tells: the kernel names its holder and frees it however that app ends, and the holder
+// writes down its audit session, which the next login does not share.
 enum InstanceLock {
     // In Application Support, as macOS clears files older than three days out of the temporary folder.
     static var file: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent(Bundle.main.bundleIdentifier ?? "io.gksdud.inputswitch").appendingPathComponent("instance.lock")
     }
+    static var session: au_asid_t {
+        var info = auditinfo_addr()
+        return getaudit_addr(&info, Int32(MemoryLayout<auditinfo_addr>.size)) == 0 ? info.ai_asid : 0
+    }
     // Open for as long as the app runs, as closing it gives the lock up.
     private static var descriptor: Int32 = -1
-    // False when an app that answers in this session holds the lock; this launch leaves it to that one. An app that does not
-    // answer is ended as a logout would end it, and this one takes over.
-    static func claim(_ file: URL = InstanceLock.file, patience: TimeInterval = 2,
-                      answering: () -> Bool = { CFMessagePortCreateRemote(nil, CLI.port(Bundle.main.bundleIdentifier) as CFString) != nil }) -> Bool {
+    // False when another app holds the lock in this session; one quitting is given `settle` to go. One from a session that
+    // has ended is ended as a logout would end it, and this one takes over.
+    static func claim(_ file: URL = InstanceLock.file, session: au_asid_t = InstanceLock.session, settle: TimeInterval = 3,
+                      patience: TimeInterval = 2) -> Bool {
         try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-        descriptor = open(file.path, O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
-        // Without the file nothing tells the apps apart, and the app still starts.
-        guard descriptor >= 0 else { return true }
+        let opened = open(file.path, O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
+        // Without the file, or a lock on its volume, nothing tells the apps apart, and the app still starts.
+        guard opened >= 0 else { return true }
         var lock = flock(l_start: 0, l_len: 0, l_pid: 0, l_type: Int16(F_WRLCK), l_whence: Int16(SEEK_SET))
-        if fcntl(descriptor, F_SETLK, &lock) == 0 { return true }
-        if answering() { return false }
-        for signal in [SIGTERM, SIGKILL] {
-            var holder = lock
-            if fcntl(descriptor, F_GETLK, &holder) == 0, holder.l_type != F_UNLCK { kill(holder.l_pid, signal) }
-            let deadline = ProcessInfo.processInfo.systemUptime + patience
-            repeat {
-                if fcntl(descriptor, F_SETLK, &lock) == 0 { return true }
-                usleep(10_000)
-            } while ProcessInfo.processInfo.systemUptime < deadline
+        // True when taken, false while another holds it, nil where the volume cannot lock.
+        func take() -> Bool? {
+            if fcntl(opened, F_SETLK, &lock) == 0 { return true }
+            return errno == EAGAIN || errno == EACCES ? false : nil
         }
+        func holder() -> pid_t {
+            var holder = lock
+            return fcntl(opened, F_GETLK, &holder) == 0 && holder.l_type != F_UNLCK ? holder.l_pid : 0
+        }
+        var taken = take()
+        // A few rounds, as another launch may end the same holder and take the lock meanwhile.
+        for _ in 0..<3 where taken == false {
+            // The holder writes its record right after it takes the lock.
+            var pid: pid_t = 0, other: au_asid_t?
+            _ = retry(for: 1) {
+                pid = holder()
+                if pid == 0 { taken = take() } else { other = recorded(opened, by: pid) }
+                return other != nil || taken != false
+            }
+            guard taken == false else { break }
+            // One that does not say where it runs is left alone.
+            guard let other else { close(opened); return false }
+            if other == session {
+                guard retry(for: settle, until: { taken = take(); return taken != false }) else { close(opened); return false }
+                break
+            }
+            // Only this holder is signalled; one that took the lock meanwhile is looked at again.
+            for signal in [SIGTERM, SIGKILL] where holder() == pid {
+                guard kill(pid, signal) == 0 else { break }
+                if retry(for: patience, until: { taken = take(); return taken != false || holder() != pid }) { break }
+            }
+        }
+        guard taken == true else { close(opened); return taken == nil }
+        descriptor = opened
+        let record = "\(getpid()) \(session)\n"
+        ftruncate(opened, 0)
+        _ = record.withCString { pwrite(opened, $0, strlen($0), 0) }
         return true
+    }
+    // The session `pid` wrote down, nil until it has.
+    static func recorded(_ descriptor: Int32, by pid: pid_t) -> au_asid_t? {
+        var bytes = [UInt8](repeating: 0, count: 64)
+        let count = pread(descriptor, &bytes, bytes.count, 0)
+        let text = String(decoding: bytes.prefix(max(count, 0)), as: UTF8.self)
+        guard let end = text.firstIndex(of: "\n") else { return nil }
+        let fields = text[..<end].split(separator: " ")
+        guard fields.count == 2, pid_t(fields[0]) == pid else { return nil }
+        return au_asid_t(fields[1])
+    }
+    static func retry(for seconds: TimeInterval, until done: () -> Bool) -> Bool {
+        let deadline = ProcessInfo.processInfo.systemUptime + seconds
+        repeat {
+            if done() { return true }
+            usleep(10_000)
+        } while ProcessInfo.processInfo.systemUptime < deadline
+        return false
+    }
+    static func release() {
+        if descriptor >= 0 { close(descriptor) }
+        descriptor = -1
     }
 }
 
