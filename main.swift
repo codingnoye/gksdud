@@ -1893,10 +1893,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 // logout is in none, so a file lock tells: the kernel names its holder and frees it however that app ends, and the holder
 // writes down its audit session, which the next login does not share.
 enum InstanceLock {
-    // In Application Support, as macOS clears files older than three days out of the temporary folder.
+    // In Application Support, as macOS clears files older than three days out of the temporary folder. One per Mac, as a home
+    // on a network volume is shared, and its locks with it.
     static var file: URL {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent(Bundle.main.bundleIdentifier ?? "io.gksdud.inputswitch").appendingPathComponent("instance.lock")
+        var host = UUID().uuid, timeout = timespec(tv_sec: 1, tv_nsec: 0)
+        let found = withUnsafeMutableBytes(of: &host) { gethostuuid($0.baseAddress!.assumingMemoryBound(to: UInt8.self), &timeout) } == 0
+        return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent(Bundle.main.bundleIdentifier ?? "io.gksdud.inputswitch")
+            .appendingPathComponent(found ? "instance-\(UUID(uuid: host).uuidString).lock" : "instance.lock")
     }
     static var session: au_asid_t {
         var info = auditinfo_addr()
