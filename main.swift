@@ -1889,12 +1889,120 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     @objc func quit() { NSApp.terminate(nil) }
 }
 
+// One gksdud per user. The command port shows a running app only within its login session, and an app that outlived a
+// logout is in none, so a file lock tells: the kernel names its holder and frees it however that app ends, and the holder
+// writes down its audit session, which the next login does not share.
+enum InstanceLock {
+    // In Application Support, as macOS clears files older than three days out of the temporary folder. One per Mac, as a home
+    // on a network volume is shared, and its locks with it.
+    static var file: URL {
+        var host = UUID().uuid, timeout = timespec(tv_sec: 1, tv_nsec: 0)
+        let found = withUnsafeMutableBytes(of: &host) { gethostuuid($0.baseAddress!.assumingMemoryBound(to: UInt8.self), &timeout) } == 0
+        return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent(Bundle.main.bundleIdentifier ?? "io.gksdud.inputswitch")
+            .appendingPathComponent(found ? "instance-\(UUID(uuid: host).uuidString).lock" : "instance.lock")
+    }
+    static var session: au_asid_t {
+        var info = auditinfo_addr()
+        return getaudit_addr(&info, Int32(MemoryLayout<auditinfo_addr>.size)) == 0 ? info.ai_asid : 0
+    }
+    // Whether this launch is of the login the window server shows, which one over SSH or left from an ended login is not.
+    // Without the session's audit id, whether it is on the console.
+    static var inLogin: Bool {
+        guard let current = CGSessionCopyCurrentDictionary() as? [String: Any] else { return false }
+        guard let id = current["kCGSSessionAuditIDKey"] as? Int else { return current[kCGSessionOnConsoleKey as String] as? Bool == true }
+        return id == Int(session)
+    }
+    // Open for as long as the app runs, as closing it gives the lock up.
+    private static var descriptor: Int32 = -1
+    // False when another app holds the lock in this session; one quitting is given `settle` to go. One from a session that
+    // has ended is ended as a logout would end it, and this one takes over.
+    static func claim(_ file: URL = InstanceLock.file, session: au_asid_t = InstanceLock.session, settle: TimeInterval = 3,
+                      patience: TimeInterval = 2, inLogin: () -> Bool = { InstanceLock.inLogin }) -> Bool {
+        try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let opened = open(file.path, O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
+        // Without the file, or a lock on its volume, nothing tells the apps apart, and the app still starts.
+        guard opened >= 0 else { return true }
+        var lock = flock(l_start: 0, l_len: 0, l_pid: 0, l_type: Int16(F_WRLCK), l_whence: Int16(SEEK_SET))
+        // True when taken, false while another holds it, nil where the volume cannot lock.
+        func take() -> Bool? {
+            if fcntl(opened, F_SETLK, &lock) == 0 { return true }
+            return errno == EAGAIN || errno == EACCES ? false : nil
+        }
+        func holder() -> pid_t {
+            var holder = lock
+            return fcntl(opened, F_GETLK, &holder) == 0 && holder.l_type != F_UNLCK ? holder.l_pid : 0
+        }
+        var taken = take()
+        // A few rounds, as another launch may end the same holder and take the lock meanwhile.
+        for _ in 0..<3 where taken == false {
+            // The holder writes its record right after it takes the lock.
+            var pid: pid_t = 0, other: au_asid_t?
+            _ = retry(for: 1) {
+                pid = holder()
+                if pid == 0 { taken = take() } else { other = recorded(opened, by: pid) }
+                return other != nil || taken != false
+            }
+            guard taken == false else { break }
+            // One that does not say where it runs is left alone.
+            guard let other else { close(opened); return false }
+            if other == session {
+                guard retry(for: settle, until: { taken = take(); return taken != false }) else { close(opened); return false }
+                break
+            }
+            // Launched outside the login, this one would end a working app and run without the window server.
+            guard inLogin() else { close(opened); return false }
+            // Only this holder is signalled; one that took the lock meanwhile is looked at again.
+            for signal in [SIGTERM, SIGKILL] where holder() == pid && isGksdud(pid) {
+                guard kill(pid, signal) == 0 else { break }
+                if retry(for: patience, until: { taken = take(); return taken != false || holder() != pid }) { break }
+            }
+        }
+        guard taken == true else { close(opened); return taken == nil }
+        descriptor = opened
+        let record = "\(getpid()) \(session)\n"
+        ftruncate(opened, 0)
+        _ = record.withCString { pwrite(opened, $0, strlen($0), 0) }
+        return true
+    }
+    // The session `pid` wrote down, nil until it has.
+    static func recorded(_ descriptor: Int32, by pid: pid_t) -> au_asid_t? {
+        var bytes = [UInt8](repeating: 0, count: 64)
+        let count = pread(descriptor, &bytes, bytes.count, 0)
+        let text = String(decoding: bytes.prefix(max(count, 0)), as: UTF8.self)
+        guard let end = text.firstIndex(of: "\n") else { return nil }
+        let fields = text[..<end].split(separator: " ")
+        guard fields.count == 2, pid_t(fields[0]) == pid else { return nil }
+        return au_asid_t(fields[1])
+    }
+    static func retry(for seconds: TimeInterval, until done: () -> Bool) -> Bool {
+        let deadline = ProcessInfo.processInfo.systemUptime + seconds
+        repeat {
+            if done() { return true }
+            usleep(10_000)
+        } while ProcessInfo.processInfo.systemUptime < deadline
+        return false
+    }
+    // Signalled only as this app, as another program may hold the file. By name, which stays when a reinstall deletes the bundle.
+    static func isGksdud(_ pid: pid_t) -> Bool {
+        var name = [CChar](repeating: 0, count: 64)
+        guard proc_name(pid, &name, UInt32(name.count)) > 0 else { return false }
+        return String(cString: name) == Bundle.main.executableURL?.lastPathComponent
+    }
+    static func release() {
+        if descriptor >= 0 { close(descriptor) }
+        descriptor = -1
+    }
+}
+
 if CommandLine.arguments.dropFirst().first == "--install-update" {
     do { try UpdateInstaller.runHelper(CommandLine.arguments) } catch { fputs("Update helper failed: \(error.localizedDescription)\n", stderr); exit(1) }
 } else {
     #if TESTS
     if runTestMode() { exit(0) }
     #endif
+    // Before this launch changes anything, permissions included.
+    if !InstanceLock.claim() { fputs("gksdud가 이미 실행 중입니다.\n", stderr); exit(0) }
     // Before anything asks about Accessibility, so that the first answer is already for this build.
     let askForPermission = UpdateValidation.forgetSelfSignedPermissions(defaults: .standard)
     let app = NSApplication.shared
