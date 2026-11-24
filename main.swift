@@ -1641,11 +1641,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         guard let button = item?.button else { return }
         let shown = updateArrow ? withUpdateArrow(badge) : badge
         if button.image !== shown { button.title = ""; button.image = shown; button.imagePosition = .imageOnly }
-        let warning = engine.keyboards.warning.map { "\n\($0)" } ?? ""
-        let tip = "\(BuildKind.current.displayName) · 현재 입력 소스: \(source.language)\(warning)"
+        let warning = engine.keyboards.warning.map { ", \($0)" } ?? ""
         let update = updateArrow ? ", 업데이트 가능" : ""
         let spoken = "\(BuildKind.current.displayName), 현재 입력 \(name)\(warning)\(update)"
-        if button.toolTip != tip { button.toolTip = tip }
+        // No tool tip: from macOS 27.2 a status item's tool tip can stay on screen, and moves to the pointer as it changes.
         if button.accessibilityLabel() != spoken { button.setAccessibilityLabel(spoken) }
     }
     // The Korean and English icons elsewhere: the menu, which also checks the current source, the previews and the added
